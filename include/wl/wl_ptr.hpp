@@ -27,55 +27,55 @@ namespace wl {
 ///            IsNull(), and Destroy().
 template <typename T>
 class WlPtr {
-public:
-    WlPtr() noexcept = default;
-    ~WlPtr() { Reset(); }
+ public:
+  WlPtr() noexcept = default;
+  ~WlPtr() { Reset(); }
 
-    /// Move constructor: transfers the raw wl_proxy* without invoking T's
-    /// (deleted) move constructor (R1).
-    WlPtr(WlPtr&& o) noexcept { m_obj.Attach(o.m_obj.Detach()); }
+  /// Move constructor: transfers the raw wl_proxy* without invoking T's
+  /// (deleted) move constructor (R1).
+  WlPtr(WlPtr&& o) noexcept { m_obj.Attach(o.m_obj.Detach()); }
 
-    /// Move assignment: destroys the current object then steals from @p o (R1).
-    WlPtr& operator=(WlPtr&& o) noexcept {
-        if (this != &o) {
-            Reset();
-            m_obj.Attach(o.m_obj.Detach());
-        }
-        return *this;
+  /// Move assignment: destroys the current object then steals from @p o (R1).
+  WlPtr& operator=(WlPtr&& o) noexcept {
+    if (this != &o) {
+      Reset();
+      m_obj.Attach(o.m_obj.Detach());
     }
+    return *this;
+  }
 
-    WlPtr(const WlPtr&)            = delete;
-    WlPtr& operator=(const WlPtr&) = delete;
+  WlPtr(const WlPtr&) = delete;
+  WlPtr& operator=(const WlPtr&) = delete;
 
-    /// Take ownership of @p p.  The WlPtr must currently be null.
-    void Attach(wl_proxy* p) noexcept {
-        assert(m_obj.IsNull() && "WlPtr::Attach on non-null pointer");
-        m_obj.Attach(p);
-    }
+  /// Take ownership of @p p.  The WlPtr must currently be null.
+  void Attach(wl_proxy* p) noexcept {
+    assert(m_obj.IsNull() && "WlPtr::Attach on non-null pointer");
+    m_obj.Attach(p);
+  }
 
-    /// Release ownership without destroying.
-    wl_proxy* Detach() noexcept { return m_obj.Detach(); }
+  /// Release ownership without destroying.
+  wl_proxy* Detach() noexcept { return m_obj.Detach(); }
 
-    /// Destroy the held object (calls T::Destroy).
-    void Reset() noexcept {
-        if (!m_obj.IsNull())
-            m_obj.Destroy();
-    }
+  /// Destroy the held object (calls T::Destroy).
+  void Reset() noexcept {
+    if (!m_obj.IsNull())
+      m_obj.Destroy();
+  }
 
-    [[nodiscard]] T* operator->() noexcept { return &m_obj; }
-    [[nodiscard]] T* Get() noexcept { return &m_obj; }
-    [[nodiscard]] bool IsNull() const noexcept { return m_obj.IsNull(); }
-    explicit operator bool() const noexcept { return !IsNull(); }
+  [[nodiscard]] T* operator->() noexcept { return &m_obj; }
+  [[nodiscard]] T* Get() noexcept { return &m_obj; }
+  [[nodiscard]] bool IsNull() const noexcept { return m_obj.IsNull(); }
+  explicit operator bool() const noexcept { return !IsNull(); }
 
-    /// Swap ownership (R1: uses Attach/Detach, not std::swap on T).
-    void Swap(WlPtr& o) noexcept {
-        wl_proxy* tmp = m_obj.Detach();
-        m_obj.Attach(o.m_obj.Detach());
-        o.m_obj.Attach(tmp);
-    }
+  /// Swap ownership (R1: uses Attach/Detach, not std::swap on T).
+  void Swap(WlPtr& o) noexcept {
+    wl_proxy* tmp = m_obj.Detach();
+    m_obj.Attach(o.m_obj.Detach());
+    o.m_obj.Attach(tmp);
+  }
 
-private:
-    T m_obj;
+ private:
+  T m_obj;
 };
 
 }  // namespace wl

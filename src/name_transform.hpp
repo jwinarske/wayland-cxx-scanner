@@ -16,7 +16,8 @@ namespace wl::scanner {
 
 /// Strip a known interface prefix from a name, then PascalCase the remainder.
 /// Example: strip_prefix("xdg_wm_base_ping", "xdg_wm_base") → "Ping"
-[[nodiscard]] std::string strip_prefix_pascal(std::string_view name, std::string_view prefix);
+[[nodiscard]] std::string strip_prefix_pascal(std::string_view name,
+                                              std::string_view prefix);
 
 /// Convert an enum entry name to PascalCase (removing a common prefix).
 /// Example: error_role → Role

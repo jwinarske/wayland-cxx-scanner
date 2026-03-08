@@ -12,7 +12,7 @@ using ::testing::HasSubstr;
 using ::testing::Not;
 
 static Protocol make_minimal() {
-    return parse_protocol_from_string(R"(
+  return parse_protocol_from_string(R"(
 <protocol name="test">
   <interface name="wl_foo" version="3">
     <enum name="error">
@@ -31,46 +31,46 @@ static Protocol make_minimal() {
 }
 
 TEST(CodegenC, ContainsPragmaOnce) {
-    auto out = generate_c_header(make_minimal());
-    EXPECT_THAT(out, HasSubstr("#pragma once"));
+  auto out = generate_c_header(make_minimal());
+  EXPECT_THAT(out, HasSubstr("#pragma once"));
 }
 
 TEST(CodegenC, ContainsExternC) {
-    auto out = generate_c_header(make_minimal());
-    EXPECT_THAT(out, HasSubstr("extern \"C\""));
+  auto out = generate_c_header(make_minimal());
+  EXPECT_THAT(out, HasSubstr("extern \"C\""));
 }
 
 TEST(CodegenC, ContainsInterfaceDeclaration) {
-    auto out = generate_c_header(make_minimal());
-    EXPECT_THAT(out, HasSubstr("wl_foo_interface"));
+  auto out = generate_c_header(make_minimal());
+  EXPECT_THAT(out, HasSubstr("wl_foo_interface"));
 }
 
 TEST(CodegenC, ContainsVersionMacro) {
-    auto out = generate_c_header(make_minimal());
-    EXPECT_THAT(out, HasSubstr("WL_FOO_INTERFACE_VERSION 3"));
+  auto out = generate_c_header(make_minimal());
+  EXPECT_THAT(out, HasSubstr("WL_FOO_INTERFACE_VERSION 3"));
 }
 
 TEST(CodegenC, ContainsRequestOpcode) {
-    auto out = generate_c_header(make_minimal());
-    EXPECT_THAT(out, HasSubstr("WL_FOO_DESTROY 0"));
-    EXPECT_THAT(out, HasSubstr("WL_FOO_DO_THING 1"));
+  auto out = generate_c_header(make_minimal());
+  EXPECT_THAT(out, HasSubstr("WL_FOO_DESTROY 0"));
+  EXPECT_THAT(out, HasSubstr("WL_FOO_DO_THING 1"));
 }
 
 TEST(CodegenC, ContainsEventOpcode) {
-    auto out = generate_c_header(make_minimal());
-    EXPECT_THAT(out, HasSubstr("WL_FOO_DONE_EVENT 0"));
+  auto out = generate_c_header(make_minimal());
+  EXPECT_THAT(out, HasSubstr("WL_FOO_DONE_EVENT 0"));
 }
 
 TEST(CodegenC, ContainsEnumValues) {
-    auto out = generate_c_header(make_minimal());
-    EXPECT_THAT(out, HasSubstr("WL_FOO_ERROR_ROLE = 0"));
-    EXPECT_THAT(out, HasSubstr("WL_FOO_ERROR_DEFUNCT = 1"));
+  auto out = generate_c_header(make_minimal());
+  EXPECT_THAT(out, HasSubstr("WL_FOO_ERROR_ROLE = 0"));
+  EXPECT_THAT(out, HasSubstr("WL_FOO_ERROR_DEFUNCT = 1"));
 }
 
 TEST(CodegenC, EmptyProtocolCompiles) {
-    Protocol p;
-    p.name   = "empty";
-    auto out = generate_c_header(p);
-    EXPECT_THAT(out, HasSubstr("#pragma once"));
-    EXPECT_THAT(out, Not(HasSubstr("interface_version")));
+  Protocol p;
+  p.name = "empty";
+  auto out = generate_c_header(p);
+  EXPECT_THAT(out, HasSubstr("#pragma once"));
+  EXPECT_THAT(out, Not(HasSubstr("interface_version")));
 }
