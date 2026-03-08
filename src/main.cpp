@@ -33,8 +33,8 @@ enum class Mode { ClientHeader, ServerHeader, CHeader };
 }  // anonymous namespace
 
 int main(int argc, char** argv) {
-    Mode        mode       = Mode::ClientHeader;
-    const char* input_path = nullptr;
+    Mode mode               = Mode::ClientHeader;
+    const char* input_path  = nullptr;
     const char* output_path = nullptr;
 
     for (int i = 1; i < argc; ++i) {

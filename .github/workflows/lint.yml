@@ -11,6 +11,9 @@ on:
       - main
       - master
 
+# Deny all permissions at the workflow level; each job grants only what it needs.
+permissions: {}
+
 jobs:
   clang-format:
     name: clang-format-19
@@ -69,4 +72,5 @@ jobs:
           | xargs -0 -r \
             clang-tidy-19 \
               -p builddir \
+              --header-filter="${GITHUB_WORKSPACE}/(include/wl|src)/[^/]+\\.(hpp|h)$" \
               --warnings-as-errors='*'

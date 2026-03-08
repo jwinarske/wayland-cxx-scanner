@@ -24,48 +24,48 @@ enum class ArgType : uint8_t {
 /// One argument to a request or event.
 struct Arg {
     std::string name;
-    ArgType     type{ArgType::Int};
+    ArgType type{ArgType::Int};
     std::string interface_name;  ///< for Object / NewId (may be empty)
     std::string enum_name;       ///< for Enum ("iface.entry", qualified)
-    bool        nullable{false};
-    bool        allow_null{false};
+    bool nullable{false};
+    bool allow_null{false};
 };
 
 /// One entry inside an <enum>.
 struct EnumEntry {
     std::string name;
-    uint32_t    value{0};
+    uint32_t value{0};
     std::string summary;
 };
 
 /// An <enum> inside an interface.
 struct Enum {
-    std::string            name;
+    std::string name;
     std::vector<EnumEntry> entries;
-    bool                   is_bitfield{false};
+    bool is_bitfield{false};
 };
 
 /// A <request> or <event> inside an interface.
 struct Message {
-    std::string       name;
-    uint32_t          opcode{0};
-    std::vector<Arg>  args;
-    bool              is_destructor{false};
-    std::string       since;
+    std::string name;
+    uint32_t opcode{0};
+    std::vector<Arg> args;
+    bool is_destructor{false};
+    std::string since;
 };
 
 /// A <interface> block.
 struct Interface {
-    std::string         name;
-    uint32_t            version{1};
+    std::string name;
+    uint32_t version{1};
     std::vector<Message> requests;
     std::vector<Message> events;
-    std::vector<Enum>    enums;
+    std::vector<Enum> enums;
 };
 
 /// The top-level <protocol> element.
 struct Protocol {
-    std::string            name;
+    std::string name;
     std::vector<Interface> interfaces;
 };
 

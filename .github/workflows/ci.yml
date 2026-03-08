@@ -11,6 +11,9 @@ on:
       - main
       - master
 
+# Deny all permissions at the workflow level; each job grants only what it needs.
+permissions: {}
+
 jobs:
   ubuntu:
     name: Ubuntu (${{ matrix.compiler }})

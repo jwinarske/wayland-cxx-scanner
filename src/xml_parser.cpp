@@ -5,14 +5,13 @@
 #include "ir.hpp"
 #include "name_transform.hpp"
 
-#include <pugixml.hpp>
-
 #include <array>
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <pugixml.hpp>
 #include <string>
 
 namespace wl::scanner {
@@ -29,8 +28,8 @@ namespace {
 static bool is_valid_identifier(std::string_view s) noexcept {
     if (s.empty())
         return false;
-    if (s[0] != '_' && (s[0] < 'A' || s[0] > 'z') &&
-        !(s[0] >= 'A' && s[0] <= 'Z') && !(s[0] >= 'a' && s[0] <= 'z'))
+    if (s[0] != '_' && (s[0] < 'A' || s[0] > 'z') && !(s[0] >= 'A' && s[0] <= 'Z') &&
+        !(s[0] >= 'a' && s[0] <= 'z'))
         return false;
     for (char c : s) {
         if ((c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_')
@@ -51,8 +50,8 @@ static void require_identifier(std::string_view s, const char* ctx) {
 static uint32_t parse_uint32(const char* s, const char* ctx) {
     if (!s || *s == '\0')
         throw ParseError(std::string("missing integer value for ") + ctx);
-    char*          endptr = nullptr;
-    unsigned long  v      = std::strtoul(s, &endptr, 0);
+    char* endptr    = nullptr;
+    unsigned long v = std::strtoul(s, &endptr, 0);
     if (endptr == s || *endptr != '\0')
         throw ParseError(std::string("invalid integer '") + s + "' for " + ctx);
     if (v > UINT32_MAX)
@@ -65,7 +64,7 @@ static uint32_t parse_uint32(const char* s, const char* ctx) {
 static ArgType parse_arg_type(const char* type_str, const char* arg_name) {
     struct Pair {
         const char* name;
-        ArgType     type;
+        ArgType type;
     };
     static constexpr std::array<Pair, 9> kTable{{
         {"int", ArgType::Int},
@@ -84,8 +83,7 @@ static ArgType parse_arg_type(const char* type_str, const char* arg_name) {
         if (std::strcmp(type_str, p.name) == 0)
             return p.type;
     }
-    throw ParseError(std::string("unknown arg type '") + type_str + "' on arg '" + arg_name +
-                     "'");
+    throw ParseError(std::string("unknown arg type '") + type_str + "' on arg '" + arg_name + "'");
 }
 
 // ── DOM traversal ─────────────────────────────────────────────────────────────
@@ -104,7 +102,7 @@ static Arg parse_arg(pugi::xml_node node) {
     require_identifier(name, "<arg> name");
 
     Arg arg;
-    arg.name = name;
+    arg.name    = name;
     ArgType raw = parse_arg_type(type_str, name);
 
     if (enum_str && *enum_str != '\0') {
@@ -191,7 +189,7 @@ static Protocol parse_doc(const pugi::xml_document& doc) {
 
         const char* ver_str = iface_node.attribute("version").as_string(nullptr);
         iface.version = (ver_str && *ver_str != '\0') ? parse_uint32(ver_str, "<interface> version")
-                                                       : 1u;
+                                                      : 1u;
 
         uint32_t req_opcode = 0;
         for (pugi::xml_node req : iface_node.children("request"))
@@ -215,7 +213,7 @@ static Protocol parse_doc(const pugi::xml_document& doc) {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 Protocol parse_protocol_from_string(std::string_view xml) {
-    pugi::xml_document     doc;
+    pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_buffer(xml.data(), xml.size());
     if (!result)
         throw ParseError(std::string("XML parse error: ") + result.description());
@@ -226,14 +224,13 @@ Protocol parse_protocol(const std::filesystem::path& path) {
     // Open explicitly to generate std::system_error on access failure (R2, R3).
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs)
-        throw std::system_error(errno, std::generic_category(),
-                                "cannot open " + path.string());
+        throw std::system_error(errno, std::generic_category(), "cannot open " + path.string());
 
     // Validate file size before allocation (R3: guard against negative tellg).
     const auto raw_size = ifs.tellg();
     if (raw_size < 0)
-        throw std::system_error(errno, std::generic_category(),
-                                "cannot determine size of " + path.string());
+        throw std::system_error(
+            errno, std::generic_category(), "cannot determine size of " + path.string());
     const auto file_size = static_cast<std::size_t>(raw_size);
 
     ifs.seekg(0);
@@ -242,8 +239,7 @@ Protocol parse_protocol(const std::filesystem::path& path) {
 
     // R2: verify the full file was read (guards against EINTR / short reads).
     if (static_cast<std::size_t>(ifs.gcount()) != file_size)
-        throw std::system_error(errno, std::generic_category(),
-                                "short read on " + path.string());
+        throw std::system_error(errno, std::generic_category(), "short read on " + path.string());
 
     return parse_protocol_from_string(buf);
 }

@@ -2,7 +2,7 @@
 # clang-format-19 configuration for wayland-cxx-scanner
 # C++23, WTL-style (CRTP, CamelCase methods, m_ member prefix)
 Language: Cpp
-Standard: c++23
+Standard: Latest
 
 BasedOnStyle: Google
 

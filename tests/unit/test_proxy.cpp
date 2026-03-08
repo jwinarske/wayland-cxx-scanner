@@ -7,14 +7,13 @@
 #include <wl/wl_ptr.hpp>
 
 #include <gtest/gtest.h>
-
 #include <string_view>
 
 // ── Minimal fake traits (no real wl_interface needed for handle tests) ────────
 
 struct FakeInterface {
     static constexpr std::string_view interface_name = "wl_fake";
-    static constexpr uint32_t         version        = 3;
+    static constexpr uint32_t version                = 3;
     static const wl_interface& wl_iface() noexcept {
         static wl_interface s{};
         return s;
@@ -32,14 +31,14 @@ TEST(CProxy, DefaultIsNull) {
 }
 TEST(CProxy, AttachSets) {
     FakeProxy p;
-    auto*     f = reinterpret_cast<wl_proxy*>(static_cast<uintptr_t>(0xDEAD));
+    auto* f = reinterpret_cast<wl_proxy*>(static_cast<uintptr_t>(0xDEAD));
     p.Attach(f);
     EXPECT_EQ(p.GetProxy(), f);
     p.Detach();  // avoid ~CProxy trying to destroy a fake pointer
 }
 TEST(CProxy, DetachClears) {
     FakeProxy p;
-    auto*     f = reinterpret_cast<wl_proxy*>(static_cast<uintptr_t>(0xBEEF));
+    auto* f = reinterpret_cast<wl_proxy*>(static_cast<uintptr_t>(0xBEEF));
     p.Attach(f);
     EXPECT_EQ(p.Detach(), f);
     EXPECT_TRUE(p.IsNull());
@@ -113,13 +112,13 @@ TEST(CRegistry, DefaultIsNull) {
 }
 TEST(CRegistry, LambdaStored) {
     wl::CRegistry r;
-    bool          called = false;
+    bool called = false;
     r.OnGlobal([&](wl::CRegistry&, uint32_t, std::string_view, uint32_t) { called = true; });
     EXPECT_FALSE(called);  // lambda stored but not called yet
 }
 TEST(CRegistry, RemoveStored) {
     wl::CRegistry r;
-    bool          called = false;
+    bool called = false;
     r.OnRemove([&](wl::CRegistry&, uint32_t) { called = true; });
     EXPECT_FALSE(called);
 }

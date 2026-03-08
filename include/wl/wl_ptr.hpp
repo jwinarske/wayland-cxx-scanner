@@ -28,7 +28,7 @@ namespace wl {
 template <typename T>
 class WlPtr {
 public:
-    WlPtr() noexcept  = default;
+    WlPtr() noexcept = default;
     ~WlPtr() { Reset(); }
 
     /// Move constructor: transfers the raw wl_proxy* without invoking T's
@@ -62,8 +62,8 @@ public:
             m_obj.Destroy();
     }
 
-    [[nodiscard]] T*   operator->() noexcept { return &m_obj; }
-    [[nodiscard]] T*   Get() noexcept { return &m_obj; }
+    [[nodiscard]] T* operator->() noexcept { return &m_obj; }
+    [[nodiscard]] T* Get() noexcept { return &m_obj; }
     [[nodiscard]] bool IsNull() const noexcept { return m_obj.IsNull(); }
     explicit operator bool() const noexcept { return !IsNull(); }
 

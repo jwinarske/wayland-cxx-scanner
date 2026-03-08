@@ -56,16 +56,14 @@ public:
     }
 
     [[nodiscard]] wl_proxy* GetProxy() const noexcept { return m_proxy; }
-    [[nodiscard]] bool      IsNull() const noexcept { return m_proxy == nullptr; }
+    [[nodiscard]] bool IsNull() const noexcept { return m_proxy == nullptr; }
     explicit operator bool() const noexcept { return !IsNull(); }
 
     [[nodiscard]] static constexpr std::string_view InterfaceName() noexcept {
         return Traits::interface_name;
     }
     [[nodiscard]] static constexpr uint32_t MaxVersion() noexcept { return Traits::version; }
-    [[nodiscard]] static const wl_interface& WlInterface() noexcept {
-        return Traits::wl_iface();
-    }
+    [[nodiscard]] static const wl_interface& WlInterface() noexcept { return Traits::wl_iface(); }
 
 protected:
     wl_proxy* m_proxy = nullptr;

@@ -16,8 +16,9 @@ namespace {
 
 std::string to_upper(std::string_view s) {
     std::string out(s);
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
     return out;
 }
 

@@ -2,7 +2,6 @@
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 #pragma once
 #include <unistd.h>
-
 #include <utility>
 
 namespace wl {
@@ -24,11 +23,11 @@ public:
     FdHandle& operator=(const FdHandle&) = delete;
     ~FdHandle() noexcept { Close(); }
 
-    [[nodiscard]] int  Get() const noexcept { return m_fd; }
+    [[nodiscard]] int Get() const noexcept { return m_fd; }
     [[nodiscard]] bool IsNull() const noexcept { return m_fd < 0; }
     explicit operator bool() const noexcept { return !IsNull(); }
     [[nodiscard]] int Detach() noexcept { return std::exchange(m_fd, -1); }
-    void              Close() noexcept {
+    void Close() noexcept {
         if (m_fd >= 0)
             ::close(std::exchange(m_fd, -1));
     }

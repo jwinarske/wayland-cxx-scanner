@@ -5,12 +5,11 @@
 #include "codegen_client_cxx.hpp"
 #include "xml_parser.hpp"
 
-#include <gtest/gtest.h>
-#include <gmock/gmock.h>
-
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include <string>
 
 using namespace wl::scanner;
@@ -27,8 +26,8 @@ TEST(RoundtripClient, ParseFixtureAndGenerateHeader) {
     if (!std::filesystem::exists(fixture_path(), ec))
         GTEST_SKIP() << "fixture not found: " << fixture_path();
 
-    auto   proto = parse_protocol(fixture_path());
-    auto   out   = generate_client_cxx_header(proto);
+    auto proto = parse_protocol(fixture_path());
+    auto out   = generate_client_cxx_header(proto);
 
     // Verify key structural elements are present in the generated output.
     EXPECT_THAT(out, HasSubstr("#pragma once"));
@@ -47,7 +46,7 @@ TEST(RoundtripClient, VersionPropagated) {
 <protocol name="ver_test">
   <interface name="wl_ver" version="7"/>
 </protocol>)");
-    auto out = generate_client_cxx_header(proto);
+    auto out   = generate_client_cxx_header(proto);
     EXPECT_THAT(out, HasSubstr("version        = 7"));
 }
 
@@ -60,6 +59,6 @@ TEST(RoundtripClient, FdArgTypeInClientHeader) {
     </request>
   </interface>
 </protocol>)");
-    auto out = generate_client_cxx_header(proto);
+    auto out   = generate_client_cxx_header(proto);
     EXPECT_THAT(out, HasSubstr("int32_t the_fd"));
 }

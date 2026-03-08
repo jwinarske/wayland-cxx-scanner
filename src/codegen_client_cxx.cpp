@@ -19,15 +19,24 @@ namespace {
 /// to avoid silently emitting wrong code when a new ArgType is added).
 std::string cpp_arg_type(const Arg& arg) {
     switch (arg.type) {
-        case ArgType::Int:    return "int32_t";
-        case ArgType::Uint:   return "uint32_t";
-        case ArgType::Fixed:  return "wl_fixed_t";
-        case ArgType::String: return "const char*";
-        case ArgType::Object: return "wl_proxy*";
-        case ArgType::NewId:  return "uint32_t";
-        case ArgType::Array:  return "wl_array*";
-        case ArgType::Fd:     return "int32_t";
-        case ArgType::Enum:   return "uint32_t";
+        case ArgType::Int:
+            return "int32_t";
+        case ArgType::Uint:
+            return "uint32_t";
+        case ArgType::Fixed:
+            return "wl_fixed_t";
+        case ArgType::String:
+            return "const char*";
+        case ArgType::Object:
+            return "wl_proxy*";
+        case ArgType::NewId:
+            return "uint32_t";
+        case ArgType::Array:
+            return "wl_array*";
+        case ArgType::Fd:
+            return "int32_t";
+        case ArgType::Enum:
+            return "uint32_t";
     }
     assert(false && "unhandled ArgType in cpp_arg_type");
     return "void*";
@@ -166,8 +175,8 @@ void emit_client_class(std::ostringstream& os, const Interface& iface) {
                 }
                 os << "};\n";
             }
-            os << "        static_cast<" << cls_name << "*>(data)->ProcessEvent("
-               << traits_name << "::Evt::" << snake_to_pascal(e.name) << ", args);\n";
+            os << "        static_cast<" << cls_name << "*>(data)->ProcessEvent(" << traits_name
+               << "::Evt::" << snake_to_pascal(e.name) << ", args);\n";
             os << "    }\n";
         }
         os << "    static constexpr void* s_listener_table_[] = {\n";

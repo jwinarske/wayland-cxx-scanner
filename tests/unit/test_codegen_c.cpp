@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "codegen_c.hpp"
-
 #include "ir.hpp"
 #include "xml_parser.hpp"
 
-#include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
 using namespace wl::scanner;
 using namespace wl::scanner::ir;
@@ -70,7 +69,7 @@ TEST(CodegenC, ContainsEnumValues) {
 
 TEST(CodegenC, EmptyProtocolCompiles) {
     Protocol p;
-    p.name = "empty";
+    p.name   = "empty";
     auto out = generate_c_header(p);
     EXPECT_THAT(out, HasSubstr("#pragma once"));
     EXPECT_THAT(out, Not(HasSubstr("interface_version")));

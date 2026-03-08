@@ -18,8 +18,7 @@ public:
     explicit FileHandle(const std::filesystem::path& p, const char* mode) {
         m_file = std::fopen(p.c_str(), mode);
         if (!m_file)
-            throw std::system_error(errno, std::generic_category(),
-                                    "cannot open " + p.string());
+            throw std::system_error(errno, std::generic_category(), "cannot open " + p.string());
     }
 
     /// Tag type for adopting a non-owned FILE* (e.g. stdin/stdout/stderr).
@@ -45,13 +44,13 @@ public:
     ~FileHandle() noexcept { _Close(); }
 
     [[nodiscard]] FILE* Get() const noexcept { return m_file; }
-    [[nodiscard]] bool  IsNull() const noexcept { return !m_file; }
+    [[nodiscard]] bool IsNull() const noexcept { return !m_file; }
     explicit operator bool() const noexcept { return !IsNull(); }
     [[nodiscard]] FILE* Detach() noexcept { return std::exchange(m_file, nullptr); }
 
 private:
-    FILE* m_file  = nullptr;
-    bool  m_owned = true;
+    FILE* m_file = nullptr;
+    bool m_owned = true;
 
     void _Close() noexcept {
         if (m_file && m_owned)

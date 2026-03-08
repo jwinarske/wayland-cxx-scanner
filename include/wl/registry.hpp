@@ -45,7 +45,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool         IsNull() const noexcept { return m_registry == nullptr; }
+    [[nodiscard]] bool IsNull() const noexcept { return m_registry == nullptr; }
     [[nodiscard]] wl_registry* Get() const noexcept { return m_registry; }
     explicit operator bool() const noexcept { return !IsNull(); }
 
@@ -67,16 +67,16 @@ public:
 
 private:
     wl_registry* m_registry = nullptr;
-    GlobalFn     m_on_global;
-    RemoveFn     m_on_remove;
+    GlobalFn m_on_global;
+    RemoveFn m_on_remove;
 
     void _Reset() noexcept {
         if (m_registry)
             wl_registry_destroy(std::exchange(m_registry, nullptr));
     }
 
-    static void _OnGlobal(void* data, wl_registry* /*reg*/, uint32_t name,
-                          const char* interface, uint32_t version) {
+    static void _OnGlobal(
+        void* data, wl_registry* /*reg*/, uint32_t name, const char* interface, uint32_t version) {
         auto* self = static_cast<CRegistry*>(data);
         if (self->m_on_global)
             self->m_on_global(*self, name, std::string_view{interface}, version);
@@ -112,12 +112,12 @@ public:
     /// Advertise the global on the display.
     [[nodiscard]] bool Create(wl_display* display, uint32_t version) noexcept {
         _Reset();
-        m_global = wl_global_create(display, &Traits::wl_iface(), static_cast<int>(version),
-                                    this, _OnBind);
+        m_global = wl_global_create(
+            display, &Traits::wl_iface(), static_cast<int>(version), this, _OnBind);
         return m_global != nullptr;
     }
 
-    [[nodiscard]] bool       IsNull() const noexcept { return m_global == nullptr; }
+    [[nodiscard]] bool IsNull() const noexcept { return m_global == nullptr; }
     [[nodiscard]] wl_global* Get() const noexcept { return m_global; }
 
 private:
@@ -128,7 +128,9 @@ private:
             wl_global_destroy(std::exchange(m_global, nullptr));
     }
 
-    static void _OnBind(wl_client* /*client*/, void* /*data*/, uint32_t /*version*/,
+    static void _OnBind(wl_client* /*client*/,
+                        void* /*data*/,
+                        uint32_t /*version*/,
                         uint32_t /*id*/) {
         // Subclasses override by providing a bind callback via CGlobal specialisation.
     }

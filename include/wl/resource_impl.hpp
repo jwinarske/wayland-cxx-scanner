@@ -31,14 +31,15 @@ public:
     void _SetResource(wl_resource* resource) noexcept {
         m_resource = resource;
         if (resource) {
-            wl_resource_set_implementation(resource, Derived::s_request_vtable_,
+            wl_resource_set_implementation(resource,
+                                           Derived::s_request_vtable_,
                                            static_cast<Derived*>(this),
                                            /*destructor=*/nullptr);
         }
     }
 
     [[nodiscard]] wl_resource* GetResource() const noexcept { return m_resource; }
-    [[nodiscard]] bool         IsNull() const noexcept { return m_resource == nullptr; }
+    [[nodiscard]] bool IsNull() const noexcept { return m_resource == nullptr; }
     explicit operator bool() const noexcept { return !IsNull(); }
 
     /// Send an event to the client.
@@ -50,8 +51,10 @@ public:
     }
 
     /// Default request dispatcher (override with BEGIN_REQUEST_MAP).
-    bool ProcessRequest(uint32_t /*opcode*/, wl_client* /*client*/,
-                        wl_resource* /*resource*/, void** /*args*/) {
+    bool ProcessRequest(uint32_t /*opcode*/,
+                        wl_client* /*client*/,
+                        wl_resource* /*resource*/,
+                        void** /*args*/) {
         return false;
     }
 

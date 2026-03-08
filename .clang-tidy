@@ -23,7 +23,7 @@ Checks: >
 
 WarningsAsErrors: "*"
 
-HeaderFilterRegex: "(include/wl/|src/).*\\.(hpp|h)$"
+HeaderFilterRegex: "wayland-cxx-scanner/(include/wl|src)/[^/]+\\.(hpp|h)$"
 
 FormatStyle: file
 

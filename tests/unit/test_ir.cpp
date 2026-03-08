@@ -41,9 +41,9 @@ TEST(Ir, ParseErrorIsException) {
 
 TEST(Ir, AllArgTypesDistinct) {
     // Ensure every ArgType value is distinct (no enum collision).
-    EXPECT_NE(static_cast<int>(ArgType::Int),    static_cast<int>(ArgType::Uint));
-    EXPECT_NE(static_cast<int>(ArgType::Fixed),  static_cast<int>(ArgType::String));
+    EXPECT_NE(static_cast<int>(ArgType::Int), static_cast<int>(ArgType::Uint));
+    EXPECT_NE(static_cast<int>(ArgType::Fixed), static_cast<int>(ArgType::String));
     EXPECT_NE(static_cast<int>(ArgType::Object), static_cast<int>(ArgType::NewId));
-    EXPECT_NE(static_cast<int>(ArgType::Array),  static_cast<int>(ArgType::Fd));
-    EXPECT_NE(static_cast<int>(ArgType::Fd),     static_cast<int>(ArgType::Enum));
+    EXPECT_NE(static_cast<int>(ArgType::Array), static_cast<int>(ArgType::Fd));
+    EXPECT_NE(static_cast<int>(ArgType::Fd), static_cast<int>(ArgType::Enum));
 }

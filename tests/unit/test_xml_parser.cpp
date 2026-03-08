@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include "ir.hpp"
 #include "xml_parser.hpp"
 
-#include "ir.hpp"
-
-#include <gtest/gtest.h>
-
 #include <filesystem>
+#include <gtest/gtest.h>
 #include <stdexcept>
 #include <system_error>
 
@@ -22,7 +20,7 @@ TEST(Parser, MinimalProtocol) {
 }
 
 TEST(Parser, OpcodeNumberingIndependent) {
-    auto p = parse_protocol_from_string(R"(
+    auto p  = parse_protocol_from_string(R"(
 <protocol name="t">
   <interface name="wl_t" version="1">
     <request name="a"/><request name="b"/><request name="c"/>
@@ -38,7 +36,7 @@ TEST(Parser, OpcodeNumberingIndependent) {
 }
 
 TEST(Parser, AllArgTypesRecognised) {
-    auto p = parse_protocol_from_string(R"(
+    auto p     = parse_protocol_from_string(R"(
 <protocol name="t">
   <interface name="wl_t" version="1">
     <enum name="e"><entry name="v" value="0"/></enum>
@@ -70,11 +68,11 @@ TEST(Parser, AllArgTypesRecognised) {
 }
 
 TEST(Parser, InvalidXmlThrows) {
-    EXPECT_THROW(parse_protocol_from_string("not xml"), ParseError);
+    EXPECT_THROW((void)parse_protocol_from_string("not xml"), ParseError);
 }
 
 TEST(Parser, UnknownArgTypeThrows) {
-    EXPECT_THROW(parse_protocol_from_string(R"(
+    EXPECT_THROW((void)parse_protocol_from_string(R"(
 <protocol name="t">
   <interface name="i" version="1">
     <request name="r"><arg name="a" type="badtype"/></request>
@@ -84,7 +82,7 @@ TEST(Parser, UnknownArgTypeThrows) {
 }
 
 TEST(Parser, MissingFileThrows) {
-    EXPECT_THROW(parse_protocol("/no/such/file.xml"), std::system_error);
+    EXPECT_THROW((void)parse_protocol("/no/such/file.xml"), std::system_error);
 }
 
 TEST(Parser, DestructorFlagParsed) {
@@ -98,7 +96,7 @@ TEST(Parser, DestructorFlagParsed) {
 }
 
 TEST(Parser, BitfieldEnumParsed) {
-    auto p = parse_protocol_from_string(R"(
+    auto p   = parse_protocol_from_string(R"(
 <protocol name="t">
   <interface name="wl_t" version="1">
     <enum name="flags" bitfield="true">

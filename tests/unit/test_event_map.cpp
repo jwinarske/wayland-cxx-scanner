@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <wl/event_map.hpp>
 
-#include <gtest/gtest.h>
-
 #include <cstdint>
+#include <gtest/gtest.h>
 
 using namespace wl;
 
@@ -19,7 +18,7 @@ public:
     }
 
     BEGIN_EVENT_MAP(CBase)
-        EVENT_HANDLER(10, OnTen)
+    EVENT_HANDLER(10, OnTen)
     END_EVENT_MAP()
 
     void OnTen(uint32_t v) { base_count += static_cast<int>(v); }
@@ -38,8 +37,8 @@ public:
     }
 
     BEGIN_EVENT_MAP(CDerived)
-        EVENT_HANDLER(20, OnTwenty)
-        CHAIN_EVENT_MAP(CBase)
+    EVENT_HANDLER(20, OnTwenty)
+    CHAIN_EVENT_MAP(CBase)
     END_EVENT_MAP()
 
     void OnTwenty(uint32_t) { saw_twenty = true; }
@@ -50,7 +49,7 @@ public:
 class CMixinUser : public CEventMap {
 public:
     CBase m_mixin;
-    bool  own_handled = false;
+    bool own_handled = false;
 
     template <typename T, typename Fn>
     static void _CrackEvent_99(T* self, void** /*args*/, Fn fn) {
@@ -59,8 +58,8 @@ public:
     }
 
     BEGIN_EVENT_MAP(CMixinUser)
-        CHAIN_EVENT_MAP_MEMBER(m_mixin)
-        EVENT_HANDLER(99, OnNN)
+    CHAIN_EVENT_MAP_MEMBER(m_mixin)
+    EVENT_HANDLER(99, OnNN)
     END_EVENT_MAP()
 
     void OnNN(uint32_t) { own_handled = true; }
@@ -69,9 +68,9 @@ public:
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 TEST(EventMap, HandlesOwnOpcode) {
-    CBase    b;
-    uint32_t v    = 7;
-    void*    a[1] = {&v};
+    CBase b;
+    uint32_t v = 7;
+    void* a[1] = {&v};
     EXPECT_TRUE(b.ProcessEvent(10u, a));
     EXPECT_EQ(b.base_count, 7);
 }
@@ -87,15 +86,15 @@ TEST(EventMap, DerivedOwnBeforeBase) {
 }
 TEST(EventMap, DerivedChainsToBase) {
     CDerived d;
-    uint32_t v    = 3;
-    void*    a[1] = {&v};
+    uint32_t v = 3;
+    void* a[1] = {&v};
     EXPECT_TRUE(d.ProcessEvent(10u, a));
     EXPECT_EQ(d.base_count, 3);
 }
 TEST(EventMap, ChainMemberHandles) {
     CMixinUser u;
-    uint32_t   v    = 5;
-    void*      a[1] = {&v};
+    uint32_t v = 5;
+    void* a[1] = {&v};
     EXPECT_TRUE(u.ProcessEvent(10u, a));
     EXPECT_EQ(u.m_mixin.base_count, 5);
 }

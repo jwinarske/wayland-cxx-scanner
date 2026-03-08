@@ -37,10 +37,10 @@ public:
             // Wayland C API (S3: was previously cast to wl_dispatcher_func_t*
             // which is the wrong type).
             // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-            wl_proxy_add_listener(proxy,
-                                  reinterpret_cast<void (**)(void)>(
-                                      const_cast<void**>(Derived::s_listener_table_)),
-                                  this);
+            wl_proxy_add_listener(
+                proxy,
+                reinterpret_cast<void (**)(void)>(const_cast<void**>(Derived::s_listener_table_)),
+                this);
         }
     }
 
@@ -56,7 +56,8 @@ public:
     /// Send a request that creates a new object and return the new proxy.
     /// Returns nullptr when the handle is null (S4).
     template <typename... Args>
-    [[nodiscard]] wl_proxy* _MarshalNew(uint32_t opcode, const wl_interface* iface,
+    [[nodiscard]] wl_proxy* _MarshalNew(uint32_t opcode,
+                                        const wl_interface* iface,
                                         Args... args) noexcept {
         if (!Base::m_proxy)
             return nullptr;

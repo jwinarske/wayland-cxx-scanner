@@ -18,15 +18,24 @@ namespace {
 /// unreachable and asserts in debug builds.
 std::string cpp_server_arg_type(const Arg& arg) {
     switch (arg.type) {
-        case ArgType::Int:    return "int32_t";
-        case ArgType::Uint:   return "uint32_t";
-        case ArgType::Fixed:  return "wl_fixed_t";
-        case ArgType::String: return "const char*";
-        case ArgType::Object: return "wl_resource*";
-        case ArgType::NewId:  return "uint32_t";
-        case ArgType::Array:  return "wl_array*";
-        case ArgType::Fd:     return "int32_t";
-        case ArgType::Enum:   return "uint32_t";
+        case ArgType::Int:
+            return "int32_t";
+        case ArgType::Uint:
+            return "uint32_t";
+        case ArgType::Fixed:
+            return "wl_fixed_t";
+        case ArgType::String:
+            return "const char*";
+        case ArgType::Object:
+            return "wl_resource*";
+        case ArgType::NewId:
+            return "uint32_t";
+        case ArgType::Array:
+            return "wl_array*";
+        case ArgType::Fd:
+            return "int32_t";
+        case ArgType::Enum:
+            return "uint32_t";
     }
     assert(false && "unhandled ArgType in cpp_server_arg_type");
     return "void*";
@@ -74,8 +83,7 @@ void emit_crack_request(std::ostringstream& os, const Message& req) {
        << "(T* self, wl_client* client, wl_resource* resource, void** args, Fn fn) {\n";
     os << "        (self->*fn)(client, resource";
     for (std::size_t i = 0; i < req.args.size(); ++i)
-        os << ", *reinterpret_cast<" << cpp_server_arg_type(req.args[i]) << "*>(args[" << i
-           << "])";
+        os << ", *reinterpret_cast<" << cpp_server_arg_type(req.args[i]) << "*>(args[" << i << "])";
     os << ");\n    }\n\n";
 }
 
@@ -87,8 +95,7 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
     emit_server_traits(os, iface);
 
     os << "template <class Derived>\n";
-    os << "class " << cls_name << " : public wl::CResourceImpl<Derived, " << traits_name
-       << "> {\n";
+    os << "class " << cls_name << " : public wl::CResourceImpl<Derived, " << traits_name << "> {\n";
     os << "    using Base = wl::CResourceImpl<Derived, " << traits_name << ">;\n\n";
     os << "public:\n";
 
@@ -112,8 +119,7 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
 
     for (const auto& r : iface.requests) {
         std::string handler = "On" + snake_to_pascal(r.name);
-        os << "    virtual void " << handler
-           << "(wl_client* /*client*/, wl_resource* /*resource*/";
+        os << "    virtual void " << handler << "(wl_client* /*client*/, wl_resource* /*resource*/";
         for (const auto& a : r.args)
             os << ", " << cpp_server_arg_type(a) << " /*" << a.name << "*/";
         os << ") {}\n";
@@ -122,8 +128,8 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
     if (!iface.requests.empty()) {
         os << "\n    BEGIN_REQUEST_MAP(" << cls_name << ")\n";
         for (const auto& r : iface.requests)
-            os << "        REQUEST_HANDLER(" << traits_name << "::Req::"
-               << snake_to_pascal(r.name) << ", On" << snake_to_pascal(r.name) << ")\n";
+            os << "        REQUEST_HANDLER(" << traits_name << "::Req::" << snake_to_pascal(r.name)
+               << ", On" << snake_to_pascal(r.name) << ")\n";
         os << "    END_REQUEST_MAP()\n\n";
 
         os << "private:\n";
@@ -136,8 +142,8 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
             os << "        auto* self = static_cast<" << cls_name
                << "*>(wl_resource_get_user_data(resource));\n";
             os << "        if (!self) return;  // R5: guard against uninitialised resource\n";
-            os << "        self->ProcessRequest(" << traits_name << "::Req::"
-               << snake_to_pascal(r.name) << ", client, resource, args);\n";
+            os << "        self->ProcessRequest(" << traits_name
+               << "::Req::" << snake_to_pascal(r.name) << ", client, resource, args);\n";
             os << "    }\n";
         }
         os << "    static constexpr void* s_request_vtable_[] = {\n";

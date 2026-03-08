@@ -6,12 +6,11 @@
 #include "codegen_server_cxx.hpp"
 #include "xml_parser.hpp"
 
-#include <gtest/gtest.h>
-#include <gmock/gmock.h>
-
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include <string>
 
 using namespace wl::scanner;
@@ -61,7 +60,7 @@ TEST(Cli, InvalidXmlReturnsParseError) {
 
 TEST(Cli, WriteAndReadTempFile) {
     namespace fs = std::filesystem;
-    fs::path  tmp = fs::temp_directory_path() / "wl_cli_test.xml";
+    fs::path tmp = fs::temp_directory_path() / "wl_cli_test.xml";
     {
         std::ofstream ofs(tmp);
         ofs << fixture_xml();

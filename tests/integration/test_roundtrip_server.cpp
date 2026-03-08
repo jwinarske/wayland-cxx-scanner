@@ -4,11 +4,10 @@
 #include "codegen_server_cxx.hpp"
 #include "xml_parser.hpp"
 
-#include <gtest/gtest.h>
-#include <gmock/gmock.h>
-
 #include <cstdlib>
 #include <filesystem>
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include <string>
 
 using namespace wl::scanner;
@@ -44,7 +43,7 @@ TEST(RoundtripServer, VersionPropagated) {
 <protocol name="ver_test">
   <interface name="wl_ver" version="5"/>
 </protocol>)");
-    auto out = generate_server_cxx_header(proto);
+    auto out   = generate_server_cxx_header(proto);
     EXPECT_THAT(out, HasSubstr("version        = 5"));
 }
 
@@ -55,7 +54,7 @@ TEST(RoundtripServer, DestructorRequestPresent) {
     <request name="destroy" type="destructor"/>
   </interface>
 </protocol>)");
-    auto out = generate_server_cxx_header(proto);
+    auto out   = generate_server_cxx_header(proto);
     EXPECT_THAT(out, HasSubstr("virtual void OnDestroy("));
     EXPECT_THAT(out, HasSubstr("REQUEST_HANDLER("));
 }

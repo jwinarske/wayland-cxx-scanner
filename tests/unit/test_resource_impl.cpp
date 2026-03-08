@@ -3,16 +3,15 @@
 // These tests exercise the handle-management API without a live Wayland server.
 #include <wl/resource_impl.hpp>
 
-#include <gtest/gtest.h>
-
 #include <cstdint>
+#include <gtest/gtest.h>
 #include <string_view>
 
 // ── Minimal fake server-side traits ──────────────────────────────────────────
 
 struct FakeServerTraits {
     static constexpr std::string_view interface_name = "wl_fake_server";
-    static constexpr uint32_t         version        = 1;
+    static constexpr uint32_t version                = 1;
     static const wl_interface& wl_iface() noexcept {
         static wl_interface s{};
         return s;

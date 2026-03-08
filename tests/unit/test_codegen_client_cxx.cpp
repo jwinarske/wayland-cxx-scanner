@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "codegen_client_cxx.hpp"
-
 #include "ir.hpp"
 #include "xml_parser.hpp"
 
-#include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
 using namespace wl::scanner;
 using namespace wl::scanner::ir;
@@ -86,7 +85,7 @@ TEST(CodegenClientCxx, ContainsEnumClass) {
 
 TEST(CodegenClientCxx, EmptyProtocol) {
     Protocol p;
-    p.name = "empty";
+    p.name   = "empty";
     auto out = generate_client_cxx_header(p);
     EXPECT_THAT(out, HasSubstr("#pragma once"));
     EXPECT_THAT(out, HasSubstr("namespace empty::client"));
