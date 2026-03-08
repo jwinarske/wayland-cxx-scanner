@@ -1,0 +1,65 @@
+# clang-tidy-19 configuration for wayland-cxx-scanner
+# C++23, Wayland protocol scanner with WTL-style framework headers
+
+Checks: >
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  bugprone-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -misc-non-private-member-variables-in-classes,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+
+WarningsAsErrors: "*"
+
+HeaderFilterRegex: "(include/wl/|src/).*\\.(hpp|h)$"
+
+FormatStyle: file
+
+CheckOptions:
+  # Naming conventions: WTL-style (CamelCase methods, m_ prefix for members)
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.ClassPrefix
+    value: ""
+  - key: readability-identifier-naming.StructCase
+    value: lower_case
+  - key: readability-identifier-naming.MemberPrefix
+    value: m_
+  - key: readability-identifier-naming.PrivateMemberPrefix
+    value: m_
+  - key: readability-identifier-naming.MethodCase
+    value: CamelCase
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.TemplateParameterCase
+    value: CamelCase
+  - key: modernize-use-default-member-init.UseAssignment
+    value: "1"
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: "1"
+  - key: cppcoreguidelines-special-member-functions.AllowMissingMoveFunctions
+    value: "0"
+  - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value: "1"
+  - key: performance-move-const-arg.CheckTriviallyCopyableMove
+    value: "0"
