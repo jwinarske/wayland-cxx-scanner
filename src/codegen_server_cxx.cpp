@@ -4,6 +4,7 @@
 
 #include "name_transform.hpp"
 
+#include <cassert>
 #include <sstream>
 
 namespace wl::scanner {
@@ -13,6 +14,8 @@ using namespace ir;
 namespace {
 
 /// Map ArgType to a C++ parameter type for server-side code.
+/// M3: every ArgType value is explicitly listed; the default branch is
+/// unreachable and asserts in debug builds.
 std::string cpp_server_arg_type(const Arg& arg) {
     switch (arg.type) {
         case ArgType::Int:    return "int32_t";
@@ -25,10 +28,12 @@ std::string cpp_server_arg_type(const Arg& arg) {
         case ArgType::Fd:     return "int32_t";
         case ArgType::Enum:   return "uint32_t";
     }
+    assert(false && "unhandled ArgType in cpp_server_arg_type");
     return "void*";
 }
 
 void emit_server_traits(std::ostringstream& os, const Interface& iface) {
+    // S6: names validated at parse time.
     std::string traits_name = iface.name + "_server_traits";
     os << "struct " << traits_name << " {\n";
     os << "    static constexpr std::string_view interface_name = \"" << iface.name << "\";\n";
@@ -39,7 +44,7 @@ void emit_server_traits(std::ostringstream& os, const Interface& iface) {
         os << "    struct Req {\n";
         os << "        static constexpr uint32_t";
         bool first = true;
-        for (auto& r : iface.requests) {
+        for (const auto& r : iface.requests) {
             if (!first)
                 os << ",";
             os << "\n            " << snake_to_pascal(r.name) << " = " << r.opcode;
@@ -47,11 +52,12 @@ void emit_server_traits(std::ostringstream& os, const Interface& iface) {
         }
         os << ";\n    };\n";
     }
+
     if (!iface.events.empty()) {
         os << "    struct Evt {\n";
         os << "        static constexpr uint32_t";
         bool first = true;
-        for (auto& e : iface.events) {
+        for (const auto& e : iface.events) {
             if (!first)
                 os << ",";
             os << "\n            " << snake_to_pascal(e.name) << " = " << e.opcode;
@@ -67,16 +73,18 @@ void emit_crack_request(std::ostringstream& os, const Message& req) {
     os << "    static void _CrackRequest_" << req.opcode
        << "(T* self, wl_client* client, wl_resource* resource, void** args, Fn fn) {\n";
     os << "        (self->*fn)(client, resource";
-    for (std::size_t i = 0; i < req.args.size(); ++i) {
+    for (std::size_t i = 0; i < req.args.size(); ++i)
         os << ", *reinterpret_cast<" << cpp_server_arg_type(req.args[i]) << "*>(args[" << i
            << "])";
-    }
     os << ");\n    }\n\n";
 }
 
 void emit_server_class(std::ostringstream& os, const Interface& iface) {
+    // S6: names validated at parse time.
     std::string cls_name    = "C" + snake_to_pascal(iface.name) + "Server";
     std::string traits_name = iface.name + "_server_traits";
+
+    emit_server_traits(os, iface);
 
     os << "template <class Derived>\n";
     os << "class " << cls_name << " : public wl::CResourceImpl<Derived, " << traits_name
@@ -84,8 +92,7 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
     os << "    using Base = wl::CResourceImpl<Derived, " << traits_name << ">;\n\n";
     os << "public:\n";
 
-    // SendXxx methods for events
-    for (auto& e : iface.events) {
+    for (const auto& e : iface.events) {
         std::string method = "Send" + snake_to_pascal(e.name);
         os << "    void " << method << "(";
         for (std::size_t i = 0; i < e.args.size(); ++i) {
@@ -95,48 +102,47 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
         }
         os << ") noexcept {\n";
         os << "        Base::_PostEvent(" << traits_name << "::Evt::" << snake_to_pascal(e.name);
-        for (auto& a : e.args)
+        for (const auto& a : e.args)
             os << ", " << a.name;
         os << ");\n    }\n\n";
     }
 
-    // _CrackRequest helpers
-    for (auto& r : iface.requests)
+    for (const auto& r : iface.requests)
         emit_crack_request(os, r);
 
-    // Virtual OnXxx handlers (each takes wl_client*, wl_resource*, + typed args)
-    for (auto& r : iface.requests) {
+    for (const auto& r : iface.requests) {
         std::string handler = "On" + snake_to_pascal(r.name);
-        os << "    virtual void " << handler << "(wl_client* /*client*/, wl_resource* /*resource*/";
-        for (auto& a : r.args)
+        os << "    virtual void " << handler
+           << "(wl_client* /*client*/, wl_resource* /*resource*/";
+        for (const auto& a : r.args)
             os << ", " << cpp_server_arg_type(a) << " /*" << a.name << "*/";
         os << ") {}\n";
     }
 
     if (!iface.requests.empty()) {
         os << "\n    BEGIN_REQUEST_MAP(" << cls_name << ")\n";
-        for (auto& r : iface.requests) {
+        for (const auto& r : iface.requests)
             os << "        REQUEST_HANDLER(" << traits_name << "::Req::"
                << snake_to_pascal(r.name) << ", On" << snake_to_pascal(r.name) << ")\n";
-        }
         os << "    END_REQUEST_MAP()\n\n";
 
-        // Static request vtable
         os << "private:\n";
-        for (auto& r : iface.requests) {
+        for (const auto& r : iface.requests) {
             std::string fn = "_Req" + snake_to_pascal(r.name);
+            // R5: generated dispatch functions null-check the user_data pointer
+            // before dereferencing, guarding against uninitialized resources.
             os << "    static void " << fn
                << "(wl_client* client, wl_resource* resource, void** args) {\n";
             os << "        auto* self = static_cast<" << cls_name
                << "*>(wl_resource_get_user_data(resource));\n";
+            os << "        if (!self) return;  // R5: guard against uninitialised resource\n";
             os << "        self->ProcessRequest(" << traits_name << "::Req::"
                << snake_to_pascal(r.name) << ", client, resource, args);\n";
             os << "    }\n";
         }
         os << "    static constexpr void* s_request_vtable_[] = {\n";
-        for (auto& r : iface.requests) {
+        for (const auto& r : iface.requests)
             os << "        reinterpret_cast<void*>(&_Req" << snake_to_pascal(r.name) << "),\n";
-        }
         os << "    };\n";
     }
 
@@ -146,6 +152,7 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
 }  // anonymous namespace
 
 std::string generate_server_cxx_header(const Protocol& proto) {
+    // S6: all identifiers validated at parse time; safe to emit directly.
     std::ostringstream os;
 
     os << "// SPDX-License-Identifier: MIT\n";
@@ -159,7 +166,7 @@ std::string generate_server_cxx_header(const Protocol& proto) {
     std::string ns = proto.name + "::server";
     os << "namespace " << ns << " {\n\n";
 
-    for (auto& iface : proto.interfaces)
+    for (const auto& iface : proto.interfaces)
         emit_server_class(os, iface);
 
     os << "}  // namespace " << ns << "\n";

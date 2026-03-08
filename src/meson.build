@@ -13,14 +13,14 @@ scanner_lib = static_library(
     'wayland-cxx-scanner-lib',
     scanner_lib_sources,
     include_directories: include_directories('.'),
-    dependencies: [expat_dep],
+    dependencies: [pugixml_dep],
     cpp_args: ['-DWLSCANNER_BUILD'],
 )
 
 scanner_lib_dep = declare_dependency(
     link_with: scanner_lib,
     include_directories: include_directories('.'),
-    dependencies: [expat_dep],
+    dependencies: [pugixml_dep],
 )
 
 executable(

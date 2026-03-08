@@ -1,0 +1,9 @@
+[wrap-file]
+directory = pugixml-1.14
+source_url = https://github.com/zeux/pugixml/releases/download/v1.14/pugixml-1.14.tar.gz
+source_filename = pugixml-1.14.tar.gz
+source_hash = 2f10e276870c64b1db6809050a75e11a897a8d7456c4be5c6b2e35a11168a015
+patch_directory = pugixml
+
+[provide]
+pugixml = pugixml_dep

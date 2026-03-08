@@ -23,24 +23,24 @@ std::string to_upper(std::string_view s) {
 
 void emit_enum(std::ostringstream& os, const Interface& iface, const Enum& en) {
     // e.g.  WL_FOO_ERROR_ROLE = 0,
+    // Names were validated by the parser (S6), so safe to emit directly.
     std::string prefix = to_upper(iface.name) + "_" + to_upper(en.name) + "_";
     os << "enum " << iface.name << "_" << en.name << " {\n";
-    for (auto& e : en.entries) {
-        os << "\t" << prefix << to_upper(e.name) << " = " << e.value << ",\n";
+    for (const auto& e : en.entries) {
+        // M2: use 4-space indent throughout (was a tab character before).
+        os << "    " << prefix << to_upper(e.name) << " = " << e.value << ",\n";
     }
     os << "};\n\n";
 }
 
 void emit_opcodes(std::ostringstream& os, const Interface& iface) {
     std::string prefix = to_upper(iface.name) + "_";
-    for (auto& r : iface.requests) {
+    for (const auto& r : iface.requests)
         os << "#define " << prefix << to_upper(r.name) << " " << r.opcode << "\n";
-    }
     if (!iface.requests.empty())
         os << "\n";
-    for (auto& e : iface.events) {
+    for (const auto& e : iface.events)
         os << "#define " << prefix << to_upper(e.name) << "_EVENT " << e.opcode << "\n";
-    }
     if (!iface.events.empty())
         os << "\n";
 }
@@ -53,6 +53,7 @@ void emit_since_versions(std::ostringstream& os, const Interface& iface) {
 }  // anonymous namespace
 
 std::string generate_c_header(const Protocol& proto) {
+    // S6: all identifiers were validated during parsing; safe to emit.
     std::ostringstream os;
 
     os << "/* SPDX-License-Identifier: MIT */\n";
@@ -64,12 +65,12 @@ std::string generate_c_header(const Protocol& proto) {
     os << "#endif\n\n";
     os << "struct wl_interface;\n\n";
 
-    for (auto& iface : proto.interfaces) {
+    for (const auto& iface : proto.interfaces) {
         os << "/* interface " << iface.name << " */\n";
         os << "extern const struct wl_interface " << iface.name << "_interface;\n\n";
         emit_since_versions(os, iface);
         emit_opcodes(os, iface);
-        for (auto& en : iface.enums)
+        for (const auto& en : iface.enums)
             emit_enum(os, iface, en);
     }
 

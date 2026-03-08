@@ -3,14 +3,16 @@
 #include "xml_parser.hpp"
 
 #include "ir.hpp"
+#include "name_transform.hpp"
 
-#include <expat.h>
+#include <pugixml.hpp>
 
 #include <array>
 #include <cerrno>
+#include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <sstream>
 #include <string>
 
 namespace wl::scanner {
@@ -19,29 +21,48 @@ using namespace ir;
 
 namespace {
 
-/// Expat SAX parser state machine.
-struct ParserState {
-    Protocol              proto;
-    std::string           error;
-    bool                  in_protocol{false};
-    bool                  in_interface{false};
-    bool                  in_request{false};
-    bool                  in_event{false};
-    bool                  in_enum{false};
-};
+// ── Identifier validation (S6 / M1) ─────────────────────────────────────────
 
-/// Return the value of an XML attribute, or nullptr if absent.
-static const char* attr(const char** atts, const char* key) noexcept {
-    for (int i = 0; atts[i]; i += 2) {
-        if (std::strcmp(atts[i], key) == 0)
-            return atts[i + 1];
+/// Returns true when @p s is a non-empty, valid C/C++ identifier composed
+/// only of [A-Za-z0-9_] with no leading digit.  This prevents code-injection
+/// through crafted XML names reaching generated source files.
+static bool is_valid_identifier(std::string_view s) noexcept {
+    if (s.empty())
+        return false;
+    if (s[0] != '_' && (s[0] < 'A' || s[0] > 'z') &&
+        !(s[0] >= 'A' && s[0] <= 'Z') && !(s[0] >= 'a' && s[0] <= 'z'))
+        return false;
+    for (char c : s) {
+        if ((c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_')
+            return false;
     }
-    return nullptr;
+    return true;
 }
 
-/// Map a Wayland arg type string to ArgType.
-/// Returns false when the type string is not recognised.
-static bool parse_arg_type(const char* type_str, ArgType& out) noexcept {
+static void require_identifier(std::string_view s, const char* ctx) {
+    if (!is_valid_identifier(s))
+        throw ParseError(std::string("invalid identifier '") + std::string(s) + "' on " + ctx);
+}
+
+// ── Numeric parsing helpers (S1 — no-throw integer parsing) ─────────────────
+
+/// Parse a non-negative integer, accepting decimal and hex ("0x…").
+/// Throws ParseError on overflow or invalid input.
+static uint32_t parse_uint32(const char* s, const char* ctx) {
+    if (!s || *s == '\0')
+        throw ParseError(std::string("missing integer value for ") + ctx);
+    char*          endptr = nullptr;
+    unsigned long  v      = std::strtoul(s, &endptr, 0);
+    if (endptr == s || *endptr != '\0')
+        throw ParseError(std::string("invalid integer '") + s + "' for " + ctx);
+    if (v > UINT32_MAX)
+        throw ParseError(std::string("integer overflow '") + s + "' for " + ctx);
+    return static_cast<uint32_t>(v);
+}
+
+// ── Arg type mapping ─────────────────────────────────────────────────────────
+
+static ArgType parse_arg_type(const char* type_str, const char* arg_name) {
     struct Pair {
         const char* name;
         ArgType     type;
@@ -55,230 +76,176 @@ static bool parse_arg_type(const char* type_str, ArgType& out) noexcept {
         {"new_id", ArgType::NewId},
         {"array", ArgType::Array},
         {"fd", ArgType::Fd},
-        {"enum", ArgType::Uint},  // enum is stored as Uint, flag set separately
+        // "enum" wire type: treated as Uint at the wire level; the semantic
+        // ArgType::Enum is set later when an "enum" attribute is present.
+        {"enum", ArgType::Uint},
     }};
-    for (auto& p : kTable) {
-        if (std::strcmp(type_str, p.name) == 0) {
-            out = p.type;
-            return true;
-        }
+    for (const auto& p : kTable) {
+        if (std::strcmp(type_str, p.name) == 0)
+            return p.type;
     }
-    return false;
+    throw ParseError(std::string("unknown arg type '") + type_str + "' on arg '" + arg_name +
+                     "'");
 }
 
-static void XMLCALL on_start(void* user, const char* el, const char** atts) {
-    auto& st = *static_cast<ParserState*>(user);
-    if (!st.error.empty())
-        return;
+// ── DOM traversal ─────────────────────────────────────────────────────────────
 
-    // ── <protocol> ──────────────────────────────────────────────────────────
-    if (std::strcmp(el, "protocol") == 0) {
-        const char* name = attr(atts, "name");
-        if (!name) {
-            st.error = "missing 'name' on <protocol>";
-            return;
-        }
-        st.proto.name  = name;
-        st.in_protocol = true;
-        return;
+static Arg parse_arg(pugi::xml_node node) {
+    const char* name      = node.attribute("name").value();
+    const char* type_str  = node.attribute("type").value();
+    const char* iface_str = node.attribute("interface").as_string(nullptr);
+    const char* enum_str  = node.attribute("enum").as_string(nullptr);
+    const char* null_ok   = node.attribute("allow-null").as_string(nullptr);
+
+    if (*name == '\0')
+        throw ParseError("missing 'name' on <arg>");
+    if (*type_str == '\0')
+        throw ParseError(std::string("missing 'type' on <arg> '") + name + "'");
+    require_identifier(name, "<arg> name");
+
+    Arg arg;
+    arg.name = name;
+    ArgType raw = parse_arg_type(type_str, name);
+
+    if (enum_str && *enum_str != '\0') {
+        arg.type      = ArgType::Enum;
+        arg.enum_name = enum_str;
+    } else {
+        arg.type = raw;
     }
 
-    if (!st.in_protocol)
-        return;
+    if (iface_str && *iface_str != '\0')
+        arg.interface_name = iface_str;
+    if (null_ok && std::strcmp(null_ok, "true") == 0)
+        arg.allow_null = true;
 
-    // ── <interface> ─────────────────────────────────────────────────────────
-    if (std::strcmp(el, "interface") == 0) {
-        Interface iface;
-        const char* name = attr(atts, "name");
-        const char* ver  = attr(atts, "version");
-        if (!name) {
-            st.error = "missing 'name' on <interface>";
-            return;
-        }
-        iface.name    = name;
-        iface.version = ver ? static_cast<uint32_t>(std::stoul(ver)) : 1u;
-        st.proto.interfaces.push_back(std::move(iface));
-        st.in_interface = true;
-        return;
-    }
+    return arg;
+}
 
-    if (!st.in_interface)
-        return;
+static Message parse_message(pugi::xml_node node, uint32_t opcode) {
+    const char* name = node.attribute("name").value();
+    if (*name == '\0')
+        throw ParseError(std::string("missing 'name' on <") + node.name() + ">");
+    require_identifier(name, node.name());
 
-    // ── <request> ───────────────────────────────────────────────────────────
-    if (std::strcmp(el, "request") == 0) {
-        const char* name = attr(atts, "name");
-        if (!name) {
-            st.error = "missing 'name' on <request>";
-            return;
-        }
-        Message msg;
-        msg.name   = name;
-        msg.opcode = static_cast<uint32_t>(st.proto.interfaces.back().requests.size());
-        const char* type_attr = attr(atts, "type");
-        if (type_attr && std::strcmp(type_attr, "destructor") == 0)
-            msg.is_destructor = true;
-        st.proto.interfaces.back().requests.push_back(std::move(msg));
-        st.in_request = true;
-        return;
-    }
+    Message msg;
+    msg.name   = name;
+    msg.opcode = opcode;
 
-    // ── <event> ─────────────────────────────────────────────────────────────
-    if (std::strcmp(el, "event") == 0) {
-        const char* name = attr(atts, "name");
-        if (!name) {
-            st.error = "missing 'name' on <event>";
-            return;
-        }
-        Message msg;
-        msg.name   = name;
-        msg.opcode = static_cast<uint32_t>(st.proto.interfaces.back().events.size());
-        st.proto.interfaces.back().events.push_back(std::move(msg));
-        st.in_event = true;
-        return;
-    }
+    const char* type_attr = node.attribute("type").as_string(nullptr);
+    if (type_attr && std::strcmp(type_attr, "destructor") == 0)
+        msg.is_destructor = true;
 
-    // ── <enum> ──────────────────────────────────────────────────────────────
-    if (std::strcmp(el, "enum") == 0) {
-        const char* name = attr(atts, "name");
-        if (!name) {
-            st.error = "missing 'name' on <enum>";
-            return;
-        }
-        Enum e;
-        e.name = name;
-        const char* bf = attr(atts, "bitfield");
-        if (bf && std::strcmp(bf, "true") == 0)
-            e.is_bitfield = true;
-        st.proto.interfaces.back().enums.push_back(std::move(e));
-        st.in_enum = true;
-        return;
-    }
+    for (pugi::xml_node arg_node : node.children("arg"))
+        msg.args.push_back(parse_arg(arg_node));
 
-    // ── <arg> ───────────────────────────────────────────────────────────────
-    if (std::strcmp(el, "arg") == 0) {
-        if (!st.in_request && !st.in_event)
-            return;
+    return msg;
+}
 
-        const char* name      = attr(atts, "name");
-        const char* type_str  = attr(atts, "type");
-        const char* iface_str = attr(atts, "interface");
-        const char* enum_str  = attr(atts, "enum");
-        const char* null_ok   = attr(atts, "allow-null");
+static Enum parse_enum(pugi::xml_node node) {
+    const char* name = node.attribute("name").value();
+    if (*name == '\0')
+        throw ParseError("missing 'name' on <enum>");
+    require_identifier(name, "<enum> name");
 
-        if (!name) {
-            st.error = "missing 'name' on <arg>";
-            return;
-        }
-        if (!type_str) {
-            st.error = std::string("missing 'type' on <arg> '") + name + "'";
-            return;
-        }
+    Enum en;
+    en.name        = name;
+    en.is_bitfield = std::strcmp(node.attribute("bitfield").as_string("false"), "true") == 0;
 
-        Arg arg;
-        arg.name = name;
+    for (pugi::xml_node entry : node.children("entry")) {
+        const char* ename = entry.attribute("name").value();
+        const char* eval  = entry.attribute("value").value();
+        if (*ename == '\0' || *eval == '\0')
+            continue;
+        require_identifier(ename, "<entry> name");
 
-        ArgType raw_type{};
-        if (!parse_arg_type(type_str, raw_type)) {
-            st.error = std::string("unknown arg type '") + type_str + "' on arg '" + name + "'";
-            return;
-        }
-
-        // If an 'enum' attribute is present the semantic type is Enum regardless
-        // of whether the wire type is 'uint' or 'int'.
-        if (enum_str) {
-            arg.type      = ArgType::Enum;
-            arg.enum_name = enum_str;
-        } else {
-            arg.type = raw_type;
-        }
-
-        if (iface_str)
-            arg.interface_name = iface_str;
-        if (null_ok && std::strcmp(null_ok, "true") == 0)
-            arg.allow_null = true;
-
-        auto& iface = st.proto.interfaces.back();
-        if (st.in_request)
-            iface.requests.back().args.push_back(std::move(arg));
-        else
-            iface.events.back().args.push_back(std::move(arg));
-        return;
-    }
-
-    // ── <entry> ─────────────────────────────────────────────────────────────
-    if (std::strcmp(el, "entry") == 0 && st.in_enum) {
-        const char* name  = attr(atts, "name");
-        const char* value = attr(atts, "value");
-        if (!name || !value)
-            return;
         EnumEntry e;
-        e.name  = name;
-        e.value = static_cast<uint32_t>(std::stoul(value, nullptr, 0));
-        st.proto.interfaces.back().enums.back().entries.push_back(std::move(e));
-        return;
+        e.name  = ename;
+        e.value = parse_uint32(eval, "<entry> value");
+        en.entries.push_back(std::move(e));
     }
+    return en;
 }
 
-static void XMLCALL on_end(void* user, const char* el) {
-    auto& st = *static_cast<ParserState*>(user);
-    if (!st.error.empty())
-        return;
+static Protocol parse_doc(const pugi::xml_document& doc) {
+    pugi::xml_node protocol_node = doc.child("protocol");
+    if (!protocol_node)
+        throw ParseError("missing <protocol> root element");
 
-    if (std::strcmp(el, "protocol") == 0)
-        st.in_protocol = false;
-    else if (std::strcmp(el, "interface") == 0)
-        st.in_interface = false;
-    else if (std::strcmp(el, "request") == 0)
-        st.in_request = false;
-    else if (std::strcmp(el, "event") == 0)
-        st.in_event = false;
-    else if (std::strcmp(el, "enum") == 0)
-        st.in_enum = false;
-}
+    const char* proto_name = protocol_node.attribute("name").value();
+    if (*proto_name == '\0')
+        throw ParseError("missing 'name' on <protocol>");
+    require_identifier(proto_name, "<protocol> name");
 
-static Protocol run_parser(const char* buf, std::size_t len) {
-    XML_Parser p = XML_ParserCreate(nullptr);
-    if (!p)
-        throw ParseError("XML_ParserCreate failed");
+    Protocol proto;
+    proto.name = proto_name;
 
-    ParserState st;
-    XML_SetUserData(p, &st);
-    XML_SetElementHandler(p, on_start, on_end);
+    for (pugi::xml_node iface_node : protocol_node.children("interface")) {
+        const char* iname = iface_node.attribute("name").value();
+        if (*iname == '\0')
+            throw ParseError("missing 'name' on <interface>");
+        require_identifier(iname, "<interface> name");
 
-    bool ok = XML_Parse(p, buf, static_cast<int>(len), /*isFinal=*/1) != XML_STATUS_ERROR;
-    std::string xml_err;
-    if (!ok) {
-        xml_err = std::string("XML parse error at line ") +
-                  std::to_string(XML_GetCurrentLineNumber(p)) + ": " +
-                  XML_ErrorString(XML_GetErrorCode(p));
+        Interface iface;
+        iface.name = iname;
+
+        const char* ver_str = iface_node.attribute("version").as_string(nullptr);
+        iface.version = (ver_str && *ver_str != '\0') ? parse_uint32(ver_str, "<interface> version")
+                                                       : 1u;
+
+        uint32_t req_opcode = 0;
+        for (pugi::xml_node req : iface_node.children("request"))
+            iface.requests.push_back(parse_message(req, req_opcode++));
+
+        uint32_t evt_opcode = 0;
+        for (pugi::xml_node evt : iface_node.children("event"))
+            iface.events.push_back(parse_message(evt, evt_opcode++));
+
+        for (pugi::xml_node en : iface_node.children("enum"))
+            iface.enums.push_back(parse_enum(en));
+
+        proto.interfaces.push_back(std::move(iface));
     }
-    XML_ParserFree(p);
 
-    if (!ok)
-        throw ParseError(xml_err);
-    if (!st.error.empty())
-        throw ParseError(st.error);
-
-    return std::move(st.proto);
+    return proto;
 }
 
 }  // anonymous namespace
 
+// ── Public API ───────────────────────────────────────────────────────────────
+
 Protocol parse_protocol_from_string(std::string_view xml) {
-    return run_parser(xml.data(), xml.size());
+    pugi::xml_document     doc;
+    pugi::xml_parse_result result = doc.load_buffer(xml.data(), xml.size());
+    if (!result)
+        throw ParseError(std::string("XML parse error: ") + result.description());
+    return parse_doc(doc);
 }
 
 Protocol parse_protocol(const std::filesystem::path& path) {
+    // Open explicitly to generate std::system_error on access failure (R2, R3).
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs)
         throw std::system_error(errno, std::generic_category(),
                                 "cannot open " + path.string());
-    auto size = ifs.tellg();
+
+    // Validate file size before allocation (R3: guard against negative tellg).
+    const auto raw_size = ifs.tellg();
+    if (raw_size < 0)
+        throw std::system_error(errno, std::generic_category(),
+                                "cannot determine size of " + path.string());
+    const auto file_size = static_cast<std::size_t>(raw_size);
+
     ifs.seekg(0);
-    std::string buf(static_cast<std::size_t>(size), '\0');
-    ifs.read(buf.data(), size);
-    return run_parser(buf.data(), buf.size());
+    std::string buf(file_size, '\0');
+    ifs.read(buf.data(), static_cast<std::streamsize>(file_size));
+
+    // R2: verify the full file was read (guards against EINTR / short reads).
+    if (static_cast<std::size_t>(ifs.gcount()) != file_size)
+        throw std::system_error(errno, std::generic_category(),
+                                "short read on " + path.string());
+
+    return parse_protocol_from_string(buf);
 }
 
 }  // namespace wl::scanner

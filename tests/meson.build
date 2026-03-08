@@ -11,7 +11,15 @@ if not gtest_dep.found()
 endif
 
 _inc  = include_directories('../include', 'fixtures', '.')
-_deps = [scanner_lib_dep, gtest_dep, gmock_dep]
+# wayland-client and wayland-server are needed by tests that include the
+# framework headers (proxy.hpp, registry.hpp, resource_impl.hpp).
+_deps = [
+    scanner_lib_dep,
+    gtest_dep,
+    gmock_dep,
+    wayland_client_dep,
+    wayland_server_dep,
+]
 
 foreach suite : [
     ['raii',              'unit/test_raii.cpp',                          15],

@@ -33,7 +33,7 @@ jobs:
             meson ninja-build \
             g++ \
             libwayland-dev \
-            libexpat1-dev
+            libpugixml-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3

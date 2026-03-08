@@ -4,6 +4,7 @@
 #include <concepts>
 #include <cstdint>
 #include <string_view>
+#include <utility>
 
 extern "C" {
 #include <wayland-client-core.h>
@@ -42,7 +43,7 @@ public:
     void Attach(wl_proxy* p) noexcept { m_proxy = p; }
 
     /// Detach and return the raw proxy without destroying it.
-    [[nodiscard]] wl_proxy* Detach() noexcept {
+    wl_proxy* Detach() noexcept {
         wl_proxy* p = m_proxy;
         m_proxy     = nullptr;
         return p;

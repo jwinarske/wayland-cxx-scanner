@@ -15,6 +15,8 @@ jobs:
   ubuntu:
     name: Ubuntu (${{ matrix.compiler }})
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +44,7 @@ jobs:
             gcc g++ \
             clang-19 \
             libwayland-dev \
-            libexpat1-dev
+            libpugixml-dev
 
       - name: Configure
         run: |
@@ -67,6 +69,8 @@ jobs:
   fedora:
     name: Fedora (${{ matrix.compiler }})
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -95,7 +99,7 @@ jobs:
             gcc gcc-c++ \
             clang \
             wayland-devel \
-            expat-devel \
+            pugixml-devel \
             gtest-devel gmock-devel
 
       - uses: actions/checkout@v4

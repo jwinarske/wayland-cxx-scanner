@@ -96,8 +96,20 @@ int main(int argc, char** argv) {
                 return EXIT_FAILURE;
             }
             ofs << output;
+            // R4: flush and check for write errors (e.g. disk full).
+            ofs.flush();
+            if (ofs.fail()) {
+                std::fprintf(stderr, "error: write failed on '%s'\n", output_path);
+                return EXIT_FAILURE;
+            }
         } else {
             std::cout << output;
+            // R4: check stdout write errors too.
+            std::cout.flush();
+            if (std::cout.fail()) {
+                std::fprintf(stderr, "error: write to stdout failed\n");
+                return EXIT_FAILURE;
+            }
         }
     } catch (const wl::scanner::ir::ParseError& e) {
         std::fprintf(stderr, "parse error: %s\n", e.what());

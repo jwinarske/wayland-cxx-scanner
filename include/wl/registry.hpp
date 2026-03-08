@@ -6,9 +6,13 @@
 #include <cstdint>
 #include <functional>
 #include <string_view>
+#include <utility>
 
 extern "C" {
-#include <wayland-client-core.h>
+// wl_display, wl_registry, wl_registry_listener, wl_registry_bind, etc.
+#include <wayland-client.h>
+// wl_client, wl_global, wl_global_create, wl_global_destroy
+#include <wayland-server-core.h>
 }
 
 namespace wl {
@@ -52,8 +56,11 @@ public:
     void OnRemove(RemoveFn fn) { m_on_remove = std::move(fn); }
 
     /// Bind a global object by name.
+    /// Returns nullptr when the registry handle is null (S5).
     template <typename Traits>
     [[nodiscard]] wl_proxy* Bind(uint32_t name, uint32_t version) noexcept {
+        if (!m_registry)
+            return nullptr;
         return static_cast<wl_proxy*>(
             wl_registry_bind(m_registry, name, &Traits::wl_iface(), version));
     }
@@ -64,9 +71,8 @@ private:
     RemoveFn     m_on_remove;
 
     void _Reset() noexcept {
-        if (m_registry) {
+        if (m_registry)
             wl_registry_destroy(std::exchange(m_registry, nullptr));
-        }
     }
 
     static void _OnGlobal(void* data, wl_registry* /*reg*/, uint32_t name,
@@ -111,7 +117,7 @@ public:
         return m_global != nullptr;
     }
 
-    [[nodiscard]] bool      IsNull() const noexcept { return m_global == nullptr; }
+    [[nodiscard]] bool       IsNull() const noexcept { return m_global == nullptr; }
     [[nodiscard]] wl_global* Get() const noexcept { return m_global; }
 
 private:

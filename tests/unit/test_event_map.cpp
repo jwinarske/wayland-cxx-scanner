@@ -19,7 +19,7 @@ public:
     }
 
     BEGIN_EVENT_MAP(CBase)
-        EVENT_HANDLER(10u, OnTen)
+        EVENT_HANDLER(10, OnTen)
     END_EVENT_MAP()
 
     void OnTen(uint32_t v) { base_count += static_cast<int>(v); }
@@ -38,7 +38,7 @@ public:
     }
 
     BEGIN_EVENT_MAP(CDerived)
-        EVENT_HANDLER(20u, OnTwenty)
+        EVENT_HANDLER(20, OnTwenty)
         CHAIN_EVENT_MAP(CBase)
     END_EVENT_MAP()
 
@@ -60,7 +60,7 @@ public:
 
     BEGIN_EVENT_MAP(CMixinUser)
         CHAIN_EVENT_MAP_MEMBER(m_mixin)
-        EVENT_HANDLER(99u, OnNN)
+        EVENT_HANDLER(99, OnNN)
     END_EVENT_MAP()
 
     void OnNN(uint32_t) { own_handled = true; }
@@ -72,16 +72,16 @@ TEST(EventMap, HandlesOwnOpcode) {
     CBase    b;
     uint32_t v    = 7;
     void*    a[1] = {&v};
-    EXPECT_TRUE(b.ProcessEvent(10, a));
+    EXPECT_TRUE(b.ProcessEvent(10u, a));
     EXPECT_EQ(b.base_count, 7);
 }
 TEST(EventMap, RejectsUnknown) {
     CBase b;
-    EXPECT_FALSE(b.ProcessEvent(99, nullptr));
+    EXPECT_FALSE(b.ProcessEvent(99u, nullptr));
 }
 TEST(EventMap, DerivedOwnBeforeBase) {
     CDerived d;
-    EXPECT_TRUE(d.ProcessEvent(20, nullptr));
+    EXPECT_TRUE(d.ProcessEvent(20u, nullptr));
     EXPECT_TRUE(d.saw_twenty);
     EXPECT_EQ(d.base_count, 0);
 }
@@ -89,18 +89,18 @@ TEST(EventMap, DerivedChainsToBase) {
     CDerived d;
     uint32_t v    = 3;
     void*    a[1] = {&v};
-    EXPECT_TRUE(d.ProcessEvent(10, a));
+    EXPECT_TRUE(d.ProcessEvent(10u, a));
     EXPECT_EQ(d.base_count, 3);
 }
 TEST(EventMap, ChainMemberHandles) {
     CMixinUser u;
     uint32_t   v    = 5;
     void*      a[1] = {&v};
-    EXPECT_TRUE(u.ProcessEvent(10, a));
+    EXPECT_TRUE(u.ProcessEvent(10u, a));
     EXPECT_EQ(u.m_mixin.base_count, 5);
 }
 TEST(EventMap, OwnHandlerAfterMember) {
     CMixinUser u;
-    EXPECT_TRUE(u.ProcessEvent(99, nullptr));
+    EXPECT_TRUE(u.ProcessEvent(99u, nullptr));
     EXPECT_TRUE(u.own_handled);
 }
