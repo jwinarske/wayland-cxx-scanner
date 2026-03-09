@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: MIT
+option('tests',    type: 'boolean', value: true,  description: 'Build and run unit/integration tests')
+option('examples', type: 'boolean', value: false, description: 'Build example applications')

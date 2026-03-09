@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="minimal">
+  <copyright>SPDX-License-Identifier: MIT</copyright>
+  <interface name="wl_minimal" version="2">
+    <description summary="A minimal test interface."/>
+    <request name="req_a">
+      <arg name="value" type="uint"/>
+    </request>
+    <request name="req_b" type="destructor"/>
+    <event name="evt_x">
+      <arg name="serial" type="uint"/>
+    </event>
+  </interface>
+</protocol>

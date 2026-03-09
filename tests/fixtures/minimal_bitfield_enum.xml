@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="bitfield_test">
+  <interface name="wl_bf" version="1">
+    <enum name="flags" bitfield="true">
+      <entry name="none"  value="0"/>
+      <entry name="read"  value="1"/>
+      <entry name="write" value="2"/>
+      <entry name="exec"  value="4"/>
+    </enum>
+    <request name="set_flags">
+      <arg name="flags" type="uint" enum="wl_bf.flags"/>
+    </request>
+  </interface>
+</protocol>

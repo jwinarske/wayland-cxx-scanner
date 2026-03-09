@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "copilot/**"
+  pull_request:
+    branches:
+      - main
+      - master
+
+# Deny all permissions at the workflow level; each job grants only what it needs.
+permissions: {}
+
+jobs:
+  ubuntu:
+    name: Ubuntu (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        include:
+          - compiler: gcc
+            CC: gcc
+            CXX: g++
+          - compiler: clang
+            CC: clang-19
+            CXX: clang++-19
+
+    env:
+      CC: ${{ matrix.CC }}
+      CXX: ${{ matrix.CXX }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            meson ninja-build \
+            gcc g++ \
+            clang-19 \
+            libwayland-dev \
+            libpugixml-dev
+
+      - name: Configure
+        run: |
+          meson setup builddir \
+            -Dtests=true \
+            -Dexamples=false \
+            --wrap-mode=forcefallback
+
+      - name: Build
+        run: ninja -C builddir
+
+      - name: Test
+        run: meson test -C builddir --print-errorlogs
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-ubuntu-${{ matrix.compiler }}
+          path: builddir/meson-logs/
+
+  fedora:
+    name: Fedora (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        include:
+          - compiler: gcc
+            CC: gcc
+            CXX: g++
+          - compiler: clang
+            CC: clang
+            CXX: clang++
+
+    container:
+      image: fedora:latest
+
+    env:
+      CC: ${{ matrix.CC }}
+      CXX: ${{ matrix.CXX }}
+
+    steps:
+      - name: Install git and dependencies
+        run: |
+          dnf install -y \
+            git \
+            meson ninja-build \
+            gcc gcc-c++ \
+            clang \
+            wayland-devel \
+            pugixml-devel \
+            gtest-devel gmock-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          meson setup builddir \
+            -Dtests=true \
+            -Dexamples=false \
+            --wrap-mode=forcefallback
+
+      - name: Build
+        run: ninja -C builddir
+
+      - name: Test
+        run: meson test -C builddir --print-errorlogs
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-fedora-${{ matrix.compiler }}
+          path: builddir/meson-logs/

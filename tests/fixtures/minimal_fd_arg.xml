@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="fd_test">
+  <interface name="wl_fd_iface" version="1">
+    <request name="send_fd">
+      <arg name="the_fd" type="fd"/>
+    </request>
+    <event name="recv_fd">
+      <arg name="the_fd" type="fd"/>
+    </event>
+  </interface>
+</protocol>

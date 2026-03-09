@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="destructor_test">
+  <interface name="wl_dest_iface" version="1">
+    <request name="destroy" type="destructor"/>
+    <request name="do_thing">
+      <arg name="val" type="int"/>
+    </request>
+  </interface>
+</protocol>
