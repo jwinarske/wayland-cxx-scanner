@@ -166,7 +166,8 @@ void emit_client_class(std::ostringstream& os, const Interface& iface) {
 
     os << "private:\n";
     // Allow the CRTP base to access the private vtable.
-    os << "    friend class wl::CProxyImpl<Derived, " << traits_name << ">;\n\n";
+    os << "    friend class wl::CProxyImpl<Derived, " << traits_name
+       << ">;\n\n";
     for (const auto& e : iface.events) {
       std::string fn = "_Evt" + snake_to_pascal(e.name);
       os << "    static void " << fn << "(void* data, wl_proxy* /*proxy*/";

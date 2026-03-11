@@ -20,7 +20,8 @@ extern "C" {
 #include <cstring>
 #include <string_view>
 
-// ── wl_interface definition ───────────────────────────────────────────────────
+// ── wl_interface definition
+// ───────────────────────────────────────────────────
 //
 // Each translation unit that references wl_iface() provides its own copy;
 // the content is identical to the server-side copy in server.cpp.
@@ -36,12 +37,7 @@ static const wl_message wl_minimal_event_descs[] = {
 };
 
 static const wl_interface wl_minimal_iface_def = {
-    "wl_minimal",
-    2,
-    2,
-    wl_minimal_request_descs,
-    1,
-    wl_minimal_event_descs,
+    "wl_minimal", 2, 2, wl_minimal_request_descs, 1, wl_minimal_event_descs,
 };
 
 namespace minimal::client {
@@ -50,21 +46,23 @@ const wl_interface& wl_minimal_traits::wl_iface() noexcept {
 }
 }  // namespace minimal::client
 
-// ── Client implementation ─────────────────────────────────────────────────────
+// ── Client implementation
+// ─────────────────────────────────────────────────────
 
 // Concrete CRTP implementation: records the received evt_x serial.
 class MinimalClient : public minimal::client::CWlMinimal<MinimalClient> {
  public:
-  bool     done        = false;
+  bool done = false;
   uint32_t echo_serial = 0;
 
   void OnEvtX(uint32_t serial) override {
     echo_serial = serial;
-    done        = true;
+    done = true;
   }
 };
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public entry point
+// ────────────────────────────────────────────────────────
 
 /// Connect to the compositor socket given by WAYLAND_DISPLAY, bind wl_minimal,
 /// send req_a(42), wait for evt_x(42), then disconnect cleanly.
@@ -82,9 +80,9 @@ int run_client() {
 
   // Scan for the wl_minimal global.
   struct RegistryData {
-    uint32_t name    = 0;
+    uint32_t name = 0;
     uint32_t version = 0;
-    bool     found   = false;
+    bool found = false;
   } reg_data;
 
   const wl_registry_listener registry_listener = {
@@ -92,10 +90,10 @@ int run_client() {
           [](void* udata, wl_registry* /*reg*/, uint32_t name,
              const char* iface, uint32_t ver) {
             if (std::string_view(iface) == "wl_minimal") {
-              auto* d    = static_cast<RegistryData*>(udata);
-              d->name    = name;
+              auto* d = static_cast<RegistryData*>(udata);
+              d->name = name;
               d->version = ver;
-              d->found   = true;
+              d->found = true;
             }
           },
       .global_remove = [](void* /*udata*/, wl_registry* /*reg*/,
@@ -113,9 +111,9 @@ int run_client() {
   }
 
   // Bind to wl_minimal version 1.
-  auto* proxy = static_cast<wl_proxy*>(wl_registry_bind(
-      registry, reg_data.name,
-      &minimal::client::wl_minimal_traits::wl_iface(), 1));
+  auto* proxy = static_cast<wl_proxy*>(
+      wl_registry_bind(registry, reg_data.name,
+                       &minimal::client::wl_minimal_traits::wl_iface(), 1));
   if (!proxy) {
     std::fprintf(stderr, "client: wl_registry_bind failed\n");
     wl_registry_destroy(registry);

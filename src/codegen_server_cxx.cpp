@@ -138,8 +138,8 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
   if (!iface.requests.empty()) {
     os << "\n    BEGIN_REQUEST_MAP(" << cls_name << ")\n";
     for (const auto& r : iface.requests)
-      // Use the raw integer opcode so the REQUEST_HANDLER macro's ## token-paste
-      // produces a valid C++ identifier (_CrackRequest_<N>).
+      // Use the raw integer opcode so the REQUEST_HANDLER macro's ##
+      // token-paste produces a valid C++ identifier (_CrackRequest_<N>).
       os << "        REQUEST_HANDLER(" << r.opcode << ", On"
          << snake_to_pascal(r.name) << ")\n";
     os << "    END_REQUEST_MAP()\n\n";

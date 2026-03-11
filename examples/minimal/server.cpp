@@ -14,12 +14,12 @@ extern "C" {
 #include <wayland-server.h>
 }
 
+#include <unistd.h>
 #include <cassert>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <unistd.h>
 
 // ── wl_interface definitions ─────────────────────────────────────────────────
 //
@@ -38,7 +38,7 @@ static const wl_interface* wl_minimal_msg_types[] = {nullptr};
 
 static const wl_message wl_minimal_request_descs[] = {
     {"req_a", "u", wl_minimal_msg_types},  // one uint arg
-    {"req_b", "", nullptr},                 // no args (destructor)
+    {"req_b", "", nullptr},                // no args (destructor)
 };
 static const wl_message wl_minimal_event_descs[] = {
     {"evt_x", "u", wl_minimal_msg_types},  // one uint arg
@@ -47,12 +47,7 @@ static const wl_message wl_minimal_event_descs[] = {
 // The interface object has internal linkage; both server and client
 // translation units define their own copy with the same content.
 static const wl_interface wl_minimal_iface_def = {
-    "wl_minimal",
-    2,
-    2,
-    wl_minimal_request_descs,
-    1,
-    wl_minimal_event_descs,
+    "wl_minimal", 2, 2, wl_minimal_request_descs, 1, wl_minimal_event_descs,
 };
 
 namespace minimal::server {
@@ -61,14 +56,15 @@ const wl_interface& wl_minimal_server_traits::wl_iface() noexcept {
 }
 }  // namespace minimal::server
 
-// ── Server implementation ─────────────────────────────────────────────────────
+// ── Server implementation
+// ─────────────────────────────────────────────────────
 
 // Concrete CRTP implementation: echoes every req_a back as evt_x.
-class MinimalServer
-    : public minimal::server::CWlMinimalServer<MinimalServer> {
+class MinimalServer : public minimal::server::CWlMinimalServer<MinimalServer> {
  public:
-  void OnReqA(wl_client* /*client*/, wl_resource* /*resource*/,
-               uint32_t value) override {
+  void OnReqA(wl_client* /*client*/,
+              wl_resource* /*resource*/,
+              uint32_t value) override {
     SendEvtX(value);
   }
 
@@ -79,7 +75,8 @@ class MinimalServer
   }
 };
 
-// ── Lifecycle helpers ─────────────────────────────────────────────────────────
+// ── Lifecycle helpers
+// ─────────────────────────────────────────────────────────
 
 static wl_display* s_display = nullptr;
 
@@ -92,7 +89,9 @@ static void on_client_destroyed(wl_listener* /*lst*/, void* /*data*/) {
 }
 
 // Called by libwayland when a client binds to our wl_minimal global.
-static void on_bind(wl_client* client, void* /*data*/, uint32_t version,
+static void on_bind(wl_client* client,
+                    void* /*data*/,
+                    uint32_t version,
                     uint32_t id) {
   auto* resource = wl_resource_create(
       client, &minimal::server::wl_minimal_server_traits::wl_iface(),
@@ -115,7 +114,8 @@ static void on_bind(wl_client* client, void* /*data*/, uint32_t version,
   wl_client_add_destroy_listener(client, &s_client_destroy_listener);
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// ── Public entry point
+// ────────────────────────────────────────────────────────
 
 /// Create a Wayland display, bind @p socket_name, then write the socket name
 /// into @p ready_fd so the client knows the socket exists.  Runs the event
