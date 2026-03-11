@@ -31,17 +31,19 @@ requires WlProxyTraits<Traits> class CProxyImpl : public CProxy<Traits>,
   void _SetProxy(wl_proxy* proxy) noexcept {
     Base::Attach(proxy);
     if (proxy) {
-      // s_listener_table_ is a const void*[] of function pointers.
-      // wl_proxy_add_listener expects void(**)(void) — a pointer to an
-      // array of void function pointers.  The reinterpret_cast is the
+      // s_listener_table_ is an inline static const void*[] of function
+      // pointers.  wl_proxy_add_listener expects void(**)(void) — a pointer
+      // to an array of void function pointers.  The reinterpret_cast is the
       // standard-compliant way to pass C function pointers through the
       // Wayland C API (S3: was previously cast to wl_dispatcher_func_t*
       // which is the wrong type).
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-      wl_proxy_add_listener(proxy,
-                            reinterpret_cast<void (**)(void)>(
-                                const_cast<void**>(Derived::s_listener_table_)),
-                            this);
+      wl_proxy_add_listener(
+          proxy,
+          // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+          reinterpret_cast<void (**)(void)>(
+              const_cast<void**>(Derived::s_listener_table_)),
+          this);
     }
   }
 

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="minimal">
+  <copyright>SPDX-License-Identifier: MIT</copyright>
+  <interface name="wl_minimal" version="2">
+    <description summary="A minimal example interface."/>
+    <request name="req_a">
+      <description summary="Send a value; server echoes it back via evt_x."/>
+      <arg name="value" type="uint"/>
+    </request>
+    <request name="req_b" type="destructor">
+      <description summary="Destroy this object."/>
+    </request>
+    <event name="evt_x">
+      <description summary="Echo of the value sent in req_a."/>
+      <arg name="serial" type="uint"/>
+    </event>
+  </interface>
+</protocol>

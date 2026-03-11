@@ -1,0 +1,25 @@
+# Build directories
+builddir/
+build/
+_build/
+
+# Meson private
+.mesonpy/
+meson-private/
+
+# Downloaded subproject sources and package cache
+subprojects/packagecache/
+subprojects/pugixml-*/
+subprojects/googletest-*/
+subprojects/gtest-*/
+subprojects/.wraplock
+
+# Editor / IDE artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artifacts
+.DS_Store
