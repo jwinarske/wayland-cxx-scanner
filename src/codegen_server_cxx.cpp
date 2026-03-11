@@ -84,6 +84,8 @@ void emit_crack_request(std::ostringstream& os, const Message& req) {
   os << "    static void _CrackRequest_" << req.opcode
      << "(T* self, wl_client* client, wl_resource* resource, void** args, Fn "
         "fn) {\n";
+  if (req.args.empty())
+    os << "        (void)args;\n";
   os << "        (self->*fn)(client, resource";
   for (std::size_t i = 0; i < req.args.size(); ++i)
     os << ", *reinterpret_cast<" << cpp_server_arg_type(req.args[i])
@@ -136,18 +138,41 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
   if (!iface.requests.empty()) {
     os << "\n    BEGIN_REQUEST_MAP(" << cls_name << ")\n";
     for (const auto& r : iface.requests)
-      os << "        REQUEST_HANDLER(" << traits_name
-         << "::Req::" << snake_to_pascal(r.name) << ", On"
+      // Use the raw integer opcode so the REQUEST_HANDLER macro's ##
+      // token-paste produces a valid C++ identifier (_CrackRequest_<N>).
+      os << "        REQUEST_HANDLER(" << r.opcode << ", On"
          << snake_to_pascal(r.name) << ")\n";
     os << "    END_REQUEST_MAP()\n\n";
 
     os << "private:\n";
+    // Allow the CRTP base to access the private vtable.
+    os << "    friend class wl::CResourceImpl<Derived, " << traits_name
+       << ">;\n\n";
     for (const auto& r : iface.requests) {
       std::string fn = "_Req" + snake_to_pascal(r.name);
       // R5: generated dispatch functions null-check the user_data pointer
       // before dereferencing, guarding against uninitialized resources.
+      // The function signature matches what wl_resource_set_implementation
+      // expects: (wl_client*, wl_resource*, <per-arg types>…).  Arguments are
+      // then packed into a void*[] so the _CrackRequest_N helpers can unpack
+      // them with reinterpret_cast — the same pattern used on the client side
+      // for _EvtN functions.
       os << "    static void " << fn
-         << "(wl_client* client, wl_resource* resource, void** args) {\n";
+         << "(wl_client* client, wl_resource* resource";
+      for (const auto& a : r.args)
+        os << ", " << cpp_server_arg_type(a) << " " << a.name;
+      os << ") {\n";
+      if (r.args.empty()) {
+        os << "        void* args[] = {nullptr};\n";
+      } else {
+        os << "        void* args[] = {";
+        for (std::size_t i = 0; i < r.args.size(); ++i) {
+          if (i > 0)
+            os << ", ";
+          os << "static_cast<void*>(&" << r.args[i].name << ")";
+        }
+        os << "};\n";
+      }
       os << "        auto* self = static_cast<" << cls_name
          << "*>(wl_resource_get_user_data(resource));\n";
       os << "        if (!self) return;  // R5: guard against uninitialised "
@@ -157,10 +182,14 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
          << ", client, resource, args);\n";
       os << "    }\n";
     }
-    os << "    static constexpr void* s_request_vtable_[] = {\n";
+    // reinterpret_cast is not a constant expression, so we cannot use
+    // constexpr here.  The inline keyword makes the definition valid inside
+    // the class body for all C++17+ (this project requires C++23).
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
+    os << "    inline static const void* s_request_vtable_[] = {\n";
     for (const auto& r : iface.requests)
-      os << "        reinterpret_cast<void*>(&_Req" << snake_to_pascal(r.name)
-         << "),\n";
+      os << "        reinterpret_cast<const void*>(&_Req"
+         << snake_to_pascal(r.name) << "),\n";
     os << "    };\n";
   }
 

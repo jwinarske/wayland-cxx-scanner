@@ -23,7 +23,7 @@ scanner_lib_dep = declare_dependency(
     dependencies: [pugixml_dep],
 )
 
-executable(
+scanner_exe = executable(
     'wayland-cxx-scanner',
     'main.cpp',
     dependencies: [scanner_lib_dep],

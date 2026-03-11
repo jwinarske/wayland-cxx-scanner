@@ -157,13 +157,17 @@ void emit_client_class(std::ostringstream& os, const Interface& iface) {
   if (!iface.events.empty()) {
     os << "\n    BEGIN_EVENT_MAP(" << cls_name << ")\n";
     for (const auto& e : iface.events) {
-      os << "        EVENT_HANDLER(" << traits_name
-         << "::Evt::" << snake_to_pascal(e.name) << ", On"
+      // Use the raw integer opcode so the EVENT_HANDLER macro's ## token-paste
+      // produces a valid C++ identifier (_CrackEvent_<N>).
+      os << "        EVENT_HANDLER(" << e.opcode << ", On"
          << snake_to_pascal(e.name) << ")\n";
     }
     os << "    END_EVENT_MAP()\n\n";
 
     os << "private:\n";
+    // Allow the CRTP base to access the private vtable.
+    os << "    friend class wl::CProxyImpl<Derived, " << traits_name
+       << ">;\n\n";
     for (const auto& e : iface.events) {
       std::string fn = "_Evt" + snake_to_pascal(e.name);
       os << "    static void " << fn << "(void* data, wl_proxy* /*proxy*/";
@@ -186,10 +190,14 @@ void emit_client_class(std::ostringstream& os, const Interface& iface) {
          << traits_name << "::Evt::" << snake_to_pascal(e.name) << ", args);\n";
       os << "    }\n";
     }
-    os << "    static constexpr void* s_listener_table_[] = {\n";
+    // reinterpret_cast is not a constant expression, so we cannot use
+    // constexpr here.  The inline keyword makes the definition valid inside
+    // the class body for all C++17+ (this project requires C++23).
+    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
+    os << "    inline static const void* s_listener_table_[] = {\n";
     for (const auto& e : iface.events)
-      os << "        reinterpret_cast<void*>(&_Evt" << snake_to_pascal(e.name)
-         << "),\n";
+      os << "        reinterpret_cast<const void*>(&_Evt"
+         << snake_to_pascal(e.name) << "),\n";
     os << "    };\n";
   }
 

@@ -27,6 +27,7 @@ template <typename Derived, typename Traits>
 class CResourceImpl {
  public:
   CResourceImpl() noexcept = default;
+  virtual ~CResourceImpl() = default;
 
   /// Bind this handler to a newly created wl_resource.
   void _SetResource(wl_resource* resource) noexcept {
