@@ -131,8 +131,8 @@ void emit_server_class(std::ostringstream& os,
       std::string method = "Send" + snake_to_pascal(e.name);
       // C++23: explicit-object parameter (P0847R7).
       os << "    void " << method << "(this Derived& self";
-      for (std::size_t i = 0; i < e.args.size(); ++i)
-        os << ", " << cpp_server_arg_type(e.args[i]) << " " << e.args[i].name;
+      for (const auto& a : e.args)
+        os << ", " << cpp_server_arg_type(a) << " " << a.name;
       os << ") noexcept {\n";
       os << "        self._PostEvent(" << traits_name
          << "::Evt::" << snake_to_pascal(e.name);
@@ -286,7 +286,8 @@ std::string generate_server_cxx_header(const Protocol& proto, CppStd std) {
   os << "#include <wl/event_map.hpp>\n\n";
   os << "#include <cstdint>\n";
   os << "#include <string_view>\n";
-  // <type_traits> is needed for the std::is_class_v requires-constraint (C++20+).
+  // <type_traits> is needed for the std::is_class_v requires-constraint
+  // (C++20+).
   if (std >= CppStd::Cpp20)
     os << "#include <type_traits>\n";
   os << "\n";

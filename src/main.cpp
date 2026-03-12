@@ -28,8 +28,10 @@ void print_usage(const std::string_view argv0) {
       "\n"
       "C++ standards (for client-header and server-header):\n"
       "  c++17           ISO C++17 — CRTP without requires-expressions\n"
-      "  c++20           ISO C++20 — adds requires-constraints and [[nodiscard(\"reason\")]]\n"
-      "  c++23           ISO C++23 — adds explicit-object parameters (default)\n"
+      "  c++20           ISO C++20 — adds requires-constraints and "
+      "[[nodiscard(\"reason\")]]\n"
+      "  c++23           ISO C++23 — adds explicit-object parameters "
+      "(default)\n"
       "\n"
       "If <output.hpp> is omitted, the output is written to stdout.\n",
       argv0.data());

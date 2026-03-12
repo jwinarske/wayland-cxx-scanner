@@ -81,10 +81,12 @@ TEST(CppStd, ClientHeaderCpp17HasNoRequires) {
   auto proto = parse_protocol_from_string(fixture_xml());
   auto out = generate_client_cxx_header(proto, CppStd::Cpp17);
   EXPECT_THAT(out, HasSubstr("// Target: C++17"));
-  // No __cplusplus guard — GCC 13 sets __cplusplus=202100L even with -std=c++23.
+  // No __cplusplus guard — GCC 13 sets __cplusplus=202100L even with
+  // -std=c++23.
   EXPECT_THAT(out, Not(HasSubstr("#if __cplusplus")));
   EXPECT_THAT(out, Not(HasSubstr("requires std::is_class_v")));
-  EXPECT_THAT(out, Not(HasSubstr("[[nodiscard(\"required for protocol binding\")]]")));
+  EXPECT_THAT(
+      out, Not(HasSubstr("[[nodiscard(\"required for protocol binding\")]]")));
   EXPECT_THAT(out, HasSubstr("[[nodiscard]] static const wl_interface"));
   EXPECT_THAT(out, HasSubstr("using Base = wl::CProxyImpl<Derived"));
   EXPECT_THAT(out, HasSubstr("Base::_Marshal("));
@@ -98,7 +100,8 @@ TEST(CppStd, ClientHeaderCpp20HasRequires) {
   EXPECT_THAT(out, Not(HasSubstr("#if __cplusplus")));
   EXPECT_THAT(out, HasSubstr("requires std::is_class_v<Derived>"));
   EXPECT_THAT(out, HasSubstr("#include <type_traits>"));
-  EXPECT_THAT(out, HasSubstr("[[nodiscard(\"required for protocol binding\")]]"));
+  EXPECT_THAT(out,
+              HasSubstr("[[nodiscard(\"required for protocol binding\")]]"));
   EXPECT_THAT(out, HasSubstr("using Base = wl::CProxyImpl<Derived"));
   EXPECT_THAT(out, HasSubstr("Base::_Marshal("));
 }
@@ -110,7 +113,8 @@ TEST(CppStd, ClientHeaderCpp23HasDeducingThis) {
   EXPECT_THAT(out, HasSubstr("// Target: C++23"));
   EXPECT_THAT(out, Not(HasSubstr("#if __cplusplus")));
   EXPECT_THAT(out, HasSubstr("requires std::is_class_v<Derived>"));
-  EXPECT_THAT(out, HasSubstr("[[nodiscard(\"required for protocol binding\")]]"));
+  EXPECT_THAT(out,
+              HasSubstr("[[nodiscard(\"required for protocol binding\")]]"));
   // Deducing-this is guarded by __cpp_explicit_this_parameter for portability
   // across GCC 13 (which sets __cplusplus=202100L) and GCC 14+ / Clang 18+.
   EXPECT_THAT(out, HasSubstr("#ifdef __cpp_explicit_this_parameter"));
@@ -128,7 +132,8 @@ TEST(CppStd, ClientHeaderDefaultIsCpp23) {
   EXPECT_EQ(out_default, out_cpp23);
 }
 
-// Server header: C++17 has no requires, C++20+ has requires, C++23 uses deducing-this.
+// Server header: C++17 has no requires, C++20+ has requires, C++23 uses
+// deducing-this.
 TEST(CppStd, ServerHeaderCpp17HasNoRequires) {
   auto proto = parse_protocol_from_string(fixture_xml());
   auto out = generate_server_cxx_header(proto, CppStd::Cpp17);
@@ -163,4 +168,3 @@ TEST(CppStd, ServerHeaderCpp23HasDeducingThis) {
   // Fallback path still has "using Base" for compilers without deducing-this.
   EXPECT_THAT(out, HasSubstr("using Base = wl::CResourceImpl<Derived"));
 }
-

@@ -180,7 +180,8 @@ void emit_client_class(std::ostringstream& os,
     os << "#endif\n\n";
   } else {
     // C++17/20: traditional form using the Base alias.
-    os << "    using Base = wl::CProxyImpl<Derived, " << traits_name << ">;\n\n";
+    os << "    using Base = wl::CProxyImpl<Derived, " << traits_name
+       << ">;\n\n";
     os << "public:\n";
     for (const auto& r : iface.requests) {
       std::string method = snake_to_pascal(r.name);
@@ -295,7 +296,8 @@ std::string generate_client_cxx_header(const Protocol& proto, CppStd std) {
   os << "#include <wl/event_map.hpp>\n\n";
   os << "#include <cstdint>\n";
   os << "#include <string_view>\n";
-  // <type_traits> is needed for the std::is_class_v requires-constraint (C++20+).
+  // <type_traits> is needed for the std::is_class_v requires-constraint
+  // (C++20+).
   if (std >= CppStd::Cpp20)
     os << "#include <type_traits>\n";
   os << "\n";
