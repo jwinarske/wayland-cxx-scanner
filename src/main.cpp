@@ -16,7 +16,7 @@
 
 namespace {
 
-void print_usage(std::string_view argv0) {
+void print_usage(const std::string_view argv0) {
   std::fprintf(
       stderr,
       "Usage: %s [--mode=<mode>] <protocol.xml> [<output.hpp>]\n"
@@ -40,14 +40,12 @@ int main(int argc, char** argv) {
   auto const args =
       std::span<char* const>(argv, static_cast<std::size_t>(argc));
 
-  Mode mode = Mode::ClientHeader;
+  auto mode = Mode::ClientHeader;
   const char* input_path = nullptr;
   const char* output_path = nullptr;
 
   for (std::size_t i = 1; i < args.size(); ++i) {
-    std::string_view arg{args[i]};
-
-    if (arg.starts_with("--mode=")) {
+    if (std::string_view arg{args[i]}; arg.starts_with("--mode=")) {
       std::string_view m = arg.substr(7);
       if (m == "client-header")
         mode = Mode::ClientHeader;
@@ -81,7 +79,16 @@ int main(int argc, char** argv) {
   }
 
   try {
-    auto proto = wl::scanner::parse_protocol(input_path);
+    // Resolve the input path to an absolute, normalized form so that any
+    // embedded ".." segments are collapsed before the path reaches the OS.
+    // std::filesystem::canonical() also verifies the file exists.
+    std::filesystem::path safe_input = std::filesystem::canonical(input_path);
+    if (!std::filesystem::is_regular_file(safe_input)) {
+      std::fprintf(stderr, "error: not a regular file: '%s'\n", input_path);
+      return EXIT_FAILURE;
+    }
+
+    auto proto = wl::scanner::parse_protocol(safe_input.c_str());
 
     std::string output;
     switch (mode) {
@@ -97,17 +104,22 @@ int main(int argc, char** argv) {
     }
 
     if (output_path) {
-      std::ofstream ofs(output_path);
+      // weakly_canonical normalizes ".." segments without requiring the output
+      // file to already exist, preventing path-traversal via the output arg.
+      std::filesystem::path safe_output =
+          std::filesystem::weakly_canonical(output_path);
+      std::ofstream ofs(safe_output);
       if (!ofs) {
         std::fprintf(stderr, "error: cannot open output file '%s'\n",
-                     output_path);
+                     safe_output.c_str());
         return EXIT_FAILURE;
       }
       ofs << output;
       // R4: flush and check for write errors (e.g. disk full).
       ofs.flush();
       if (ofs.fail()) {
-        std::fprintf(stderr, "error: write failed on '%s'\n", output_path);
+        std::fprintf(stderr, "error: write failed on '%s'\n",
+                     safe_output.c_str());
         return EXIT_FAILURE;
       }
     } else {
