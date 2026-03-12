@@ -22,6 +22,7 @@ wayland_server_dep = dependency('wayland-server', required: false)
 pugixml_dep        = dependency('pugixml',
     required: true,
     fallback: ['pugixml', 'pugixml_dep'],
+    default_options: ['default_library=static']
 )
 
 # ── Framework headers — install to ${includedir}/wl/ ─────────────────────────

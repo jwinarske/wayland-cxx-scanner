@@ -5,7 +5,7 @@ project('pugixml', 'cpp', version: '1.14', license: 'MIT',
 
 pugixml_inc = include_directories('src')
 
-pugixml_lib = library('pugixml',
+pugixml_lib = static_library('pugixml',
     'src/pugixml.cpp',
     include_directories: pugixml_inc,
     install: true,
