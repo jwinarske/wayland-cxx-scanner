@@ -15,7 +15,6 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -30,25 +29,25 @@ int main() {
   if (!std::getenv("XDG_RUNTIME_DIR")) {
     // Create a private temp directory so libwayland can place the socket.
     char dir[128];
-    std::snprintf(dir, sizeof(dir), "/tmp/wl-minimal-rt-%d",
+    std::snprintf(static_cast<char*>(dir), sizeof(dir), "/tmp/wl-minimal-rt-%d",
                   static_cast<int>(getpid()));
-    if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
+    if (mkdir(static_cast<char*>(dir), 0700) != 0 && errno != EEXIST) {
       std::perror("main: mkdir");
       return EXIT_FAILURE;
     }
-    setenv("XDG_RUNTIME_DIR", dir, /*overwrite=*/1);
+    setenv("XDG_RUNTIME_DIR", static_cast<char*>(dir), /*overwrite=*/1);
   }
 
   // ── Unique socket name for this run ────────────────────────────────────────
   char socket_name[64];
-  std::snprintf(socket_name, sizeof(socket_name), "wayland-minimal-%d",
-                static_cast<int>(getpid()));
+  std::snprintf(static_cast<char*>(socket_name), sizeof(socket_name),
+                "wayland-minimal-%d", static_cast<int>(getpid()));
 
   // ── Synchronisation pipe ───────────────────────────────────────────────────
   // The server writes the socket name into pipefd[1] after the socket is live.
   // The client reads from pipefd[0] before calling wl_display_connect().
   int pipefd[2];
-  if (pipe(pipefd) != 0) {
+  if (pipe(static_cast<int*>(pipefd)) != 0) {
     std::perror("main: pipe");
     return EXIT_FAILURE;
   }
@@ -66,7 +65,7 @@ int main() {
 
     // Block until the server writes the socket name.
     char buf[64] = {};
-    const ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
+    const ssize_t n = read(pipefd[0], static_cast<char*>(buf), sizeof(buf) - 1);
     close(pipefd[0]);
     if (n <= 0) {
       std::fprintf(stderr, "client: pipe read failed\n");
@@ -74,7 +73,7 @@ int main() {
     }
 
     // buf now contains the socket name written by run_server().
-    setenv("WAYLAND_DISPLAY", buf, /*overwrite=*/1);
+    setenv("WAYLAND_DISPLAY", static_cast<char*>(buf), /*overwrite=*/1);
     std::exit(run_client());
   }
 
@@ -84,7 +83,7 @@ int main() {
   // run_server() creates the socket and writes the name to pipefd[1] before
   // entering the blocking event loop.  The child's read() unblocks only after
   // the socket file exists, so wl_display_connect() is race-free.
-  const int server_rc = run_server(socket_name, pipefd[1]);
+  const int server_rc = run_server(static_cast<char*>(socket_name), pipefd[1]);
   // pipefd[1] is closed inside run_server() after the write.
 
   // ── Reap child ─────────────────────────────────────────────────────────────

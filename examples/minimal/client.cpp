@@ -26,18 +26,27 @@ extern "C" {
 // Each translation unit that references wl_iface() provides its own copy;
 // the content is identical to the server-side copy in server.cpp.
 
-static const wl_interface* wl_minimal_msg_types[] = {nullptr};
+static constexpr wl_interface* const wl_minimal_msg_types[] = {nullptr};
 
-static const wl_message wl_minimal_request_descs[] = {
-    {"req_a", "u", wl_minimal_msg_types},
+static constexpr wl_message wl_minimal_request_descs[] = {
+    {"req_a", "u",
+     const_cast<const wl_interface**>(
+         static_cast<const wl_interface* const*>(wl_minimal_msg_types))},
     {"req_b", "", nullptr},
 };
-static const wl_message wl_minimal_event_descs[] = {
-    {"evt_x", "u", wl_minimal_msg_types},
+static constexpr wl_message wl_minimal_event_descs[] = {
+    {"evt_x", "u",
+     const_cast<const wl_interface**>(
+         static_cast<const wl_interface* const*>(wl_minimal_msg_types))},
 };
 
-static const wl_interface wl_minimal_iface_def = {
-    "wl_minimal", 2, 2, wl_minimal_request_descs, 1, wl_minimal_event_descs,
+static constexpr wl_interface wl_minimal_iface_def = {
+    "wl_minimal",
+    2,
+    2,
+    static_cast<const wl_message*>(wl_minimal_request_descs),
+    1,
+    static_cast<const wl_message*>(wl_minimal_event_descs),
 };
 
 namespace minimal::client {
@@ -55,7 +64,7 @@ class MinimalClient : public minimal::client::CWlMinimal<MinimalClient> {
   bool done = false;
   uint32_t echo_serial = 0;
 
-  void OnEvtX(uint32_t serial) override {
+  void OnEvtX(const uint32_t serial) override {
     echo_serial = serial;
     done = true;
   }
@@ -85,10 +94,10 @@ int run_client() {
     bool found = false;
   } reg_data;
 
-  const wl_registry_listener registry_listener = {
+  constexpr wl_registry_listener registry_listener = {
       .global =
           [](void* udata, wl_registry* /*reg*/, uint32_t name,
-             const char* iface, uint32_t ver) {
+             const char* iface, const uint32_t ver) {
             if (std::string_view(iface) == "wl_minimal") {
               auto* d = static_cast<RegistryData*>(udata);
               d->name = name;

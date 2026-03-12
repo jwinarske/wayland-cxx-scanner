@@ -34,20 +34,29 @@ extern "C" {
 // The `types` array has one slot per argument; slots for non-object arguments
 // are NULL; slots for object/new_id arguments point to the target interface.
 
-static const wl_interface* wl_minimal_msg_types[] = {nullptr};
+static constexpr wl_interface* const wl_minimal_msg_types[] = {nullptr};
 
-static const wl_message wl_minimal_request_descs[] = {
-    {"req_a", "u", wl_minimal_msg_types},  // one uint arg
-    {"req_b", "", nullptr},                // no args (destructor)
+static constexpr wl_message wl_minimal_request_descs[] = {
+    {"req_a", "u",
+     const_cast<const wl_interface**>(static_cast<const wl_interface* const*>(
+         wl_minimal_msg_types))},  // one uint arg
+    {"req_b", "", nullptr},        // no args (destructor)
 };
-static const wl_message wl_minimal_event_descs[] = {
-    {"evt_x", "u", wl_minimal_msg_types},  // one uint arg
+static constexpr wl_message wl_minimal_event_descs[] = {
+    {"evt_x", "u",
+     const_cast<const wl_interface**>(static_cast<const wl_interface* const*>(
+         wl_minimal_msg_types))},  // one uint arg
 };
 
 // The interface object has internal linkage; both server and client
 // translation units define their own copy with the same content.
-static const wl_interface wl_minimal_iface_def = {
-    "wl_minimal", 2, 2, wl_minimal_request_descs, 1, wl_minimal_event_descs,
+static constexpr wl_interface wl_minimal_iface_def = {
+    "wl_minimal",
+    2,
+    2,
+    static_cast<const wl_message*>(wl_minimal_request_descs),
+    1,
+    static_cast<const wl_message*>(wl_minimal_event_descs),
 };
 
 namespace minimal::server {
@@ -64,7 +73,7 @@ class MinimalServer : public minimal::server::CWlMinimalServer<MinimalServer> {
  public:
   void OnReqA(wl_client* /*client*/,
               wl_resource* /*resource*/,
-              uint32_t value) override {
+              const uint32_t value) override {
     SendEvtX(value);
   }
 
@@ -78,21 +87,24 @@ class MinimalServer : public minimal::server::CWlMinimalServer<MinimalServer> {
 // ── Lifecycle helpers
 // ─────────────────────────────────────────────────────────
 
-static wl_display* s_display = nullptr;
+struct ServerCtx {
+  wl_display* display{nullptr};
+  wl_listener client_destroy_listener{};
+};
 
 // Destroy-listener for the wl_client: terminates the event loop once the
 // single client disconnects so that wl_display_run() returns.
-static wl_listener s_client_destroy_listener;
-
-static void on_client_destroyed(wl_listener* /*lst*/, void* /*data*/) {
-  wl_display_terminate(s_display);
+static void on_client_destroyed(wl_listener* lst, void* /*data*/) {
+  const auto* ctx = wl_container_of(lst, static_cast<ServerCtx*>(nullptr),
+                                    client_destroy_listener);
+  wl_display_terminate(ctx->display);
 }
 
 // Called by libwayland when a client binds to our wl_minimal global.
 static void on_bind(wl_client* client,
-                    void* /*data*/,
-                    uint32_t version,
-                    uint32_t id) {
+                    void* data,
+                    const uint32_t version,
+                    const uint32_t id) {
   auto* resource = wl_resource_create(
       client, &minimal::server::wl_minimal_server_traits::wl_iface(),
       static_cast<int>(version), id);
@@ -110,8 +122,9 @@ static void on_bind(wl_client* client,
   });
 
   // Register a client destroy-listener so we can stop the event loop.
-  s_client_destroy_listener.notify = on_client_destroyed;
-  wl_client_add_destroy_listener(client, &s_client_destroy_listener);
+  auto* ctx = static_cast<ServerCtx*>(data);
+  ctx->client_destroy_listener.notify = on_client_destroyed;
+  wl_client_add_destroy_listener(client, &ctx->client_destroy_listener);
 }
 
 // ── Public entry point
@@ -121,46 +134,47 @@ static void on_bind(wl_client* client,
 /// into @p ready_fd so the client knows the socket exists.  Runs the event
 /// loop until the single client disconnects, then cleans up and returns
 /// EXIT_SUCCESS or EXIT_FAILURE.
-int run_server(const char* socket_name, int ready_fd) {
-  s_display = wl_display_create();
-  if (!s_display) {
+int run_server(const char* socket_name, const int ready_fd) {
+  ServerCtx ctx;
+  ctx.display = wl_display_create();
+  if (!ctx.display) {
     std::fprintf(stderr, "server: wl_display_create failed\n");
     return EXIT_FAILURE;
   }
 
-  if (wl_display_add_socket(s_display, socket_name) != 0) {
+  if (wl_display_add_socket(ctx.display, socket_name) != 0) {
     std::fprintf(stderr, "server: wl_display_add_socket(%s) failed: %s\n",
                  socket_name, std::strerror(errno));
-    wl_display_destroy(s_display);
+    wl_display_destroy(ctx.display);
     return EXIT_FAILURE;
   }
 
   auto* global = wl_global_create(
-      s_display, &minimal::server::wl_minimal_server_traits::wl_iface(),
-      /*version=*/1, /*data=*/nullptr, on_bind);
+      ctx.display, &minimal::server::wl_minimal_server_traits::wl_iface(),
+      /*version=*/1, /*data=*/&ctx, on_bind);
   if (!global) {
     std::fprintf(stderr, "server: wl_global_create failed\n");
-    wl_display_destroy(s_display);
+    wl_display_destroy(ctx.display);
     return EXIT_FAILURE;
   }
 
   // Signal the client: socket is live, write name into ready_fd.
   {
-    auto len = static_cast<ssize_t>(std::strlen(socket_name));
-    if (write(ready_fd, socket_name, static_cast<std::size_t>(len)) != len) {
+    if (const auto len = static_cast<ssize_t>(std::strlen(socket_name));
+        write(ready_fd, socket_name, static_cast<std::size_t>(len)) != len) {
       std::fprintf(stderr, "server: pipe write failed: %s\n",
                    std::strerror(errno));
       wl_global_destroy(global);
-      wl_display_destroy(s_display);
+      wl_display_destroy(ctx.display);
       return EXIT_FAILURE;
     }
     close(ready_fd);
   }
 
   // Block until on_client_destroyed() calls wl_display_terminate().
-  wl_display_run(s_display);
+  wl_display_run(ctx.display);
 
   wl_global_destroy(global);
-  wl_display_destroy(s_display);
+  wl_display_destroy(ctx.display);
   return EXIT_SUCCESS;
 }
