@@ -19,12 +19,17 @@ namespace {
 void print_usage(const std::string_view argv0) {
   std::fprintf(
       stderr,
-      "Usage: %s [--mode=<mode>] <protocol.xml> [<output.hpp>]\n"
+      "Usage: %s [--mode=<mode>] [--std=<std>] <protocol.xml> [<output.hpp>]\n"
       "\n"
       "Modes:\n"
-      "  client-header   Generate C++23 client proxy header (default)\n"
-      "  server-header   Generate C++23 server resource header\n"
+      "  client-header   Generate C++ client proxy header (default)\n"
+      "  server-header   Generate C++ server resource header\n"
       "  c-header        Generate C-style protocol header\n"
+      "\n"
+      "C++ standards (for client-header and server-header):\n"
+      "  c++17           ISO C++17 — CRTP without requires-expressions\n"
+      "  c++20           ISO C++20 — adds requires-constraints and [[nodiscard(\"reason\")]]\n"
+      "  c++23           ISO C++23 — adds explicit-object parameters (default)\n"
       "\n"
       "If <output.hpp> is omitted, the output is written to stdout.\n",
       argv0.data());
@@ -41,6 +46,7 @@ int main(int argc, char** argv) {
       std::span<char* const>(argv, static_cast<std::size_t>(argc));
 
   auto mode = Mode::ClientHeader;
+  auto cpp_std = wl::scanner::CppStd::Cpp23;
   const char* input_path = nullptr;
   const char* output_path = nullptr;
 
@@ -55,6 +61,19 @@ int main(int argc, char** argv) {
         mode = Mode::CHeader;
       else {
         std::fprintf(stderr, "error: unknown mode '%s'\n", m.data());
+        print_usage(args[0]);
+        return EXIT_FAILURE;
+      }
+    } else if (arg.starts_with("--std=")) {
+      std::string_view s = arg.substr(6);
+      if (s == "c++17")
+        cpp_std = wl::scanner::CppStd::Cpp17;
+      else if (s == "c++20")
+        cpp_std = wl::scanner::CppStd::Cpp20;
+      else if (s == "c++23")
+        cpp_std = wl::scanner::CppStd::Cpp23;
+      else {
+        std::fprintf(stderr, "error: unknown C++ standard '%s'\n", s.data());
         print_usage(args[0]);
         return EXIT_FAILURE;
       }
@@ -93,10 +112,10 @@ int main(int argc, char** argv) {
     std::string output;
     switch (mode) {
       case Mode::ClientHeader:
-        output = wl::scanner::generate_client_cxx_header(proto);
+        output = wl::scanner::generate_client_cxx_header(proto, cpp_std);
         break;
       case Mode::ServerHeader:
-        output = wl::scanner::generate_server_cxx_header(proto);
+        output = wl::scanner::generate_server_cxx_header(proto, cpp_std);
         break;
       case Mode::CHeader:
         output = wl::scanner::generate_c_header(proto);

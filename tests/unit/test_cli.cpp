@@ -15,6 +15,7 @@
 
 using namespace wl::scanner;
 using ::testing::HasSubstr;
+using ::testing::Not;
 
 // ── Helpers
 // ───────────────────────────────────────────────────────────────────
@@ -71,3 +72,89 @@ TEST(Cli, WriteAndReadTempFile) {
   EXPECT_EQ(proto.name, "cli_test");
   fs::remove(tmp);
 }
+
+// ── C++ standard selection tests
+// ──────────────────────────────────────────
+
+// C++17: no requires-constraint, no [[nodiscard("reason")]], has "using Base"
+TEST(CppStd, ClientHeaderCpp17HasNoRequires) {
+  auto proto = parse_protocol_from_string(fixture_xml());
+  auto out = generate_client_cxx_header(proto, CppStd::Cpp17);
+  EXPECT_THAT(out, HasSubstr("// Target: C++17"));
+  EXPECT_THAT(out, HasSubstr("#if __cplusplus < 201703L"));
+  EXPECT_THAT(out, Not(HasSubstr("requires")));
+  EXPECT_THAT(out, Not(HasSubstr("[[nodiscard(\"required for protocol binding\")]]")));
+  EXPECT_THAT(out, HasSubstr("[[nodiscard]] static const wl_interface"));
+  EXPECT_THAT(out, HasSubstr("using Base = wl::CProxyImpl<Derived"));
+  EXPECT_THAT(out, HasSubstr("Base::_Marshal("));
+}
+
+// C++20: has requires-constraint, [[nodiscard("reason")]], and "using Base"
+TEST(CppStd, ClientHeaderCpp20HasRequires) {
+  auto proto = parse_protocol_from_string(fixture_xml());
+  auto out = generate_client_cxx_header(proto, CppStd::Cpp20);
+  EXPECT_THAT(out, HasSubstr("// Target: C++20"));
+  EXPECT_THAT(out, HasSubstr("#if __cplusplus < 202002L"));
+  EXPECT_THAT(out, HasSubstr("requires std::is_class_v<Derived>"));
+  EXPECT_THAT(out, HasSubstr("#include <type_traits>"));
+  EXPECT_THAT(out, HasSubstr("[[nodiscard(\"required for protocol binding\")]]"));
+  EXPECT_THAT(out, HasSubstr("using Base = wl::CProxyImpl<Derived"));
+  EXPECT_THAT(out, HasSubstr("Base::_Marshal("));
+}
+
+// C++23: has requires, [[nodiscard("reason")]], explicit-object params, no "using Base"
+TEST(CppStd, ClientHeaderCpp23HasDeducingThis) {
+  auto proto = parse_protocol_from_string(fixture_xml());
+  auto out = generate_client_cxx_header(proto, CppStd::Cpp23);
+  EXPECT_THAT(out, HasSubstr("// Target: C++23"));
+  EXPECT_THAT(out, HasSubstr("#if __cplusplus < 202302L"));
+  EXPECT_THAT(out, HasSubstr("requires std::is_class_v<Derived>"));
+  EXPECT_THAT(out, HasSubstr("[[nodiscard(\"required for protocol binding\")]]"));
+  // Explicit-object parameter replaces the implicit this.
+  EXPECT_THAT(out, HasSubstr("this Derived& self"));
+  EXPECT_THAT(out, HasSubstr("self._Marshal("));
+  // "using Base" is not needed when using deducing-this.
+  EXPECT_THAT(out, Not(HasSubstr("using Base =")));
+}
+
+// C++23 is the default when no standard is specified.
+TEST(CppStd, ClientHeaderDefaultIsCpp23) {
+  auto proto = parse_protocol_from_string(fixture_xml());
+  auto out_default = generate_client_cxx_header(proto);
+  auto out_cpp23 = generate_client_cxx_header(proto, CppStd::Cpp23);
+  EXPECT_EQ(out_default, out_cpp23);
+}
+
+// Server header: C++17 has no requires, C++20+ has requires, C++23 uses deducing-this.
+TEST(CppStd, ServerHeaderCpp17HasNoRequires) {
+  auto proto = parse_protocol_from_string(fixture_xml());
+  auto out = generate_server_cxx_header(proto, CppStd::Cpp17);
+  EXPECT_THAT(out, HasSubstr("// Target: C++17"));
+  EXPECT_THAT(out, HasSubstr("#if __cplusplus < 201703L"));
+  EXPECT_THAT(out, Not(HasSubstr("requires")));
+  EXPECT_THAT(out, HasSubstr("using Base = wl::CResourceImpl<Derived"));
+  EXPECT_THAT(out, HasSubstr("Base::_PostEvent("));
+}
+
+TEST(CppStd, ServerHeaderCpp20HasRequires) {
+  auto proto = parse_protocol_from_string(fixture_xml());
+  auto out = generate_server_cxx_header(proto, CppStd::Cpp20);
+  EXPECT_THAT(out, HasSubstr("// Target: C++20"));
+  EXPECT_THAT(out, HasSubstr("#if __cplusplus < 202002L"));
+  EXPECT_THAT(out, HasSubstr("requires std::is_class_v<Derived>"));
+  EXPECT_THAT(out, HasSubstr("#include <type_traits>"));
+  EXPECT_THAT(out, HasSubstr("using Base = wl::CResourceImpl<Derived"));
+  EXPECT_THAT(out, HasSubstr("Base::_PostEvent("));
+}
+
+TEST(CppStd, ServerHeaderCpp23HasDeducingThis) {
+  auto proto = parse_protocol_from_string(fixture_xml());
+  auto out = generate_server_cxx_header(proto, CppStd::Cpp23);
+  EXPECT_THAT(out, HasSubstr("// Target: C++23"));
+  EXPECT_THAT(out, HasSubstr("#if __cplusplus < 202302L"));
+  EXPECT_THAT(out, HasSubstr("requires std::is_class_v<Derived>"));
+  EXPECT_THAT(out, HasSubstr("this Derived& self"));
+  EXPECT_THAT(out, HasSubstr("self._PostEvent("));
+  EXPECT_THAT(out, Not(HasSubstr("using Base =")));
+}
+

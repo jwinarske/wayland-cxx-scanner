@@ -54,14 +54,19 @@ void emit_enum(std::ostringstream& os, const Interface& iface, const Enum& en) {
   os << "};\n\n";
 }
 
-void emit_traits(std::ostringstream& os, const Interface& iface) {
+void emit_traits(std::ostringstream& os, const Interface& iface, CppStd std) {
   std::string traits_name = iface.name + "_traits";
   os << "struct " << traits_name << " {\n";
   os << "    static constexpr std::string_view interface_name = \""
      << iface.name << "\";\n";
   os << "    static constexpr uint32_t         version        = "
      << iface.version << ";\n";
-  os << "    static const wl_interface& wl_iface() noexcept;\n";
+  // C++20+ supports [[nodiscard]] with a reason string.
+  if (std >= CppStd::Cpp20)
+    os << "    [[nodiscard(\"required for protocol binding\")]]\n"
+       << "    static const wl_interface& wl_iface() noexcept;\n";
+  else
+    os << "    [[nodiscard]] static const wl_interface& wl_iface() noexcept;\n";
 
   if (!iface.requests.empty()) {
     os << "    struct Op {\n";
@@ -111,33 +116,63 @@ void emit_crack_event(std::ostringstream& os, const Message& evt) {
   os << "    }\n\n";
 }
 
-void emit_client_class(std::ostringstream& os, const Interface& iface) {
+void emit_client_class(std::ostringstream& os,
+                       const Interface& iface,
+                       CppStd std) {
   // S6: names validated at parse time.
   std::string cls_name = "C" + snake_to_pascal(iface.name);
   std::string traits_name = iface.name + "_traits";
 
   os << "template <class Derived>\n";
+  // C++20+ adds a requires-constraint to catch non-class template arguments
+  // at instantiation time with a clearer diagnostic.
+  if (std >= CppStd::Cpp20)
+    os << "    requires std::is_class_v<Derived>\n";
   os << "class " << cls_name << " : public wl::CProxyImpl<Derived, "
      << traits_name << "> {\n";
-  os << "    using Base = wl::CProxyImpl<Derived, " << traits_name << ">;\n\n";
+
+  // C++23 uses the explicit-object parameter ("deducing this", P0847) for
+  // request methods, avoiding the need for a Base alias.  C++17/20 still use
+  // the traditional `using Base` + `Base::method()` form.
+  const bool use_deducing_this = (std >= CppStd::Cpp23);
+  if (!use_deducing_this)
+    os << "    using Base = wl::CProxyImpl<Derived, " << traits_name << ">;\n\n";
+
   os << "public:\n";
 
   for (const auto& r : iface.requests) {
     std::string method = snake_to_pascal(r.name);
-    os << "    void " << method << "(";
-    for (std::size_t i = 0; i < r.args.size(); ++i) {
-      if (i > 0)
-        os << ", ";
-      os << cpp_arg_type(r.args[i]) << " " << r.args[i].name;
+    if (use_deducing_this) {
+      // C++23: explicit-object parameter; `self` is deduced as the most-derived
+      // type, removing the need to spell out the CRTP base explicitly.
+      os << "    void " << method << "(this Derived& self";
+      for (const auto& a : r.args)
+        os << ", " << cpp_arg_type(a) << " " << a.name;
+      os << ") noexcept {\n";
+      os << "        self._Marshal(" << traits_name << "::Op::" << method;
+      for (const auto& a : r.args)
+        os << ", " << a.name;
+      if (r.is_destructor)
+        os << ");\n        wl_proxy_destroy(self.Detach());\n    }\n\n";
+      else
+        os << ");\n    }\n\n";
+    } else {
+      // C++17/20: traditional form using the Base alias.
+      os << "    void " << method << "(";
+      for (std::size_t i = 0; i < r.args.size(); ++i) {
+        if (i > 0)
+          os << ", ";
+        os << cpp_arg_type(r.args[i]) << " " << r.args[i].name;
+      }
+      os << ") noexcept {\n";
+      os << "        Base::_Marshal(" << traits_name << "::Op::" << method;
+      for (const auto& a : r.args)
+        os << ", " << a.name;
+      if (r.is_destructor)
+        os << ");\n        wl_proxy_destroy(Base::Detach());\n    }\n\n";
+      else
+        os << ");\n    }\n\n";
     }
-    os << ") noexcept {\n";
-    os << "        Base::_Marshal(" << traits_name << "::Op::" << method;
-    for (const auto& a : r.args)
-      os << ", " << a.name;
-    if (r.is_destructor)
-      os << ");\n        wl_proxy_destroy(Base::Detach());\n    }\n\n";
-    else
-      os << ");\n    }\n\n";
   }
 
   for (const auto& e : iface.events)
@@ -192,7 +227,7 @@ void emit_client_class(std::ostringstream& os, const Interface& iface) {
     }
     // reinterpret_cast is not a constant expression, so we cannot use
     // constexpr here.  The inline keyword makes the definition valid inside
-    // the class body for all C++17+ (this project requires C++23).
+    // the class body for all C++17+.
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
     os << "    inline static const void* s_listener_table_[] = {\n";
     for (const auto& e : iface.events)
@@ -204,19 +239,44 @@ void emit_client_class(std::ostringstream& os, const Interface& iface) {
   os << "};\n\n";
 }
 
+/// Return the minimum __cplusplus value and its C++ standard label string.
+std::pair<long, const char*> cpp_std_info(CppStd std) {
+  switch (std) {
+    case CppStd::Cpp17:
+      return {201703L, "C++17"};
+    case CppStd::Cpp20:
+      return {202002L, "C++20"};
+    case CppStd::Cpp23:
+      return {202302L, "C++23"};
+  }
+  assert(false && "unhandled CppStd");
+  return {201703L, "C++17"};
+}
+
 }  // anonymous namespace
 
-std::string generate_client_cxx_header(const Protocol& proto) {
+std::string generate_client_cxx_header(const Protocol& proto, CppStd std) {
   // S6: all identifiers validated at parse time; safe to emit directly.
   std::ostringstream os;
 
+  auto [cpp_min, cpp_label] = cpp_std_info(std);
+
   os << "// SPDX-License-Identifier: MIT\n";
   os << "// AUTO-GENERATED by wayland-cxx-scanner 0.1.0 — DO NOT EDIT\n";
+  os << "// Target: " << cpp_label << "\n";
   os << "#pragma once\n\n";
+  os << "#if __cplusplus < " << cpp_min << "L\n";
+  os << "#error \"This generated header requires " << cpp_label
+     << " or later.\"\n";
+  os << "#endif\n\n";
   os << "#include <wl/proxy_impl.hpp>\n";
   os << "#include <wl/event_map.hpp>\n\n";
   os << "#include <cstdint>\n";
-  os << "#include <string_view>\n\n";
+  os << "#include <string_view>\n";
+  // <type_traits> is needed for the std::is_class_v requires-constraint (C++20+).
+  if (std >= CppStd::Cpp20)
+    os << "#include <type_traits>\n";
+  os << "\n";
 
   std::string ns = proto.name + "::client";
   os << "namespace " << ns << " {\n\n";
@@ -224,8 +284,8 @@ std::string generate_client_cxx_header(const Protocol& proto) {
   for (const auto& iface : proto.interfaces) {
     for (const auto& en : iface.enums)
       emit_enum(os, iface, en);
-    emit_traits(os, iface);
-    emit_client_class(os, iface);
+    emit_traits(os, iface, std);
+    emit_client_class(os, iface, std);
   }
 
   os << "}  // namespace " << ns << "\n";
