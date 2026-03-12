@@ -41,7 +41,9 @@ std::string cpp_server_arg_type(const Arg& arg) {
   return "void*";
 }
 
-void emit_server_traits(std::ostringstream& os, const Interface& iface) {
+void emit_server_traits(std::ostringstream& os,
+                        const Interface& iface,
+                        CppStd std) {
   // S6: names validated at parse time.
   std::string traits_name = iface.name + "_server_traits";
   os << "struct " << traits_name << " {\n";
@@ -49,7 +51,12 @@ void emit_server_traits(std::ostringstream& os, const Interface& iface) {
      << iface.name << "\";\n";
   os << "    static constexpr uint32_t         version        = "
      << iface.version << ";\n";
-  os << "    static const wl_interface& wl_iface() noexcept;\n";
+  // C++20+ supports [[nodiscard]] with a reason string.
+  if (std >= CppStd::Cpp20)
+    os << "    [[nodiscard(\"required for protocol binding\")]]\n"
+       << "    static const wl_interface& wl_iface() noexcept;\n";
+  else
+    os << "    [[nodiscard]] static const wl_interface& wl_iface() noexcept;\n";
 
   if (!iface.requests.empty()) {
     os << "    struct Req {\n";
@@ -93,34 +100,87 @@ void emit_crack_request(std::ostringstream& os, const Message& req) {
   os << ");\n    }\n\n";
 }
 
-void emit_server_class(std::ostringstream& os, const Interface& iface) {
+void emit_server_class(std::ostringstream& os,
+                       const Interface& iface,
+                       CppStd std) {
   // S6: names validated at parse time.
   std::string cls_name = "C" + snake_to_pascal(iface.name) + "Server";
   std::string traits_name = iface.name + "_server_traits";
 
-  emit_server_traits(os, iface);
+  emit_server_traits(os, iface, std);
 
   os << "template <class Derived>\n";
+  // C++20+ adds a requires-constraint to catch non-class template arguments
+  // at instantiation time with a clearer diagnostic.
+  if (std >= CppStd::Cpp20)
+    os << "    requires std::is_class_v<Derived>\n";
   os << "class " << cls_name << " : public wl::CResourceImpl<Derived, "
      << traits_name << "> {\n";
-  os << "    using Base = wl::CResourceImpl<Derived, " << traits_name
-     << ">;\n\n";
-  os << "public:\n";
 
-  for (const auto& e : iface.events) {
-    std::string method = "Send" + snake_to_pascal(e.name);
-    os << "    void " << method << "(";
-    for (std::size_t i = 0; i < e.args.size(); ++i) {
-      if (i > 0)
-        os << ", ";
-      os << cpp_server_arg_type(e.args[i]) << " " << e.args[i].name;
+  // C++23 can use the explicit-object parameter ("deducing this", P0847R7)
+  // when the compiler supports it (__cpp_explicit_this_parameter, GCC 14+,
+  // Clang 18+).  On older compilers that only partially implement C++23 (e.g.
+  // GCC 13 which sets __cplusplus=202100L, not 202302L), we fall back to the
+  // C++17/20 `using Base` + `Base::method()` form.
+  if (std >= CppStd::Cpp23) {
+    // Emit a compile-time feature switch so downstream consumers work with
+    // both GCC 13 (no deducing-this) and GCC 14+ / Clang 18+ (deducing-this).
+    os << "#ifdef __cpp_explicit_this_parameter\n";
+    os << "public:\n";
+    for (const auto& e : iface.events) {
+      std::string method = "Send" + snake_to_pascal(e.name);
+      // C++23: explicit-object parameter (P0847R7).
+      os << "    void " << method << "(this Derived& self";
+      for (const auto& a : e.args)
+        os << ", " << cpp_server_arg_type(a) << " " << a.name;
+      os << ") noexcept {\n";
+      os << "        self._PostEvent(" << traits_name
+         << "::Evt::" << snake_to_pascal(e.name);
+      for (const auto& a : e.args)
+        os << ", " << a.name;
+      os << ");\n    }\n\n";
     }
-    os << ") noexcept {\n";
-    os << "        Base::_PostEvent(" << traits_name
-       << "::Evt::" << snake_to_pascal(e.name);
-    for (const auto& a : e.args)
-      os << ", " << a.name;
-    os << ");\n    }\n\n";
+    os << "#else\n";
+    os << "    using Base = wl::CResourceImpl<Derived, " << traits_name
+       << ">;\n";
+    os << "public:\n";
+    for (const auto& e : iface.events) {
+      std::string method = "Send" + snake_to_pascal(e.name);
+      // Fallback: traditional Base:: form.
+      os << "    void " << method << "(";
+      for (std::size_t i = 0; i < e.args.size(); ++i) {
+        if (i > 0)
+          os << ", ";
+        os << cpp_server_arg_type(e.args[i]) << " " << e.args[i].name;
+      }
+      os << ") noexcept {\n";
+      os << "        Base::_PostEvent(" << traits_name
+         << "::Evt::" << snake_to_pascal(e.name);
+      for (const auto& a : e.args)
+        os << ", " << a.name;
+      os << ");\n    }\n\n";
+    }
+    os << "#endif\n\n";
+  } else {
+    // C++17/20: traditional form using the Base alias.
+    os << "    using Base = wl::CResourceImpl<Derived, " << traits_name
+       << ">;\n\n";
+    os << "public:\n";
+    for (const auto& e : iface.events) {
+      std::string method = "Send" + snake_to_pascal(e.name);
+      os << "    void " << method << "(";
+      for (std::size_t i = 0; i < e.args.size(); ++i) {
+        if (i > 0)
+          os << ", ";
+        os << cpp_server_arg_type(e.args[i]) << " " << e.args[i].name;
+      }
+      os << ") noexcept {\n";
+      os << "        Base::_PostEvent(" << traits_name
+         << "::Evt::" << snake_to_pascal(e.name);
+      for (const auto& a : e.args)
+        os << ", " << a.name;
+      os << ");\n    }\n\n";
+    }
   }
 
   for (const auto& r : iface.requests)
@@ -184,7 +244,7 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
     }
     // reinterpret_cast is not a constant expression, so we cannot use
     // constexpr here.  The inline keyword makes the definition valid inside
-    // the class body for all C++17+ (this project requires C++23).
+    // the class body for all C++17+.
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
     os << "    inline static const void* s_request_vtable_[] = {\n";
     for (const auto& r : iface.requests)
@@ -196,25 +256,47 @@ void emit_server_class(std::ostringstream& os, const Interface& iface) {
   os << "};\n\n";
 }
 
+/// Return the C++ standard label string.
+const char* cpp_std_label(CppStd std) {
+  switch (std) {
+    case CppStd::Cpp17:
+      return "C++17";
+    case CppStd::Cpp20:
+      return "C++20";
+    case CppStd::Cpp23:
+      return "C++23";
+  }
+  assert(false && "unhandled CppStd");
+  return "C++17";
+}
+
 }  // anonymous namespace
 
-std::string generate_server_cxx_header(const Protocol& proto) {
+std::string generate_server_cxx_header(const Protocol& proto, CppStd std) {
   // S6: all identifiers validated at parse time; safe to emit directly.
   std::ostringstream os;
 
+  const char* cpp_label = cpp_std_label(std);
+
   os << "// SPDX-License-Identifier: MIT\n";
   os << "// AUTO-GENERATED by wayland-cxx-scanner 0.1.0 — DO NOT EDIT\n";
+  os << "// Target: " << cpp_label << "\n";
   os << "#pragma once\n\n";
   os << "#include <wl/resource_impl.hpp>\n";
   os << "#include <wl/event_map.hpp>\n\n";
   os << "#include <cstdint>\n";
-  os << "#include <string_view>\n\n";
+  os << "#include <string_view>\n";
+  // <type_traits> is needed for the std::is_class_v requires-constraint
+  // (C++20+).
+  if (std >= CppStd::Cpp20)
+    os << "#include <type_traits>\n";
+  os << "\n";
 
   std::string ns = proto.name + "::server";
   os << "namespace " << ns << " {\n\n";
 
   for (const auto& iface : proto.interfaces)
-    emit_server_class(os, iface);
+    emit_server_class(os, iface, std);
 
   os << "}  // namespace " << ns << "\n";
   return os.str();

@@ -6,6 +6,18 @@
 #include <string>
 #include <vector>
 
+namespace wl::scanner {
+
+/// Target C++ standard for generated code.
+enum class CppStd : uint8_t {
+  Cpp17,  ///< ISO C++17 — no concepts or requires-expressions
+  Cpp20,  ///< ISO C++20 — concepts, requires, [[nodiscard("message")]]
+  Cpp23,  ///< ISO C++23 — C++20 features plus explicit-object parameters
+          ///< (default)
+};
+
+}  // namespace wl::scanner
+
 namespace wl::scanner::ir {
 
 /// Wayland argument type enumeration (matches <arg type="..."> values).
