@@ -3,6 +3,7 @@
 #include "name_transform.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 
 namespace {
@@ -13,7 +14,7 @@ namespace {
 /// "180" → "OneEightZero"
 /// "270" → "TwoSevenZero"
 std::string spell_digits(const std::string_view s) {
-  static constexpr const char* kWords[] = {
+  static constexpr std::array<const char*, 10> kWords = {
       "Zero", "One", "Two",   "Three", "Four",
       "Five", "Six", "Seven", "Eight", "Nine",
   };
@@ -74,8 +75,7 @@ std::string enum_entry_to_pascal(std::string_view entry_name,
   // If the result starts with a digit (e.g. "90" from wl_output.transform),
   // spell every digit out as an English word so the identifier is valid C++.
   // "90" → "NineZero", "180" → "OneEightZero", "270" → "TwoSevenZero"
-  if (!result.empty() &&
-      std::isdigit(static_cast<unsigned char>(result[0])))
+  if (!result.empty() && std::isdigit(static_cast<unsigned char>(result[0])))
     result = spell_digits(result);
   return result;
 }

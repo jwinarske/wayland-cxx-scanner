@@ -76,8 +76,8 @@ TEST(CodegenClientCxx, SinceVersionReflectsXmlAttribute) {
   </interface>
 </protocol>)");
   const auto out = generate_client_cxx_header(proto);
-  EXPECT_THAT(out, HasSubstr("OpenWindow = 1"));   // since defaulted to 1
-  EXPECT_THAT(out, HasSubstr("SetReady = 2"));     // since="2"
+  EXPECT_THAT(out, HasSubstr("OpenWindow = 1"));  // since defaulted to 1
+  EXPECT_THAT(out, HasSubstr("SetReady = 2"));    // since="2"
   EXPECT_THAT(out, HasSubstr("BoundOk = 1"));
   EXPECT_THAT(out, HasSubstr("BoundFail = 2"));
 }

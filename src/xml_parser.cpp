@@ -170,16 +170,15 @@ Enum parse_enum(const pugi::xml_node node) {
     // wl_output.transform); the C++ codegens prefix such names with '_'
     // to produce a valid identifier.  Reject anything with other characters
     // to guard against injection through crafted XML.
-    const bool body_ok = std::ranges::all_of(
-        std::string_view(ename), [](char c) {
+    const bool body_ok =
+        std::ranges::all_of(std::string_view(ename), [](char c) {
           return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
         });
     if (!body_ok) {
-      std::fprintf(
-          stderr,
-          "wayland-cxx-scanner: skipping <entry name=\"%s\"> "
-          "(contains non-identifier characters)\n",
-          ename);
+      std::fprintf(stderr,
+                   "wayland-cxx-scanner: skipping <entry name=\"%s\"> "
+                   "(contains non-identifier characters)\n",
+                   ename);
       continue;
     }
 
@@ -241,7 +240,8 @@ Protocol parse_doc(const pugi::xml_document& doc) {
 
 Protocol parse_protocol_from_string(const std::string_view xml) {
   pugi::xml_document doc;
-  if (const pugi::xml_parse_result result = doc.load_buffer(xml.data(), xml.size());
+  if (const pugi::xml_parse_result result =
+          doc.load_buffer(xml.data(), xml.size());
       !result)
     throw ParseError(std::string("XML parse error: ") + result.description());
   return parse_doc(doc);

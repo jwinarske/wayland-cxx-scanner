@@ -69,7 +69,8 @@ requires WlProxyTraits<Traits> class CProxyImpl : public CProxy<Traits>,
   }
 };
 
-// ── wl::construct<> ───────────────────────────────────────────────────────────
+// ── wl::construct<>
+// ───────────────────────────────────────────────────────────
 
 /// Type-safe wrapper for Wayland constructor requests — requests that create a
 /// new server-side object and return its client-side proxy.
@@ -93,15 +94,19 @@ requires WlProxyTraits<Traits> class CProxyImpl : public CProxy<Traits>,
 /// @endcode
 ///
 /// @tparam ChildTraits   Traits of the newly created object (WlProxyTraits).
-/// @tparam Opcode        The constructor request opcode (compile-time constant).
+/// @tparam Opcode        The constructor request opcode (compile-time
+/// constant).
 /// @tparam Derived       Deduced — most-derived CRTP class of the parent proxy.
 /// @tparam ParentTraits  Deduced — traits of the parent proxy.
 /// @tparam Args          Deduced — extra wire arguments after the new_id slot.
-template <typename ChildTraits, uint32_t Opcode,
-          typename Derived, typename ParentTraits, typename... Args>
-requires WlProxyTraits<ChildTraits>
-[[nodiscard]] wl_proxy* construct(CProxyImpl<Derived, ParentTraits>& proxy,
-                                  Args... args) noexcept {
+template <typename ChildTraits,
+          uint32_t Opcode,
+          typename Derived,
+          typename ParentTraits,
+          typename... Args>
+requires WlProxyTraits<ChildTraits> [[nodiscard]] wl_proxy* construct(
+    CProxyImpl<Derived, ParentTraits>& proxy,
+    Args... args) noexcept {
   return proxy._MarshalNew(Opcode, &ChildTraits::wl_iface(), nullptr, args...);
 }
 
