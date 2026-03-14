@@ -1,66 +1,12 @@
-<?xml version="1.0" encoding="UTF-8"?>
 <protocol name="weston_screenshooter">
-  <copyright>SPDX-License-Identifier: MIT</copyright>
-
-  <!--
-    weston_screenshooter — capture a compositor output into a client-provided
-    wl_shm buffer.
-
-    Modelled after the protocol used by libweston/screenshooter.c (Weston commit
-    544618d3c60db77b7818b0939116f865506962fc).
-
-    The client:
-      1. Creates a wl_buffer (backed by wl_shm) sized to the output's current
-         mode resolution in WL_SHM_FORMAT_XRGB8888.
-      2. Calls shoot(output, buffer).
-      3. Waits for the done event; the outcome field indicates success or the
-         reason for failure.
-  -->
 
   <interface name="weston_screenshooter" version="1">
-    <description summary="capture a compositor output to a shared-memory buffer">
-      Bound once from the registry; callers issue shoot() for each capture.
-    </description>
-
-    <!-- ── Requests ────────────────────────────────────────────────────── -->
-
     <request name="shoot">
-      <description summary="capture output pixels into buffer">
-        Instruct the compositor to copy the current contents of output into
-        buffer.  The buffer must be a wl_shm buffer whose size exactly matches
-        the output's current mode (width × height × 4 bytes,
-        WL_SHM_FORMAT_XRGB8888).
-
-        The compositor responds asynchronously with the done event.
-      </description>
-      <arg name="output" type="object" interface="wl_output"
-           summary="the output to capture"/>
-      <arg name="buffer" type="object" interface="wl_buffer"
-           summary="destination wl_shm buffer (XRGB8888, output-sized)"/>
+      <arg name="output" type="object" interface="wl_output"/>
+      <arg name="buffer" type="object" interface="wl_buffer"/>
     </request>
-
-    <!-- ── Events ─────────────────────────────────────────────────────── -->
-
     <event name="done">
-      <description summary="capture result notification">
-        Sent by the compositor once the capture attempt has completed.
-        The outcome field conveys success or the reason for failure.
-      </description>
-      <arg name="outcome" type="uint" enum="outcome"
-           summary="success or failure code"/>
     </event>
-
-    <!-- ── Enumerations ───────────────────────────────────────────────── -->
-
-    <enum name="outcome">
-      <description summary="result of a shoot request"/>
-      <entry name="success"    value="0"
-             summary="capture succeeded; buffer now contains the screenshot"/>
-      <entry name="no_memory"  value="1"
-             summary="compositor ran out of memory during capture"/>
-      <entry name="bad_buffer" value="2"
-             summary="buffer dimensions or format do not match the output"/>
-    </enum>
-
   </interface>
+
 </protocol>

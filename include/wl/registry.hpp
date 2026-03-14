@@ -50,6 +50,13 @@ class CRegistry {
   [[nodiscard]] wl_registry* Get() const noexcept { return m_registry; }
   explicit operator bool() const noexcept { return !IsNull(); }
 
+  /// Explicitly destroy the registry.
+  /// Must be called before wl_display_disconnect() to avoid use-after-free:
+  /// wl_registry_destroy() (called from the destructor) accesses display->mutex
+  /// inside libwayland, so the registry must be gone before the display is
+  /// freed.
+  void Reset() noexcept { _Reset(); }
+
   /// Set callback invoked for each wl_registry.global event.
   void OnGlobal(GlobalFn fn) { m_on_global = std::move(fn); }
 

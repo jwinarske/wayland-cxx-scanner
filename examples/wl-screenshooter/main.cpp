@@ -3,7 +3,9 @@
 //
 // wl-screenshooter — capture a Wayland compositor output to a PPM file.
 //
-// Modelled after libweston/screenshooter.c (Weston commit 544618d3c6):
+// Uses the weston_screenshooter protocol from:
+//   https://github.com/MartijnBraam/weston/blob/master/protocol/weston-screenshooter.xml
+//
 //   • binds weston_screenshooter from the compositor registry
 //   • allocates a wl_shm buffer sized to the first advertised output
 //   • calls weston_screenshooter.shoot(output, buffer) and awaits done
@@ -106,7 +108,7 @@ static const wl_message kShooterRequests[] = {
 };
 
 static const wl_message kShooterEvents[] = {
-    {"done", "u", nullptr},
+    {"done", "", nullptr},
 };
 
 static const wl_interface kShooterIfaceDef = {
@@ -215,14 +217,8 @@ class ScreenshooterHandler
           ScreenshooterHandler> {
  public:
   bool done = false;
-  weston_screenshooter::client::WestonScreenshooterOutcome outcome{};
 
-  void OnDone(uint32_t out) override {
-    outcome =
-        static_cast<weston_screenshooter::client::WestonScreenshooterOutcome>(
-            out);
-    done = true;
-  }
+  void OnDone() override { done = true; }
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -606,26 +602,8 @@ bool App::TakeShot() {
     }
   }
 
-  using Outcome = weston_screenshooter::client::WestonScreenshooterOutcome;
-  switch (shooter_.Get()->outcome) {
-    case Outcome::Success:
-      std::printf("wl-screenshooter: capture succeeded\n");
-      return true;
-    case Outcome::NoMemory:
-      std::fprintf(
-          stderr,
-          "wl-screenshooter: compositor reported no_memory during capture\n");
-      return false;
-    case Outcome::BadBuffer:
-      std::fprintf(stderr,
-                   "wl-screenshooter: compositor reported bad_buffer "
-                   "(dimensions or format mismatch)\n");
-      return false;
-    default:
-      std::fprintf(stderr, "wl-screenshooter: unknown outcome %u\n",
-                   static_cast<uint32_t>(shooter_.Get()->outcome));
-      return false;
-  }
+  std::printf("wl-screenshooter: capture succeeded\n");
+  return true;
 }
 
 // ── SavePpm

@@ -47,6 +47,7 @@ jobs:
             gcc g++ \
             clang-19 \
             libwayland-dev \
+            wayland-protocols \
             libpugixml-dev
 
       - name: Configure
@@ -102,6 +103,7 @@ jobs:
             gcc gcc-c++ \
             clang \
             wayland-devel \
+            wayland-protocols-devel \
             pugixml-devel \
             gtest-devel gmock-devel
 
