@@ -936,8 +936,7 @@ static void LogWlError(wl_display* display, const char* context) noexcept {
                  " on %s object %u\n",
                  context, proto_code, iface ? iface->name : "unknown", obj_id);
   } else {
-    std::fprintf(stderr,
-                 "simple-egl: compositor disconnected (%s): %s\n",
+    std::fprintf(stderr, "simple-egl: compositor disconnected (%s): %s\n",
                  context, std::strerror(code));
   }
 }
