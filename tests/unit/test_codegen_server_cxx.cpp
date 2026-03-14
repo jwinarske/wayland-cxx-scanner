@@ -27,24 +27,24 @@ static Protocol make_proto() {
 }
 
 TEST(CodegenServerCxx, ContainsPragmaOnce) {
-  auto out = generate_server_cxx_header(make_proto());
+  const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("#pragma once"));
 }
 
 TEST(CodegenServerCxx, ContainsNamespace) {
-  auto out = generate_server_cxx_header(make_proto());
+  const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("namespace xdg_shell::server"));
 }
 
 TEST(CodegenServerCxx, ContainsServerTraitsStruct) {
-  auto out = generate_server_cxx_header(make_proto());
+  const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("xdg_wm_base_server_traits"));
   EXPECT_THAT(out, HasSubstr("\"xdg_wm_base\""));
   EXPECT_THAT(out, HasSubstr("version        = 6"));
 }
 
 TEST(CodegenServerCxx, ContainsOpcodeConstants) {
-  auto out = generate_server_cxx_header(make_proto());
+  const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("struct Req"));
   EXPECT_THAT(out, HasSubstr("Destroy = 0"));
   EXPECT_THAT(out, HasSubstr("Pong = 1"));
@@ -52,20 +52,42 @@ TEST(CodegenServerCxx, ContainsOpcodeConstants) {
   EXPECT_THAT(out, HasSubstr("Ping = 0"));
 }
 
+TEST(CodegenServerCxx, ContainsSinceVersionDefaultsToOne) {
+  const auto out = generate_server_cxx_header(make_proto());
+  EXPECT_THAT(out, HasSubstr("struct Since"));
+  EXPECT_THAT(out, HasSubstr("Destroy = 1"));
+  EXPECT_THAT(out, HasSubstr("Ping = 1"));
+}
+
+TEST(CodegenServerCxx, SinceVersionReflectsXmlAttribute) {
+  const auto proto = parse_protocol_from_string(R"(
+<protocol name="agl">
+  <interface name="agl_shell" version="3">
+    <request name="open_window"/>
+    <request name="set_ready" since="2"/>
+    <event name="bound_fail" since="3"/>
+  </interface>
+</protocol>)");
+  const auto out = generate_server_cxx_header(proto);
+  EXPECT_THAT(out, HasSubstr("OpenWindow = 1"));
+  EXPECT_THAT(out, HasSubstr("SetReady = 2"));
+  EXPECT_THAT(out, HasSubstr("BoundFail = 3"));
+}
+
 TEST(CodegenServerCxx, ContainsCRTPServerClass) {
-  auto out = generate_server_cxx_header(make_proto());
+  const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("template <class Derived>"));
   EXPECT_THAT(out, HasSubstr("CXdgWmBaseServer"));
   EXPECT_THAT(out, HasSubstr("wl::CResourceImpl"));
 }
 
 TEST(CodegenServerCxx, ContainsSendEventMethod) {
-  auto out = generate_server_cxx_header(make_proto());
+  const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("void SendPing("));
 }
 
 TEST(CodegenServerCxx, ContainsRequestHandlersAndMap) {
-  auto out = generate_server_cxx_header(make_proto());
+  const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("virtual void OnDestroy("));
   EXPECT_THAT(out, HasSubstr("virtual void OnPong("));
   EXPECT_THAT(out, HasSubstr("BEGIN_REQUEST_MAP(CXdgWmBaseServer)"));
@@ -76,7 +98,7 @@ TEST(CodegenServerCxx, ContainsRequestHandlersAndMap) {
 TEST(CodegenServerCxx, EmptyProtocol) {
   Protocol p;
   p.name = "empty";
-  auto out = generate_server_cxx_header(p);
+  const auto out = generate_server_cxx_header(p);
   EXPECT_THAT(out, HasSubstr("#pragma once"));
   EXPECT_THAT(out, HasSubstr("namespace empty::server"));
 }

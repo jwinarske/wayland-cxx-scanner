@@ -30,12 +30,12 @@ static Protocol make_proto() {
 }
 
 TEST(CodegenClientCxx, ContainsPragmaOnce) {
-  auto out = generate_client_cxx_header(make_proto());
+  const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("#pragma once"));
 }
 
 TEST(CodegenClientCxx, ContainsNamespace) {
-  auto out = generate_client_cxx_header(make_proto());
+  const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("namespace xdg_shell::client"));
 }
 
@@ -48,7 +48,7 @@ TEST(CodegenClientCxx, ContainsTraitsStruct) {
 }
 
 TEST(CodegenClientCxx, ContainsOpcodeConstants) {
-  auto out = generate_client_cxx_header(make_proto());
+  const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("struct Op"));
   EXPECT_THAT(out, HasSubstr("Destroy = 0"));
   EXPECT_THAT(out, HasSubstr("Pong = 1"));
@@ -56,21 +56,47 @@ TEST(CodegenClientCxx, ContainsOpcodeConstants) {
   EXPECT_THAT(out, HasSubstr("Ping = 0"));
 }
 
+TEST(CodegenClientCxx, ContainsSinceVersionDefaultsToOne) {
+  const auto out = generate_client_cxx_header(make_proto());
+  // Both Op and Evt carry a nested Since struct.
+  EXPECT_THAT(out, HasSubstr("struct Since"));
+  // All messages without a since attribute default to 1.
+  EXPECT_THAT(out, HasSubstr("Destroy = 1"));
+  EXPECT_THAT(out, HasSubstr("Ping = 1"));
+}
+
+TEST(CodegenClientCxx, SinceVersionReflectsXmlAttribute) {
+  const auto proto = parse_protocol_from_string(R"(
+<protocol name="agl">
+  <interface name="agl_shell" version="3">
+    <request name="open_window"/>
+    <request name="set_ready" since="2"/>
+    <event name="bound_ok"/>
+    <event name="bound_fail" since="2"/>
+  </interface>
+</protocol>)");
+  const auto out = generate_client_cxx_header(proto);
+  EXPECT_THAT(out, HasSubstr("OpenWindow = 1"));  // since defaulted to 1
+  EXPECT_THAT(out, HasSubstr("SetReady = 2"));    // since="2"
+  EXPECT_THAT(out, HasSubstr("BoundOk = 1"));
+  EXPECT_THAT(out, HasSubstr("BoundFail = 2"));
+}
+
 TEST(CodegenClientCxx, ContainsCRTPClass) {
-  auto out = generate_client_cxx_header(make_proto());
+  const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("template <class Derived>"));
   EXPECT_THAT(out, HasSubstr("CXdgWmBase"));
   EXPECT_THAT(out, HasSubstr("wl::CProxyImpl"));
 }
 
 TEST(CodegenClientCxx, ContainsRequestMethod) {
-  auto out = generate_client_cxx_header(make_proto());
+  const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("void Destroy("));
   EXPECT_THAT(out, HasSubstr("void Pong("));
 }
 
 TEST(CodegenClientCxx, ContainsEventHandlerAndMap) {
-  auto out = generate_client_cxx_header(make_proto());
+  const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("virtual void OnPing("));
   EXPECT_THAT(out, HasSubstr("BEGIN_EVENT_MAP(CXdgWmBase)"));
   EXPECT_THAT(out, HasSubstr("EVENT_HANDLER("));
@@ -83,10 +109,32 @@ TEST(CodegenClientCxx, ContainsEnumClass) {
   EXPECT_THAT(out, HasSubstr("Role = 0"));
 }
 
+TEST(CodegenClientCxx, DigitLeadingEnumEntryGetsPrefixed) {
+  // Mirrors wl_output.transform which has entries "90", "180", "270".
+  auto proto = parse_protocol_from_string(R"(
+<protocol name="wayland">
+  <interface name="wl_output" version="4">
+    <enum name="transform">
+      <entry name="normal" value="0"/>
+      <entry name="90"     value="1"/>
+      <entry name="180"    value="2"/>
+      <entry name="270"    value="3"/>
+    </enum>
+  </interface>
+</protocol>)");
+  auto out = generate_client_cxx_header(proto);
+  // Digits are spelled out so the generated enum-class value is valid C++.
+  EXPECT_THAT(out, HasSubstr("Normal = 0"));
+  EXPECT_THAT(out, HasSubstr("NineZero = 1"));
+  EXPECT_THAT(out, HasSubstr("OneEightZero = 2"));
+  EXPECT_THAT(out, HasSubstr("TwoSevenZero = 3"));
+  EXPECT_THAT(out, Not(HasSubstr("\n    90 =")));
+}
+
 TEST(CodegenClientCxx, EmptyProtocol) {
   Protocol p;
   p.name = "empty";
-  auto out = generate_client_cxx_header(p);
+  const auto out = generate_client_cxx_header(p);
   EXPECT_THAT(out, HasSubstr("#pragma once"));
   EXPECT_THAT(out, HasSubstr("namespace empty::client"));
 }

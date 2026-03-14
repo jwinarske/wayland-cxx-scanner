@@ -48,8 +48,22 @@ void emit_opcodes(std::ostringstream& os, const Interface& iface) {
 }
 
 void emit_since_versions(std::ostringstream& os, const Interface& iface) {
-  std::string prefix = to_upper(iface.name) + "_";
-  os << "#define " << prefix << "INTERFACE_VERSION " << iface.version << "\n\n";
+  // Helper: parse the optional since string; default to 1 when absent.
+  auto since_of = [](const Message& m) -> uint32_t {
+    return m.since.empty() ? 1u : static_cast<uint32_t>(std::stoul(m.since));
+  };
+
+  const std::string prefix = to_upper(iface.name) + "_";
+  os << "#define " << prefix << "INTERFACE_VERSION " << iface.version << "\n";
+  // Per-message since-version macros (mirrors C wayland-scanner output).
+  // Pattern: IFACE_MSG_SINCE_VERSION N
+  for (const auto& r : iface.requests)
+    os << "#define " << prefix << to_upper(r.name) << "_SINCE_VERSION "
+       << since_of(r) << "\n";
+  for (const auto& e : iface.events)
+    os << "#define " << prefix << to_upper(e.name) << "_SINCE_VERSION "
+       << since_of(e) << "\n";
+  os << "\n";
 }
 
 }  // anonymous namespace
