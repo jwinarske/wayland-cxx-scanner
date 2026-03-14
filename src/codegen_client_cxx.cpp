@@ -13,6 +13,11 @@ using namespace ir;
 
 namespace {
 
+/// Parse the optional since string; default to 1 when absent.
+uint32_t msg_since(const Message& m) {
+  return m.since.empty() ? 1u : static_cast<uint32_t>(std::stoul(m.since));
+}
+
 /// Map ArgType to a C++ parameter type string.
 /// M3: every ArgType value is explicitly listed; the default branch is
 /// unreachable (asserts in debug, returns void* in release as a last resort
@@ -78,7 +83,20 @@ void emit_traits(std::ostringstream& os, const Interface& iface, CppStd std) {
       os << "\n            " << snake_to_pascal(r.name) << " = " << r.opcode;
       first = false;
     }
-    os << ";\n    };\n";
+    os << ";\n";
+    // Since-version constants nested inside Op (one per request).
+    os << "        struct Since {\n";
+    os << "            static constexpr uint32_t";
+    bool first_s = true;
+    for (const auto& r : iface.requests) {
+      if (!first_s)
+        os << ",";
+      os << "\n                " << snake_to_pascal(r.name) << " = "
+         << msg_since(r);
+      first_s = false;
+    }
+    os << ";\n        };\n";
+    os << "    };\n";
   }
 
   if (!iface.events.empty()) {
@@ -91,7 +109,20 @@ void emit_traits(std::ostringstream& os, const Interface& iface, CppStd std) {
       os << "\n            " << snake_to_pascal(e.name) << " = " << e.opcode;
       first = false;
     }
-    os << ";\n    };\n";
+    os << ";\n";
+    // Since-version constants nested inside Evt (one per event).
+    os << "        struct Since {\n";
+    os << "            static constexpr uint32_t";
+    bool first_s = true;
+    for (const auto& e : iface.events) {
+      if (!first_s)
+        os << ",";
+      os << "\n                " << snake_to_pascal(e.name) << " = "
+         << msg_since(e);
+      first_s = false;
+    }
+    os << ";\n        };\n";
+    os << "    };\n";
   }
   os << "};\n\n";
 }

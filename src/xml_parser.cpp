@@ -92,7 +92,7 @@ ArgType parse_arg_type(const char* type_str, const char* arg_name) {
 // ── DOM traversal
 // ─────────────────────────────────────────────────────────────
 
-Arg parse_arg(pugi::xml_node node) {
+Arg parse_arg(const pugi::xml_node node) {
   const char* name = node.attribute("name").value();
   const char* type_str = node.attribute("type").value();
   const char* iface_str = node.attribute("interface").as_string(nullptr);
@@ -107,7 +107,7 @@ Arg parse_arg(pugi::xml_node node) {
 
   Arg arg;
   arg.name = name;
-  ArgType raw = parse_arg_type(type_str, name);
+  const ArgType raw = parse_arg_type(type_str, name);
 
   if (enum_str && *enum_str != '\0') {
     arg.type = ArgType::Enum;
@@ -124,7 +124,7 @@ Arg parse_arg(pugi::xml_node node) {
   return arg;
 }
 
-Message parse_message(pugi::xml_node node, uint32_t opcode) {
+Message parse_message(const pugi::xml_node node, const uint32_t opcode) {
   const char* name = node.attribute("name").value();
   if (*name == '\0')
     throw ParseError(std::string("missing 'name' on <") + node.name() + ">");
@@ -134,9 +134,14 @@ Message parse_message(pugi::xml_node node, uint32_t opcode) {
   msg.name = name;
   msg.opcode = opcode;
 
-  const char* type_attr = node.attribute("type").as_string(nullptr);
-  if (type_attr && std::strcmp(type_attr, "destructor") == 0)
+  if (const char* type_attr = node.attribute("type").as_string(nullptr);
+      type_attr && std::strcmp(type_attr, "destructor") == 0)
     msg.is_destructor = true;
+
+  // Parse optional since="N" version attribute.
+  if (const char* since_attr = node.attribute("since").as_string(nullptr);
+      since_attr && *since_attr != '\0')
+    msg.since = since_attr;
 
   for (pugi::xml_node arg_node : node.children("arg"))
     msg.args.push_back(parse_arg(arg_node));
@@ -144,7 +149,7 @@ Message parse_message(pugi::xml_node node, uint32_t opcode) {
   return msg;
 }
 
-Enum parse_enum(pugi::xml_node node) {
+Enum parse_enum(const pugi::xml_node node) {
   const char* name = node.attribute("name").value();
   if (*name == '\0')
     throw ParseError("missing 'name' on <enum>");
@@ -160,7 +165,23 @@ Enum parse_enum(pugi::xml_node node) {
     const char* eval = entry.attribute("value").value();
     if (*ename == '\0' || *eval == '\0')
       continue;
-    require_identifier(ename, "<entry> name");
+    // Entry names must be non-empty and composed only of [A-Za-z0-9_].
+    // A leading digit is permitted here (e.g. "90", "180" in
+    // wl_output.transform); the C++ codegens prefix such names with '_'
+    // to produce a valid identifier.  Reject anything with other characters
+    // to guard against injection through crafted XML.
+    const bool body_ok = std::ranges::all_of(
+        std::string_view(ename), [](char c) {
+          return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+        });
+    if (!body_ok) {
+      std::fprintf(
+          stderr,
+          "wayland-cxx-scanner: skipping <entry name=\"%s\"> "
+          "(contains non-identifier characters)\n",
+          ename);
+      continue;
+    }
 
     EnumEntry e;
     e.name = ename;
@@ -171,7 +192,7 @@ Enum parse_enum(pugi::xml_node node) {
 }
 
 Protocol parse_doc(const pugi::xml_document& doc) {
-  pugi::xml_node protocol_node = doc.child("protocol");
+  const pugi::xml_node protocol_node = doc.child("protocol");
   if (!protocol_node)
     throw ParseError("missing <protocol> root element");
 
@@ -198,14 +219,14 @@ Protocol parse_doc(const pugi::xml_document& doc) {
                         : 1u;
 
     uint32_t req_opcode = 0;
-    for (pugi::xml_node req : iface_node.children("request"))
+    for (const pugi::xml_node req : iface_node.children("request"))
       iface.requests.push_back(parse_message(req, req_opcode++));
 
     uint32_t evt_opcode = 0;
-    for (pugi::xml_node evt : iface_node.children("event"))
+    for (const pugi::xml_node evt : iface_node.children("event"))
       iface.events.push_back(parse_message(evt, evt_opcode++));
 
-    for (pugi::xml_node en : iface_node.children("enum"))
+    for (const pugi::xml_node en : iface_node.children("enum"))
       iface.enums.push_back(parse_enum(en));
 
     proto.interfaces.push_back(std::move(iface));
@@ -218,10 +239,10 @@ Protocol parse_doc(const pugi::xml_document& doc) {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-Protocol parse_protocol_from_string(std::string_view xml) {
+Protocol parse_protocol_from_string(const std::string_view xml) {
   pugi::xml_document doc;
-  pugi::xml_parse_result result = doc.load_buffer(xml.data(), xml.size());
-  if (!result)
+  if (const pugi::xml_parse_result result = doc.load_buffer(xml.data(), xml.size());
+      !result)
     throw ParseError(std::string("XML parse error: ") + result.description());
   return parse_doc(doc);
 }
