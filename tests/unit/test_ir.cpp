@@ -1,37 +1,58 @@
 // SPDX-License-Identifier: MIT
 #include "ir.hpp"
+#include "xml_parser.hpp"
 
 #include <gtest/gtest.h>
 
 using namespace wl::scanner::ir;
 
 TEST(Ir, ProtocolDefaultConstruct) {
-  Protocol p;
+  const Protocol p;
   EXPECT_TRUE(p.name.empty());
   EXPECT_TRUE(p.interfaces.empty());
 }
 
 TEST(Ir, InterfaceDefaultVersion) {
-  Interface iface;
+  const Interface iface;
   EXPECT_EQ(iface.version, 1u);
 }
 
 TEST(Ir, ArgTypeDefaultIsInt) {
-  Arg arg;
+  const Arg arg;
   EXPECT_EQ(arg.type, ArgType::Int);
   EXPECT_FALSE(arg.nullable);
   EXPECT_FALSE(arg.allow_null);
 }
 
 TEST(Ir, EnumDefaultNotBitfield) {
-  Enum en;
+  const Enum en;
   EXPECT_FALSE(en.is_bitfield);
 }
 
 TEST(Ir, MessageDefaultOpcodeZero) {
-  Message msg;
+  const Message msg;
   EXPECT_EQ(msg.opcode, 0u);
   EXPECT_FALSE(msg.is_destructor);
+  EXPECT_TRUE(msg.since.empty());
+}
+
+TEST(Ir, SinceFieldParsedFromXml) {
+  using namespace wl::scanner;
+  auto [name, interfaces] = parse_protocol_from_string(R"(
+<protocol name="test">
+  <interface name="wl_foo" version="3">
+    <request name="old_req"/>
+    <request name="new_req" since="3"/>
+    <event name="old_evt"/>
+    <event name="new_evt" since="2"/>
+  </interface>
+</protocol>)");
+  ASSERT_EQ(interfaces.size(), 1u);
+  const auto& iface = interfaces[0];
+  EXPECT_TRUE(iface.requests[0].since.empty());
+  EXPECT_EQ(iface.requests[1].since, "3");
+  EXPECT_TRUE(iface.events[0].since.empty());
+  EXPECT_EQ(iface.events[1].since, "2");
 }
 
 TEST(Ir, ParseErrorIsException) {

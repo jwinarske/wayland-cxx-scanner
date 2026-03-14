@@ -31,38 +31,58 @@ static Protocol make_minimal() {
 }
 
 TEST(CodegenC, ContainsPragmaOnce) {
-  auto out = generate_c_header(make_minimal());
+  const auto out = generate_c_header(make_minimal());
   EXPECT_THAT(out, HasSubstr("#pragma once"));
 }
 
 TEST(CodegenC, ContainsExternC) {
-  auto out = generate_c_header(make_minimal());
+  const auto out = generate_c_header(make_minimal());
   EXPECT_THAT(out, HasSubstr("extern \"C\""));
 }
 
 TEST(CodegenC, ContainsInterfaceDeclaration) {
-  auto out = generate_c_header(make_minimal());
+  const auto out = generate_c_header(make_minimal());
   EXPECT_THAT(out, HasSubstr("wl_foo_interface"));
 }
 
 TEST(CodegenC, ContainsVersionMacro) {
-  auto out = generate_c_header(make_minimal());
+  const auto out = generate_c_header(make_minimal());
   EXPECT_THAT(out, HasSubstr("WL_FOO_INTERFACE_VERSION 3"));
 }
 
+TEST(CodegenC, ContainsPerMessageSinceVersionDefaultsToOne) {
+  const auto out = generate_c_header(make_minimal());
+  EXPECT_THAT(out, HasSubstr("WL_FOO_DESTROY_SINCE_VERSION 1"));
+  EXPECT_THAT(out, HasSubstr("WL_FOO_DO_THING_SINCE_VERSION 1"));
+  EXPECT_THAT(out, HasSubstr("WL_FOO_DONE_SINCE_VERSION 1"));
+}
+
+TEST(CodegenC, SinceVersionReflectsXmlSinceAttribute) {
+  const auto proto = parse_protocol_from_string(R"(
+<protocol name="agl">
+  <interface name="agl_shell" version="2">
+    <request name="open_window"/>
+    <event name="bound_fail" since="2"/>
+  </interface>
+</protocol>)");
+  const auto out = generate_c_header(proto);
+  EXPECT_THAT(out, HasSubstr("AGL_SHELL_OPEN_WINDOW_SINCE_VERSION 1"));
+  EXPECT_THAT(out, HasSubstr("AGL_SHELL_BOUND_FAIL_SINCE_VERSION 2"));
+}
+
 TEST(CodegenC, ContainsRequestOpcode) {
-  auto out = generate_c_header(make_minimal());
+  const auto out = generate_c_header(make_minimal());
   EXPECT_THAT(out, HasSubstr("WL_FOO_DESTROY 0"));
   EXPECT_THAT(out, HasSubstr("WL_FOO_DO_THING 1"));
 }
 
 TEST(CodegenC, ContainsEventOpcode) {
-  auto out = generate_c_header(make_minimal());
+  const auto out = generate_c_header(make_minimal());
   EXPECT_THAT(out, HasSubstr("WL_FOO_DONE_EVENT 0"));
 }
 
 TEST(CodegenC, ContainsEnumValues) {
-  auto out = generate_c_header(make_minimal());
+  const auto out = generate_c_header(make_minimal());
   EXPECT_THAT(out, HasSubstr("WL_FOO_ERROR_ROLE = 0"));
   EXPECT_THAT(out, HasSubstr("WL_FOO_ERROR_DEFUNCT = 1"));
 }
@@ -70,7 +90,7 @@ TEST(CodegenC, ContainsEnumValues) {
 TEST(CodegenC, EmptyProtocolCompiles) {
   Protocol p;
   p.name = "empty";
-  auto out = generate_c_header(p);
+  const auto out = generate_c_header(p);
   EXPECT_THAT(out, HasSubstr("#pragma once"));
   EXPECT_THAT(out, Not(HasSubstr("interface_version")));
 }

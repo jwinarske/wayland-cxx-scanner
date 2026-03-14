@@ -44,3 +44,15 @@ TEST(NameTransform, EnumEntryToPascal) {
   EXPECT_EQ(enum_entry_to_pascal("error_role", "error"), "Role");
   EXPECT_EQ(enum_entry_to_pascal("role", "error"), "Role");
 }
+
+TEST(NameTransform, EnumEntryToPascalDigitLeading) {
+  // Entries like "90", "180", "270" in wl_output.transform must have their
+  // digits spelled out so the generated C++ enum-class value is valid.
+  EXPECT_EQ(enum_entry_to_pascal("90",  "transform"), "NineZero");
+  EXPECT_EQ(enum_entry_to_pascal("180", "transform"), "OneEightZero");
+  EXPECT_EQ(enum_entry_to_pascal("270", "transform"), "TwoSevenZero");
+  // Normal names must be unaffected.
+  EXPECT_EQ(enum_entry_to_pascal("normal",  "transform"), "Normal");
+  EXPECT_EQ(enum_entry_to_pascal("flipped", "transform"), "Flipped");
+}
+
