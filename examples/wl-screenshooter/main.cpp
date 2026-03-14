@@ -26,23 +26,26 @@
 #include "screenshooter_client.hpp"
 #include "wayland_client.hpp"
 
-// ── System Wayland C headers ──────────────────────────────────────────────────
+// ── System Wayland C headers
+// ──────────────────────────────────────────────────
 extern "C" {
 // wl_*_interface symbols and WL_OUTPUT_MODE_CURRENT used by the wl_iface()
 // definitions and pixel-format selection below.
 #include <wayland-client-protocol.h>
 // POSIX shared-memory helpers.
-#include <fcntl.h>    // MFD_CLOEXEC (glibc exposes via fcntl.h or sys/mman.h)
+#include <fcntl.h>     // MFD_CLOEXEC (glibc exposes via fcntl.h or sys/mman.h)
 #include <sys/mman.h>  // memfd_create, mmap, munmap, MAP_FAILED
 #include <unistd.h>    // close, ftruncate
 }
 
-// ── Framework headers ─────────────────────────────────────────────────────────
+// ── Framework headers
+// ─────────────────────────────────────────────────────────
 #include <wl/raii.hpp>      // wl::ScopeExit
 #include <wl/registry.hpp>  // wl::CRegistry
 #include <wl/wl_ptr.hpp>    // wl::WlPtr<T>
 
-// ── Standard library ──────────────────────────────────────────────────────────
+// ── Standard library
+// ──────────────────────────────────────────────────────────
 #include <algorithm>  // std::min
 #include <cerrno>
 #include <cstdio>
@@ -107,12 +110,7 @@ static const wl_message kShooterEvents[] = {
 };
 
 static const wl_interface kShooterIfaceDef = {
-    "weston_screenshooter",
-    1,
-    1,
-    kShooterRequests,
-    1,
-    kShooterEvents,
+    "weston_screenshooter", 1, 1, kShooterRequests, 1, kShooterEvents,
 };
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays,
 //           cppcoreguidelines-avoid-non-const-global-variables,
@@ -192,8 +190,7 @@ class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
 // class is concrete.  Use WlPtr::Attach() rather than _SetProxy() — no
 // listener table is generated for event-free interfaces.
 
-class WlShmPoolHandler
-    : public wayland::client::CWlShmPool<WlShmPoolHandler> {
+class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
  public:
   bool ProcessEvent(uint32_t /*opcode*/, void** /*args*/) override {
     return false;
@@ -221,8 +218,9 @@ class ScreenshooterHandler
   weston_screenshooter::client::WestonScreenshooterOutcome outcome{};
 
   void OnDone(uint32_t out) override {
-    outcome = static_cast<
-        weston_screenshooter::client::WestonScreenshooterOutcome>(out);
+    outcome =
+        static_cast<weston_screenshooter::client::WestonScreenshooterOutcome>(
+            out);
     done = true;
   }
 };
@@ -343,8 +341,7 @@ App::~App() {
   // fire, so the compositor can clean up server-side output tracking.
   if (!output_.IsNull()) {
     const uint32_t bound =
-        std::min(output_ver_,
-                 wayland::client::wl_output_traits::version);
+        std::min(output_ver_, wayland::client::wl_output_traits::version);
     if (bound >= wayland::client::wl_output_traits::Op::Since::Release)
       output_.Get()->Release();  // sends release then nullifies the proxy
   }
@@ -353,7 +350,8 @@ App::~App() {
   //   registry_ → display_
 }
 
-// ── ConnectDisplay ────────────────────────────────────────────────────────────
+// ── ConnectDisplay
+// ────────────────────────────────────────────────────────────
 
 bool App::ConnectDisplay() {
   display_.d = wl_display_connect(nullptr);
@@ -365,7 +363,8 @@ bool App::ConnectDisplay() {
   return true;
 }
 
-// ── ScanGlobals ───────────────────────────────────────────────────────────────
+// ── ScanGlobals
+// ───────────────────────────────────────────────────────────────
 //
 // Use wl::CRegistry with an OnGlobal lambda to collect the three globals we
 // need — access pattern from wlroots/wlr-clients screencopy-dmabuf.c.
@@ -378,10 +377,8 @@ bool App::ScanGlobals() {
     return false;
   }
 
-  registry_.OnGlobal([this](wl::CRegistry& /*reg*/,
-                            uint32_t name,
-                            std::string_view iface,
-                            uint32_t ver) {
+  registry_.OnGlobal([this](wl::CRegistry& /*reg*/, uint32_t name,
+                            std::string_view iface, uint32_t ver) {
     using namespace wayland::client;
     using namespace weston_screenshooter::client;
 
@@ -400,8 +397,7 @@ bool App::ScanGlobals() {
 
   // One roundtrip collects all wl_registry.global advertisements.
   if (wl_display_roundtrip(display_.d) < 0) {
-    std::fprintf(stderr,
-                 "wl-screenshooter: roundtrip for globals failed: %s\n",
+    std::fprintf(stderr, "wl-screenshooter: roundtrip for globals failed: %s\n",
                  std::strerror(errno));
     return false;
   }
@@ -430,7 +426,8 @@ bool App::ScanGlobals() {
   return ok;
 }
 
-// ── BindGlobals ───────────────────────────────────────────────────────────────
+// ── BindGlobals
+// ───────────────────────────────────────────────────────────────
 //
 // Bind the three required globals.  Every handler that has events uses
 // BindHandler<Traits> which calls SetupHandler → _SetProxy to install the
@@ -463,7 +460,8 @@ bool App::BindGlobals() {
   return true;
 }
 
-// ── WaitOutputMode ────────────────────────────────────────────────────────────
+// ── WaitOutputMode
+// ────────────────────────────────────────────────────────────
 //
 // After binding wl_output, the compositor sends geometry + mode (+ done for
 // v2+) events.  A roundtrip ensures those are processed; if done (v2+) has
@@ -495,9 +493,8 @@ bool App::WaitOutputMode() {
 
   // Verify we received at least one current-mode event.
   if (output_.Get()->width <= 0 || output_.Get()->height <= 0) {
-    std::fprintf(
-        stderr,
-        "wl-screenshooter: no current mode received from wl_output\n");
+    std::fprintf(stderr,
+                 "wl-screenshooter: no current mode received from wl_output\n");
     return false;
   }
 
@@ -510,12 +507,13 @@ bool App::WaitOutputMode() {
     return false;
   }
 
-  std::printf("wl-screenshooter: output size %dx%d\n",
-              output_.Get()->width, output_.Get()->height);
+  std::printf("wl-screenshooter: output size %dx%d\n", output_.Get()->width,
+              output_.Get()->height);
   return true;
 }
 
-// ── CreateShmBuffer ───────────────────────────────────────────────────────────
+// ── CreateShmBuffer
+// ───────────────────────────────────────────────────────────
 //
 // Allocate an anonymous shared-memory file, map it, then create a wl_shm_pool
 // and a wl_buffer from it using wl::construct<ChildTraits, Opcode>(parent, …)
@@ -588,7 +586,8 @@ bool App::CreateShmBuffer() {
   return true;
 }
 
-// ── TakeShot ──────────────────────────────────────────────────────────────────
+// ── TakeShot
+// ──────────────────────────────────────────────────────────────────
 //
 // Dispatch the shoot() request and wait for the done event — access pattern
 // from wlroots/wlr-clients screencopy-dmabuf.c.
@@ -601,8 +600,7 @@ bool App::TakeShot() {
   // Dispatch until the done event is delivered.
   while (!shooter_.Get()->done) {
     if (wl_display_dispatch(display_.d) < 0) {
-      std::fprintf(stderr,
-                   "wl-screenshooter: wl_display_dispatch error: %s\n",
+      std::fprintf(stderr, "wl-screenshooter: wl_display_dispatch error: %s\n",
                    std::strerror(errno));
       return false;
     }
@@ -624,14 +622,14 @@ bool App::TakeShot() {
                    "(dimensions or format mismatch)\n");
       return false;
     default:
-      std::fprintf(stderr,
-                   "wl-screenshooter: unknown outcome %u\n",
+      std::fprintf(stderr, "wl-screenshooter: unknown outcome %u\n",
                    static_cast<uint32_t>(shooter_.Get()->outcome));
       return false;
   }
 }
 
-// ── SavePpm ───────────────────────────────────────────────────────────────────
+// ── SavePpm
+// ───────────────────────────────────────────────────────────────────
 //
 // Write the captured pixels to a P6 (binary) PPM file.
 //
@@ -646,8 +644,8 @@ bool App::SavePpm(const char* path) {
 
   FILE* const f = std::fopen(path, "wb");
   if (!f) {
-    std::fprintf(stderr, "wl-screenshooter: cannot open %s: %s\n",
-                 path, std::strerror(errno));
+    std::fprintf(stderr, "wl-screenshooter: cannot open %s: %s\n", path,
+                 std::strerror(errno));
     return false;
   }
   const auto guard = wl::ScopeExit{[f] { std::fclose(f); }};
@@ -669,12 +667,13 @@ bool App::SavePpm(const char* path) {
     }
   }
 
-  std::printf("wl-screenshooter: saved %dx%d screenshot to %s\n",
-              width, height, path);
+  std::printf("wl-screenshooter: saved %dx%d screenshot to %s\n", width, height,
+              path);
   return true;
 }
 
-// ── Run ───────────────────────────────────────────────────────────────────────
+// ── Run
+// ───────────────────────────────────────────────────────────────────────
 
 int App::Run(const char* output_path) {
   if (!ConnectDisplay())
