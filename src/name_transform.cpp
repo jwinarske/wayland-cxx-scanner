@@ -22,7 +22,7 @@ std::string spell_digits(const std::string_view s) {
   out.reserve(s.size() * 5);
   for (char c : s) {
     if (c >= '0' && c <= '9')
-      out += kWords[static_cast<unsigned char>(c) - '0'];
+      out += kWords.at(static_cast<unsigned char>(c) - '0');
     else
       out += c;
   }
