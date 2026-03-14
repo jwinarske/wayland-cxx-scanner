@@ -497,7 +497,9 @@ class App {
   bool BindGlobals();
   bool CreateSurfaces();
   bool InitEgl();
-  void MainLoop();
+  /// Run the render loop.  Returns true on a clean exit (user closed window or
+  /// pressed ESC), false if the compositor disconnected unexpectedly.
+  bool MainLoop();
   // (No CleanupEgl — EglState::~EglState() handles teardown automatically.)
 
   /// Timeout-aware replacement for wl_display_roundtrip().
@@ -605,8 +607,7 @@ int App::Run() {
     return EXIT_FAILURE;
   if (!InitEgl())
     return EXIT_FAILURE;
-  MainLoop();
-  return EXIT_SUCCESS;
+  return MainLoop() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 // ── ConnectDisplay
@@ -916,7 +917,32 @@ bool App::InitEgl() {
 // ── MainLoop
 // ──────────────────────────────────────────────────────────────────
 
-void App::MainLoop() {
+/// Log the reason for a Wayland display error.
+///
+/// wl_display_get_error() returns an errno-compatible code:
+///   • EPROTO  → the compositor sent a bad protocol message; use
+///               wl_display_get_protocol_error() for the exact code.
+///   • anything else → a plain I/O error (EPIPE, ECONNRESET, …).
+static void LogWlError(wl_display* display, const char* context) noexcept {
+  const int err = wl_display_get_error(display);
+  const int code = err ? err : errno;
+  if (code == EPROTO) {
+    const wl_interface* iface = nullptr;
+    uint32_t obj_id = 0;
+    const uint32_t proto_code =
+        wl_display_get_protocol_error(display, &iface, &obj_id);
+    std::fprintf(stderr,
+                 "simple-egl: compositor protocol error (%s): code %u"
+                 " on %s object %u\n",
+                 context, proto_code, iface ? iface->name : "unknown", obj_id);
+  } else {
+    std::fprintf(stderr,
+                 "simple-egl: compositor disconnected (%s): %s\n",
+                 context, std::strerror(code));
+  }
+}
+
+bool App::MainLoop() {
   std::printf("simple-egl: entering render loop (ESC or close to quit)\n");
 
   // Kickstart: arm the first frame callback, then render and commit frame 0.
@@ -933,29 +959,48 @@ void App::MainLoop() {
     // If the compositor socket is temporarily full, poll for writeability
     // instead of spinning.
     while (wl_display_flush(display_.d) < 0) {
-      if (errno != EAGAIN)
-        return;
+      if (errno != EAGAIN) {
+        LogWlError(display_.d, "flush");
+        return false;
+      }
       pollfd pfd{fd, POLLOUT, 0};
-      if (poll(&pfd, 1, -1) < 0 && errno != EINTR)
-        return;
+      if (poll(&pfd, 1, -1) < 0) {
+        if (errno == EINTR)
+          continue;
+        std::fprintf(stderr, "simple-egl: poll(POLLOUT) failed: %s\n",
+                     std::strerror(errno));
+        return false;
+      }
     }
 
     // ── Dispatch phase ───────────────────────────────────────────────────────
     // Dispatch events already in the client-side queue (no blocking).
-    if (wl_display_dispatch_pending(display_.d) < 0)
-      return;
+    if (wl_display_dispatch_pending(display_.d) < 0) {
+      LogWlError(display_.d, "dispatch_pending");
+      return false;
+    }
 
     // ── Wait phase ───────────────────────────────────────────────────────────
     // Block until the compositor sends at least one event (frame done,
     // configure, keyboard input, …).
     pollfd pfd{fd, POLLIN, 0};
-    if (poll(&pfd, 1, -1) < 0 && errno != EINTR)
-      return;
+    if (poll(&pfd, 1, -1) < 0) {
+      if (errno == EINTR)
+        continue;
+      std::fprintf(stderr, "simple-egl: poll(POLLIN) failed: %s\n",
+                   std::strerror(errno));
+      return false;
+    }
 
     // Read and dispatch the incoming event(s).
-    if (wl_display_dispatch(display_.d) < 0)
-      return;
+    if (wl_display_dispatch(display_.d) < 0) {
+      LogWlError(display_.d, "dispatch");
+      return false;
+    }
   }
+
+  std::printf("simple-egl: exiting cleanly\n");
+  return true;
 }
 
 void App::RenderFrame() noexcept {
