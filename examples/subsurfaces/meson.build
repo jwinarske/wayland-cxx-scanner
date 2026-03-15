@@ -3,17 +3,22 @@
 #
 # subsurfaces: C++23 port of Weston clients/subsurfaces.c
 #
-# Demonstrates wl_subsurface using wl_shm solid-colour surfaces:
-#   • Main surface (green) — XDG toplevel
-#   • Red sub-surface (desynchronized) — animates position independently
-#   • Blue sub-surface (synchronized) — commits with the parent
+# Demonstrates wl_subsurface using mixed SHM + EGL surfaces:
+#   • Main surface (green, SHM) — XDG toplevel
+#   • Red sub-surface (EGL, desync) — renders a spinning GL triangle,
+#     position also oscillates independently of the parent
+#   • Blue sub-surface (SHM, sync) — commits only with the parent
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 
-wp_dep         = dependency('wayland-protocols', required: false)
-wl_scanner_dep = dependency('wayland-scanner',   required: false)
+egl_dep         = dependency('egl',               required: false)
+glesv2_dep      = dependency('glesv2',            required: false)
+wayland_egl_dep = dependency('wayland-egl',       required: false)
+wp_dep          = dependency('wayland-protocols',  required: false)
+wl_scanner_dep  = dependency('wayland-scanner',   required: false)
 
-if not (wp_dep.found() and wl_scanner_dep.found())
+if not (egl_dep.found() and glesv2_dep.found() and wayland_egl_dep.found() and
+        wp_dep.found() and wl_scanner_dep.found())
     subdir_done()
 endif
 
@@ -55,6 +60,6 @@ executable(
         xdg_shell_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
-    dependencies: [wayland_client_dep],
+    dependencies: [wayland_client_dep, egl_dep, glesv2_dep, wayland_egl_dep],
     cpp_args: ['-Wno-unused-parameter'],
 )

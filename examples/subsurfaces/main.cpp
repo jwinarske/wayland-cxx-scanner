@@ -3,29 +3,35 @@
 //
 // subsurfaces — C++23 port of Weston clients/subsurfaces.c
 //
-// Demonstrates wl_subsurface using wl_shm solid-colour surfaces:
-//   • Main surface (green)          — XDG toplevel, default 400 × 300
-//   • Red sub-surface (desync)      — animates position independently
-//   • Blue sub-surface (sync)       — commits only with the parent
+// Demonstrates mixed SHM + EGL wl_subsurface rendering:
+//   • Main surface (green, SHM)  — XDG toplevel, default 400 × 300
+//   • Red sub-surface  (desync)  — EGL/OpenGL ES 2 spinning triangle;
+//                                   position also oscillates independently
+//   • Blue sub-surface (sync)    — SHM solid-blue; commits only with parent
 //
-// The sub-surface layout mirrors Weston's original:
+// Surface geometry mirrors Weston's original:
 //   side = min(width, height) / 2
-//   red:  (width−side, 0)         size side × (height−side)
+//   red:  (width−side, 0)           size side × (height−side)
 //   blue: (width−side, height−side) size side × side
 //
-// Each surface is painted with an 8×8 checkerboard pattern so the animation
-// (red sub-surface oscillating horizontally) is clearly visible against the
-// stationary main surface — matching the visual style of the Weston reference.
-//
-// The frame-pacing wl_callback is registered on the MAIN (parent) surface so
-// that it is delivered reliably by every compositor.  Sub-surface callbacks
-// are not guaranteed on all compositor implementations.
+// The red sub-surface uses an EGL context so it can render GL content.
+// A wl_surface.frame callback is registered on red_surface_ before each
+// eglSwapBuffers call to deliver the callback via the implicit commit.
+// The parent surface (main_surface_) is also committed every frame so
+// that wl_subsurface.set_position takes effect (per the Wayland spec).
 //
 // Controls:
-//   Space  — toggle red sub-surface animation
+//   Space  — toggle triangle animation (rotation + position oscillation)
 //   Up     — shrink window (height −100, min 150)
 //   Down   — grow window  (height +100, max 600)
 //   Escape — quit
+
+// ── EGL / OpenGL ES 2 headers — must precede any Wayland headers to avoid
+//    wl_display redefinition issues on some EGL implementations ─────────────
+extern "C" {
+#include <EGL/egl.h>
+#include <GLES2/gl2.h>
+}
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
 // wayland_client.hpp  → namespace wayland::client  (from wayland.xml)
@@ -38,6 +44,8 @@
 extern "C" {
 // Provides extern wl_*_interface symbols used by wl_iface() below.
 #include <wayland-client-protocol.h>
+// wl_egl_window_{create,destroy,resize}
+#include <wayland-egl.h>
 // KEY_ESC, KEY_SPACE, KEY_UP, KEY_DOWN and WL_KEYBOARD_KEY_STATE_PRESSED.
 #include <linux/input-event-codes.h>
 // memfd_create, mmap, munmap, ftruncate
@@ -66,6 +74,76 @@ extern "C" {
 // ── POSIX
 // ─────────────────────────────────────────────────────────────────────
 #include <poll.h>
+
+// ══════════════════════════════════════════════════════════════════════════════
+// OpenGL ES 2 triangle — shader sources and helpers
+//
+// The red sub-surface renders a solid-coloured RGB triangle that rotates at
+// one radian per second (period ≈ 6.28 s) using a per-frame uniform angle.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Vertex shader: accepts (x,y) position and (r,g,b) colour per vertex.
+// Applies a 2-D rotation matrix controlled by the u_angle uniform.
+static constexpr const char* kVertSrc = R"GLSL(
+attribute vec2 a_pos;
+attribute vec3 a_color;
+uniform float u_angle;
+varying vec3 v_color;
+void main() {
+    float c = cos(u_angle);
+    float s = sin(u_angle);
+    vec2 r = vec2(c * a_pos.x - s * a_pos.y,
+                  s * a_pos.x + c * a_pos.y);
+    gl_Position = vec4(r, 0.0, 1.0);
+    v_color = a_color;
+}
+)GLSL";
+
+// Fragment shader: outputs the interpolated per-vertex colour.
+static constexpr const char* kFragSrc = R"GLSL(
+precision mediump float;
+varying vec3 v_color;
+void main() {
+    gl_FragColor = vec4(v_color, 1.0);
+}
+)GLSL";
+
+/// Compile a GLSL ES shader of the given @p type from @p src.
+/// Returns 0 and prints a diagnostic on failure.
+static GLuint CompileShader(GLenum type, const char* src) noexcept {
+  GLuint sh = glCreateShader(type);
+  glShaderSource(sh, 1, &src, nullptr);
+  glCompileShader(sh);
+  GLint ok = GL_FALSE;
+  glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+  if (!ok) {
+    char log[512];
+    glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
+    std::fprintf(stderr, "subsurfaces: shader compile failed:\n%s\n", log);
+    glDeleteShader(sh);
+    return 0;
+  }
+  return sh;
+}
+
+/// Link a GLSL ES program from an already-compiled @p vert and @p frag shader.
+/// Returns 0 and prints a diagnostic on failure.
+static GLuint LinkProgram(GLuint vert, GLuint frag) noexcept {
+  GLuint prog = glCreateProgram();
+  glAttachShader(prog, vert);
+  glAttachShader(prog, frag);
+  glLinkProgram(prog);
+  GLint ok = GL_FALSE;
+  glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+  if (!ok) {
+    char log[512];
+    glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
+    std::fprintf(stderr, "subsurfaces: program link failed:\n%s\n", log);
+    glDeleteProgram(prog);
+    return 0;
+  }
+  return prog;
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() definitions — core Wayland interfaces
@@ -496,7 +574,7 @@ class App {
   //   frame_cb_ → keyboard_ → seat_
   //   → xdg_toplevel_ → xdg_surface_ → xdg_wm_base_
   //   → blue_subsurface_ → blue_surface_
-  //   → red_subsurface_  → red_surface_
+  //   → gl_ (EGL teardown) → red_subsurface_ → red_surface_
   //   → main_surface_
   //   → subcompositor_ → compositor_ → shm_
   //   → shm_mem_ (munmap + close)
@@ -528,9 +606,8 @@ class App {
   //    everything that holds pointers into it) ────────────────────────────
   ShmMapping shm_mem_;
 
-  // ── Buffers (hold pointers into shm_mem_.data) ────────────────────────
+  // ── SHM buffers (main and blue surfaces only; red uses EGL) ──────────
   wl::WlPtr<WlBufferHandler> main_buf_;
-  wl::WlPtr<WlBufferHandler> red_buf_;
   wl::WlPtr<WlBufferHandler> blue_buf_;
 
   // ── Surfaces ───────────────────────────────────────────────────────────
@@ -541,10 +618,44 @@ class App {
   wl::WlPtr<WlSurfaceHandler> red_surface_;
   wl::WlPtr<WlSubsurfaceHandler> red_subsurface_;
 
+  // ── EGL state for the red sub-surface GL triangle ─────────────────────
+  // Declared after red_surface_/red_subsurface_ so it is destroyed first
+  // (reverse order), ensuring EGL cleanup before the wl_surface proxy goes.
+  struct GlState {
+    EGLDisplay display = EGL_NO_DISPLAY;
+    EGLContext context = EGL_NO_CONTEXT;
+    EGLSurface surface = EGL_NO_SURFACE;
+    EGLConfig  config  = {};
+    wl_egl_window* window = nullptr;
+    GLuint prog    = 0;
+    GLint  a_pos   = -1;
+    GLint  a_color = -1;
+    GLint  u_angle = -1;
+
+    ~GlState() noexcept {
+      if (display == EGL_NO_DISPLAY)
+        return;
+      eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+      if (prog)
+        glDeleteProgram(prog);
+      if (surface != EGL_NO_SURFACE)
+        eglDestroySurface(display, surface);
+      if (context != EGL_NO_CONTEXT)
+        eglDestroyContext(display, context);
+      if (window)
+        wl_egl_window_destroy(window);
+      eglTerminate(display);
+    }
+    GlState() = default;
+    GlState(const GlState&) = delete;
+    GlState& operator=(const GlState&) = delete;
+  } gl_;
+
   wl::WlPtr<WlSurfaceHandler> blue_surface_;
   wl::WlPtr<WlSubsurfaceHandler> blue_subsurface_;
 
-  // ── Frame-pacing callback (on the red sub-surface for desync animation)
+  // ── Frame-pacing callback (registered on red_surface_ before each
+  //    eglSwapBuffers so the compositor delivers it via the implicit commit)
   wl::WlPtr<WlCallbackHandler> frame_cb_;
 
   // ── Application state ─────────────────────────────────────────────────
@@ -566,9 +677,6 @@ class App {
   int blue_w_ = 0;  // width of blue sub-surface
   int blue_h_ = 0;  // height of blue sub-surface
 
-  // Animation phase (driven by frame timestamps).
-  double anim_phase_ = 0.0;
-
   // ── Globals recorded during registry scan ─────────────────────────────
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   uint32_t shm_name_ = 0, shm_ver_ = 0;
@@ -584,6 +692,8 @@ class App {
   bool BindGlobals();
   bool CreateSurfaces();
   bool CreateBuffers();
+  /// Initialise EGL + compile GL shaders for the red sub-surface triangle.
+  bool InitGl() noexcept;
   bool InitialCommit();
   bool MainLoop();
 
@@ -592,11 +702,13 @@ class App {
 
   void RequestFrameCallback() noexcept;
   void AdvanceAnimation(uint32_t time_ms) noexcept;
+  /// Render one GL triangle frame and swap buffers (commits red_surface_).
+  void RenderTriangle(uint32_t time_ms) noexcept;
 
   /// Compute sub-surface geometry from current width_/height_.
   void ApplyGeometry() noexcept;
 
-  /// (Re)create all SHM buffers to match the current geometry.
+  /// (Re)create SHM buffers for main and blue surfaces.
   /// Returns false on allocation failure.
   [[nodiscard]] bool ReallocBuffers() noexcept;
 
@@ -675,6 +787,8 @@ int App::Run() {
   if (!CreateSurfaces())
     return EXIT_FAILURE;
   if (!CreateBuffers())
+    return EXIT_FAILURE;
+  if (!InitGl())
     return EXIT_FAILURE;
   if (!InitialCommit())
     return EXIT_FAILURE;
@@ -1008,18 +1122,16 @@ bool App::ReallocBuffers() noexcept {
 
   // Destroy previous buffers if any.
   main_buf_.Reset();
-  red_buf_.Reset();
   blue_buf_.Reset();
   shm_mem_.Reset();
 
   const std::size_t main_stride = static_cast<std::size_t>(width_) * 4u;
   const std::size_t main_size = main_stride * static_cast<std::size_t>(height_);
-  const std::size_t red_stride = static_cast<std::size_t>(red_w_) * 4u;
-  const std::size_t red_size = red_stride * static_cast<std::size_t>(red_h_);
   const std::size_t blue_stride = static_cast<std::size_t>(blue_w_) * 4u;
   const std::size_t blue_size = blue_stride * static_cast<std::size_t>(blue_h_);
 
-  const std::size_t total = main_size + red_size + blue_size;
+  // Red sub-surface uses EGL — no SHM buffer needed for it.
+  const std::size_t total = main_size + blue_size;
 
   if (!shm_mem_.Create(total)) {
     std::fprintf(stderr, "subsurfaces: SHM allocation failed\n");
@@ -1030,14 +1142,11 @@ bool App::ReallocBuffers() noexcept {
   auto* pixels = static_cast<uint32_t*>(shm_mem_.data);
   // Green: XRGB  (R=0, G=0xCC, B=0)
   std::fill(pixels, pixels + (main_size / 4u), 0x0000CC00u);
-  // Red: XRGB
-  auto* red_px = pixels + (main_size / 4u);
-  std::fill(red_px, red_px + (red_size / 4u), 0x00CC0000u);
   // Blue: XRGB
-  auto* blue_px = red_px + (red_size / 4u);
+  auto* blue_px = pixels + (main_size / 4u);
   std::fill(blue_px, blue_px + (blue_size / 4u), 0x000000CCu);
 
-  // Create a single pool covering all surfaces.
+  // Create a single pool covering main + blue surfaces.
   wl::WlPtr<WlShmPoolHandler> pool;
   if (wl_proxy* raw =
           wl::construct<wl_shm_pool_traits, wl_shm_traits::Op::CreatePool>(
@@ -1062,23 +1171,10 @@ bool App::ReallocBuffers() noexcept {
     return false;
   }
 
-  // Red buffer.
+  // Blue buffer (starts at offset main_size in the pool).
   if (wl_proxy* raw =
           wl::construct<wl_buffer_traits, wl_shm_pool_traits::Op::CreateBuffer>(
               *pool.Get(), static_cast<int32_t>(main_size),
-              static_cast<int32_t>(red_w_), static_cast<int32_t>(red_h_),
-              static_cast<int32_t>(red_stride), WL_SHM_FORMAT_XRGB8888)) {
-    red_buf_.Get()->_SetProxy(raw);
-  } else {
-    std::fprintf(stderr,
-                 "subsurfaces: wl_shm_pool.create_buffer (red) failed\n");
-    return false;
-  }
-
-  // Blue buffer.
-  if (wl_proxy* raw =
-          wl::construct<wl_buffer_traits, wl_shm_pool_traits::Op::CreateBuffer>(
-              *pool.Get(), static_cast<int32_t>(main_size + red_size),
               static_cast<int32_t>(blue_w_), static_cast<int32_t>(blue_h_),
               static_cast<int32_t>(blue_stride), WL_SHM_FORMAT_XRGB8888)) {
     blue_buf_.Get()->_SetProxy(raw);
@@ -1104,28 +1200,22 @@ bool App::InitialCommit() {
   blue_subsurface_.Get()->SetPosition(static_cast<int32_t>(blue_x_),
                                       static_cast<int32_t>(blue_y_));
 
-  // Commit the sub-surfaces first.
-  red_surface_.Get()->Attach(red_buf_.Get()->GetProxy(), 0, 0);
-  red_surface_.Get()->Damage(0, 0, red_w_, red_h_);
-  red_surface_.Get()->Commit();
-  red_buf_.Get()->busy = true;
-
+  // Commit the blue sub-surface (SHM).
   blue_surface_.Get()->Attach(blue_buf_.Get()->GetProxy(), 0, 0);
   blue_surface_.Get()->Damage(0, 0, blue_w_, blue_h_);
   blue_surface_.Get()->Commit();
   blue_buf_.Get()->busy = true;
 
-  // Commit the main surface (this also applies blue's sync'd position).
+  // Commit the main surface (also applies blue's sync'd position).
   main_surface_.Get()->Attach(main_buf_.Get()->GetProxy(), 0, 0);
   main_surface_.Get()->Damage(0, 0, width_, height_);
   main_surface_.Get()->Commit();
   main_buf_.Get()->busy = true;
 
-  // Arm the first frame callback on the red surface to drive the animation.
-  // The callback is only delivered to the compositor on the next commit of
-  // the surface it was registered on, so commit red_surface_ after arming.
-  RequestFrameCallback();
-  red_surface_.Get()->Commit();
+  // Render the first GL triangle frame on the red sub-surface.
+  // RequestFrameCallback() is called inside RenderTriangle() before
+  // eglSwapBuffers so the callback request is included in the implicit commit.
+  RenderTriangle(0);
 
   return true;
 }
@@ -1134,6 +1224,11 @@ bool App::InitialCommit() {
 // ────────────────────────────────────────────────────
 
 void App::RequestFrameCallback() noexcept {
+  // Register a wl_surface.frame callback on red_surface_ BEFORE calling
+  // eglSwapBuffers.  eglSwapBuffers commits red_surface_ implicitly; because
+  // the callback is pending at commit time, the compositor receives both the
+  // new buffer and the frame-callback request in one message batch and fires
+  // the callback when it next presents the surface.
   using wl_s = wayland::client::wl_surface_traits;
   using wl_c = wayland::client::wl_callback_traits;
   if (wl_proxy* raw =
@@ -1154,35 +1249,179 @@ void App::OnFrameReady(uint32_t time_ms) noexcept {
   if (animate_)
     AdvanceAnimation(time_ms);
 
-  // Arm the next frame callback BEFORE the commit so both the callback
-  // request and the surface state are delivered to the compositor in the
-  // same message batch (mirrors examples/simple-egl/main.cpp:OnFrameReady).
-  RequestFrameCallback();
+  // Render the next GL triangle frame.  RenderTriangle() registers a new
+  // frame callback on red_surface_ before calling eglSwapBuffers, so the
+  // callback is delivered via the implicit commit inside eglSwapBuffers.
+  RenderTriangle(time_ms);
 
-  // wl_subsurface.set_position always takes effect on the PARENT surface's
-  // next wl_surface.commit, regardless of the subsurface's sync/desync mode.
-  // Per the Wayland spec: "Both sub-commands simply take effect whenever a
-  // wl_surface.commit is done on the parent surface, regardless of the
-  // sub-surface's mode."  So we must commit main_surface_ every frame to
-  // make the position change visible.  Committing red_surface_ (child) only
-  // delivers the frame callback for pacing; it does not move the subsurface.
-  red_surface_.Get()->Commit();
+  // Commit the parent surface to apply any wl_subsurface.set_position change
+  // from AdvanceAnimation.  Per the Wayland spec, set_position always takes
+  // effect on the parent's next commit regardless of the sub-surface mode.
   main_surface_.Get()->Commit();
 }
 
 void App::AdvanceAnimation(uint32_t time_ms) noexcept {
   // Oscillate the red sub-surface horizontally within its column.
-  // Amplitude = side_ / 3, period = 2 s.
-  constexpr double kPeriodMs = 2000.0;
-  anim_phase_ = static_cast<double>(time_ms) * (2.0 * M_PI / kPeriodMs);
-
+  // Uses the same angle as RenderTriangle so position and triangle spin
+  // stay in visual sync: one oscillation ≈ one triangle rotation (≈6.28 s).
+  const double angle = static_cast<double>(time_ms) / 1000.0;
   const auto amplitude = static_cast<double>(side_) / 3.0;
-  const auto dx = static_cast<int32_t>(amplitude * std::sin(anim_phase_));
+  const auto dx = static_cast<int32_t>(amplitude * std::sin(angle));
 
   red_subsurface_.Get()->SetPosition(static_cast<int32_t>(red_x_) + dx,
                                      static_cast<int32_t>(red_y_));
-  // The commit that delivers the new position requires a parent
-  // (main_surface_) commit; see OnFrameReady for details.
+  // Position takes effect on the parent (main_surface_) commit in OnFrameReady.
+}
+
+// ── InitGl
+// ────────────────────────────────────────────────────────────────────
+
+bool App::InitGl() noexcept {
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-cstyle-cast)
+  gl_.display = eglGetDisplay(static_cast<EGLNativeDisplayType>(display_.d));
+  if (gl_.display == EGL_NO_DISPLAY) {
+    std::fprintf(stderr, "subsurfaces: eglGetDisplay failed\n");
+    return false;
+  }
+
+  EGLint major = 0, minor = 0;
+  if (!eglInitialize(gl_.display, &major, &minor)) {
+    std::fprintf(stderr, "subsurfaces: eglInitialize failed\n");
+    return false;
+  }
+  std::printf("subsurfaces: EGL %d.%d\n", major, minor);
+
+  if (!eglBindAPI(EGL_OPENGL_ES_API)) {
+    std::fprintf(stderr, "subsurfaces: eglBindAPI(OPENGL_ES) failed\n");
+    return false;
+  }
+
+  // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
+  static const EGLint kCfgAttribs[] = {
+      EGL_SURFACE_TYPE,    EGL_WINDOW_BIT,
+      EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+      EGL_RED_SIZE,        8,
+      EGL_GREEN_SIZE,      8,
+      EGL_BLUE_SIZE,       8,
+      EGL_ALPHA_SIZE,      8,
+      EGL_NONE,
+  };
+  static constexpr EGLint kCtxAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 2,
+                                            EGL_NONE};
+  // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
+
+  EGLint n = 0;
+  if (!eglChooseConfig(gl_.display, std::data(kCfgAttribs), &gl_.config, 1,
+                       &n) ||
+      n < 1) {
+    std::fprintf(stderr, "subsurfaces: eglChooseConfig failed\n");
+    return false;
+  }
+
+  gl_.context = eglCreateContext(gl_.display, gl_.config, EGL_NO_CONTEXT,
+                                 std::data(kCtxAttribs));
+  if (gl_.context == EGL_NO_CONTEXT) {
+    std::fprintf(stderr, "subsurfaces: eglCreateContext failed\n");
+    return false;
+  }
+
+  // Create an EGL window surface backed by the red wl_surface.
+  gl_.window = wl_egl_window_create(
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      reinterpret_cast<wl_surface*>(red_surface_.Get()->GetProxy()),
+      red_w_, red_h_);
+  if (!gl_.window) {
+    std::fprintf(stderr, "subsurfaces: wl_egl_window_create failed\n");
+    return false;
+  }
+
+  gl_.surface = eglCreateWindowSurface(
+      gl_.display, gl_.config,
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      reinterpret_cast<EGLNativeWindowType>(gl_.window), nullptr);
+  if (gl_.surface == EGL_NO_SURFACE) {
+    std::fprintf(stderr, "subsurfaces: eglCreateWindowSurface failed\n");
+    return false;
+  }
+
+  if (!eglMakeCurrent(gl_.display, gl_.surface, gl_.surface, gl_.context)) {
+    std::fprintf(stderr, "subsurfaces: eglMakeCurrent failed\n");
+    return false;
+  }
+
+  // Unconstrained swap interval: frame pacing is driven by the Wayland
+  // wl_surface.frame callback, not by EGL blocking on vsync.
+  eglSwapInterval(gl_.display, 0);
+
+  // Compile shaders and link the triangle program.
+  GLuint vert = CompileShader(GL_VERTEX_SHADER, kVertSrc);
+  GLuint frag = CompileShader(GL_FRAGMENT_SHADER, kFragSrc);
+  if (!vert || !frag) {
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    return false;
+  }
+  gl_.prog = LinkProgram(vert, frag);
+  glDeleteShader(vert);
+  glDeleteShader(frag);
+  if (!gl_.prog)
+    return false;
+
+  gl_.a_pos   = glGetAttribLocation(gl_.prog, "a_pos");
+  gl_.a_color = glGetAttribLocation(gl_.prog, "a_color");
+  gl_.u_angle = glGetUniformLocation(gl_.prog, "u_angle");
+
+  std::printf("subsurfaces: GL renderer: %s\n", glGetString(GL_RENDERER));
+  return true;
+}
+
+// ── RenderTriangle
+// ────────────────────────────────────────────────────────────
+
+void App::RenderTriangle(uint32_t time_ms) noexcept {
+  eglMakeCurrent(gl_.display, gl_.surface, gl_.surface, gl_.context);
+  glViewport(0, 0, red_w_, red_h_);
+
+  // Dark background so the coloured triangle is clearly visible.
+  glClearColor(0.05f, 0.05f, 0.10f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  glUseProgram(gl_.prog);
+
+  // Rotation angle: one full turn per ~6.28 seconds (one radian per second).
+  glUniform1f(gl_.u_angle, static_cast<float>(time_ms) / 1000.0f);
+
+  // Equilateral-ish triangle: (x, y, r, g, b) per vertex.
+  // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
+  static constexpr float kVerts[] = {
+      // x      y      r     g     b
+       0.0f,  0.8f,  1.0f, 0.0f, 0.0f,   // top         — red
+      -0.7f, -0.4f,  0.0f, 1.0f, 0.0f,   // bottom-left  — green
+       0.7f, -0.4f,  0.0f, 0.0f, 1.0f,   // bottom-right — blue
+  };
+  // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
+
+  constexpr GLsizei kStride = 5 * static_cast<GLsizei>(sizeof(float));
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  glVertexAttribPointer(static_cast<GLuint>(gl_.a_pos), 2, GL_FLOAT, GL_FALSE,
+                        kStride,
+                        reinterpret_cast<const void*>(std::data(kVerts)));
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  glVertexAttribPointer(
+      static_cast<GLuint>(gl_.a_color), 3, GL_FLOAT, GL_FALSE, kStride,
+      reinterpret_cast<const void*>(std::data(kVerts) + 2));
+  glEnableVertexAttribArray(static_cast<GLuint>(gl_.a_pos));
+  glEnableVertexAttribArray(static_cast<GLuint>(gl_.a_color));
+
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+
+  // Register the frame callback BEFORE eglSwapBuffers: the callback request
+  // is pending on red_surface_, and eglSwapBuffers commits the surface
+  // (including all pending Wayland state) so the compositor receives both
+  // the new buffer and the callback in one message.
+  RequestFrameCallback();
+
+  eglSwapBuffers(gl_.display, gl_.surface);
 }
 
 // ── App callbacks
@@ -1197,6 +1436,11 @@ void App::OnToplevelConfigure(int32_t w, int32_t h) {
   if (w > 0 && h > 0) {
     width_ = static_cast<int>(std::min(w, kMaxDim));
     height_ = static_cast<int>(std::min(h, kMaxDim));
+    // Recompute sub-surface geometry and resize the EGL window so the GL
+    // triangle fills the updated red sub-surface area.
+    ApplyGeometry();
+    if (gl_.window)
+      wl_egl_window_resize(gl_.window, red_w_, red_h_, 0, 0);
   }
 }
 
@@ -1240,14 +1484,14 @@ void App::OnKey(uint32_t key, uint32_t state) {
         height_ = new_h;
         ApplyGeometry();
         if (ReallocBuffers()) {
-          // Recommit everything with new dimensions.
+          // Resize the EGL window for the red sub-surface.
+          if (gl_.window)
+            wl_egl_window_resize(gl_.window, red_w_, red_h_, 0, 0);
+          // Recommit blue and main with new dimensions.
           red_subsurface_.Get()->SetPosition(static_cast<int32_t>(red_x_),
                                              static_cast<int32_t>(red_y_));
           blue_subsurface_.Get()->SetPosition(static_cast<int32_t>(blue_x_),
                                               static_cast<int32_t>(blue_y_));
-          red_surface_.Get()->Attach(red_buf_.Get()->GetProxy(), 0, 0);
-          red_surface_.Get()->Damage(0, 0, red_w_, red_h_);
-          red_surface_.Get()->Commit();
           blue_surface_.Get()->Attach(blue_buf_.Get()->GetProxy(), 0, 0);
           blue_surface_.Get()->Damage(0, 0, blue_w_, blue_h_);
           blue_surface_.Get()->Commit();
@@ -1266,13 +1510,13 @@ void App::OnKey(uint32_t key, uint32_t state) {
         height_ = new_h;
         ApplyGeometry();
         if (ReallocBuffers()) {
+          // Resize the EGL window for the red sub-surface.
+          if (gl_.window)
+            wl_egl_window_resize(gl_.window, red_w_, red_h_, 0, 0);
           red_subsurface_.Get()->SetPosition(static_cast<int32_t>(red_x_),
                                              static_cast<int32_t>(red_y_));
           blue_subsurface_.Get()->SetPosition(static_cast<int32_t>(blue_x_),
                                               static_cast<int32_t>(blue_y_));
-          red_surface_.Get()->Attach(red_buf_.Get()->GetProxy(), 0, 0);
-          red_surface_.Get()->Damage(0, 0, red_w_, red_h_);
-          red_surface_.Get()->Commit();
           blue_surface_.Get()->Attach(blue_buf_.Get()->GetProxy(), 0, 0);
           blue_surface_.Get()->Damage(0, 0, blue_w_, blue_h_);
           blue_surface_.Get()->Commit();
