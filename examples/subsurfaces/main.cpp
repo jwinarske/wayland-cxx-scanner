@@ -1114,7 +1114,10 @@ bool App::InitialCommit() {
   main_buf_.Get()->busy = true;
 
   // Arm the first frame callback on the red surface to drive the animation.
+  // The callback is only delivered to the compositor on the next commit of
+  // the surface it was registered on, so commit red_surface_ after arming.
   RequestFrameCallback();
+  red_surface_.Get()->Commit();
 
   return true;
 }
@@ -1143,8 +1146,13 @@ void App::OnFrameReady(uint32_t time_ms) noexcept {
   if (animate_)
     AdvanceAnimation(time_ms);
 
-  // Re-arm for the next frame.
+  // Arm the next frame callback BEFORE the commit so both the callback
+  // request and the surface state are delivered to the compositor in the
+  // same message batch (mirrors examples/simple-egl/main.cpp:OnFrameReady).
+  // The commit also delivers the position change set by AdvanceAnimation
+  // (which takes effect on the child commit in desync mode).
   RequestFrameCallback();
+  red_surface_.Get()->Commit();
 }
 
 void App::AdvanceAnimation(uint32_t time_ms) noexcept {
@@ -1158,9 +1166,8 @@ void App::AdvanceAnimation(uint32_t time_ms) noexcept {
 
   red_subsurface_.Get()->SetPosition(static_cast<int32_t>(red_x_) + dx,
                                      static_cast<int32_t>(red_y_));
-
-  // Commit the red surface so the new position takes effect (desync mode).
-  red_surface_.Get()->Commit();
+  // The commit that delivers the new position (desync mode) and the
+  // next frame callback happens in OnFrameReady, after RequestFrameCallback.
 }
 
 // ── App callbacks
