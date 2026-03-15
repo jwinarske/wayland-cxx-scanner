@@ -1149,10 +1149,17 @@ void App::OnFrameReady(uint32_t time_ms) noexcept {
   // Arm the next frame callback BEFORE the commit so both the callback
   // request and the surface state are delivered to the compositor in the
   // same message batch (mirrors examples/simple-egl/main.cpp:OnFrameReady).
-  // The commit also delivers the position change set by AdvanceAnimation
-  // (which takes effect on the child commit in desync mode).
   RequestFrameCallback();
+
+  // wl_subsurface.set_position always takes effect on the PARENT surface's
+  // next wl_surface.commit, regardless of the subsurface's sync/desync mode.
+  // Per the Wayland spec: "Both sub-commands simply take effect whenever a
+  // wl_surface.commit is done on the parent surface, regardless of the
+  // sub-surface's mode."  So we must commit main_surface_ every frame to
+  // make the position change visible.  Committing red_surface_ (child) only
+  // delivers the frame callback for pacing; it does not move the subsurface.
   red_surface_.Get()->Commit();
+  main_surface_.Get()->Commit();
 }
 
 void App::AdvanceAnimation(uint32_t time_ms) noexcept {
@@ -1166,8 +1173,8 @@ void App::AdvanceAnimation(uint32_t time_ms) noexcept {
 
   red_subsurface_.Get()->SetPosition(static_cast<int32_t>(red_x_) + dx,
                                      static_cast<int32_t>(red_y_));
-  // The commit that delivers the new position (desync mode) and the
-  // next frame callback happens in OnFrameReady, after RequestFrameCallback.
+  // The commit that delivers the new position requires a parent
+  // (main_surface_) commit; see OnFrameReady for details.
 }
 
 // ── App callbacks
