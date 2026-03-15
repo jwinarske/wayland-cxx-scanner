@@ -13,6 +13,14 @@
 //   red:  (width−side, 0)         size side × (height−side)
 //   blue: (width−side, height−side) size side × side
 //
+// Each surface is painted with an 8×8 checkerboard pattern so the animation
+// (red sub-surface oscillating horizontally) is clearly visible against the
+// stationary main surface — matching the visual style of the Weston reference.
+//
+// The frame-pacing wl_callback is registered on the MAIN (parent) surface so
+// that it is delivered reliably by every compositor.  Sub-surface callbacks
+// are not guaranteed on all compositor implementations.
+//
 // Controls:
 //   Space  — toggle red sub-surface animation
 //   Up     — shrink window (height −100, min 150)
