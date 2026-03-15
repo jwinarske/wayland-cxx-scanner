@@ -6,3 +6,7 @@ subdir('minimal')
 subdir('simple-egl')
 # wayland-info uses subdir_done() internally if wayland-scanner dep is absent.
 subdir('wayland-info')
+# subsurfaces uses subdir_done() internally if wayland-protocols/scanner absent.
+subdir('subsurfaces')
+# presentation-shm uses subdir_done() internally if deps absent.
+subdir('presentation-shm')
