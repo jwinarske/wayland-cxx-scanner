@@ -666,6 +666,13 @@ class App {
   int width_ = 400;
   int height_ = 300;
 
+  // Accumulated animation time — incremented only while animate_ is true.
+  // Both AdvanceAnimation and RenderTriangle use this so that pausing and
+  // resuming animation never causes a position or rotation jump.
+  uint32_t anim_elapsed_ms_ = 0;
+  // Timestamp of the previous frame (used to compute per-frame deltas).
+  uint32_t prev_frame_ms_ = 0;
+
   // Derived geometry (recalculated in ApplyGeometry).
   int side_ = 0;    // sub-surface side dimension
   int red_x_ = 0;   // base x of red sub-surface
@@ -701,9 +708,9 @@ class App {
       int timeout_ms = kRoundtripTimeoutMs) const noexcept;
 
   void RequestFrameCallback() noexcept;
-  void AdvanceAnimation(uint32_t time_ms) noexcept;
+  void AdvanceAnimation(uint32_t anim_ms) noexcept;
   /// Render one GL triangle frame and swap buffers (commits red_surface_).
-  void RenderTriangle(uint32_t time_ms) noexcept;
+  void RenderTriangle(uint32_t anim_ms) noexcept;
 
   /// Compute sub-surface geometry from current width_/height_.
   void ApplyGeometry() noexcept;
@@ -1246,13 +1253,24 @@ void App::OnFrameReady(uint32_t time_ms) noexcept {
       wl_proxy_destroy(spent);
   }};
 
+  // Compute per-frame delta and accumulate animation time only while running.
+  // This ensures pausing and resuming never causes a position/rotation jump:
+  // the angle is always derived from time actually spent animating, not from
+  // wall-clock time.
+  if (prev_frame_ms_ != 0) {
+    const uint32_t delta = time_ms - prev_frame_ms_;
+    if (animate_)
+      anim_elapsed_ms_ += delta;
+  }
+  prev_frame_ms_ = time_ms;
+
   if (animate_)
-    AdvanceAnimation(time_ms);
+    AdvanceAnimation(anim_elapsed_ms_);
 
   // Render the next GL triangle frame.  RenderTriangle() registers a new
   // frame callback on red_surface_ before calling eglSwapBuffers, so the
   // callback is delivered via the implicit commit inside eglSwapBuffers.
-  RenderTriangle(time_ms);
+  RenderTriangle(anim_elapsed_ms_);
 
   // Commit the parent surface to apply any wl_subsurface.set_position change
   // from AdvanceAnimation.  Per the Wayland spec, set_position always takes
@@ -1260,11 +1278,13 @@ void App::OnFrameReady(uint32_t time_ms) noexcept {
   main_surface_.Get()->Commit();
 }
 
-void App::AdvanceAnimation(uint32_t time_ms) noexcept {
+void App::AdvanceAnimation(uint32_t anim_ms) noexcept {
   // Oscillate the red sub-surface horizontally within its column.
   // Uses the same angle as RenderTriangle so position and triangle spin
   // stay in visual sync: one oscillation ≈ one triangle rotation (≈6.28 s).
-  const double angle = static_cast<double>(time_ms) / 1000.0;
+  // anim_ms is the accumulated animation time (not wall-clock), so pausing
+  // and resuming never causes a position jump.
+  const double angle = static_cast<double>(anim_ms) / 1000.0;
   const auto amplitude = static_cast<double>(side_) / 3.0;
   const auto dx = static_cast<int32_t>(amplitude * std::sin(angle));
 
@@ -1378,7 +1398,7 @@ bool App::InitGl() noexcept {
 // ── RenderTriangle
 // ────────────────────────────────────────────────────────────
 
-void App::RenderTriangle(uint32_t time_ms) noexcept {
+void App::RenderTriangle(uint32_t anim_ms) noexcept {
   eglMakeCurrent(gl_.display, gl_.surface, gl_.surface, gl_.context);
   glViewport(0, 0, red_w_, red_h_);
 
@@ -1389,7 +1409,9 @@ void App::RenderTriangle(uint32_t time_ms) noexcept {
   glUseProgram(gl_.prog);
 
   // Rotation angle: one full turn per ~6.28 seconds (one radian per second).
-  glUniform1f(gl_.u_angle, static_cast<float>(time_ms) / 1000.0f);
+  // anim_ms is the accumulated animation time, so the triangle freezes
+  // while animation is paused and resumes smoothly without jumping.
+  glUniform1f(gl_.u_angle, static_cast<float>(anim_ms) / 1000.0f);
 
   // Equilateral-ish triangle: (x, y, r, g, b) per vertex.
   // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
