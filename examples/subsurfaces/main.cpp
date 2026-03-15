@@ -968,6 +968,22 @@ bool App::CreateSurfaces() {
   // Synchronized: the blue sub-surface state is applied on the parent commit.
   blue_subsurface_.Get()->SetSync();
 
+  // XDG shell requires an initial empty commit on the main surface so the
+  // compositor sends the mandatory xdg_surface::configure event.  Only after
+  // that event is received (and auto-acked by XdgSurfaceHandler::OnConfigure)
+  // may the client attach a buffer and commit again.  This mirrors the pattern
+  // in examples/simple-egl/main.cpp:CreateSurfaces().
+  main_surface_.Get()->Commit();
+  if (!RoundtripWithTimeout()) {
+    std::fprintf(stderr,
+                 "subsurfaces: timed out waiting for initial configure\n");
+    return false;
+  }
+  if (!configured_) {
+    std::fprintf(stderr, "subsurfaces: no configure received\n");
+    return false;
+  }
+
   return true;
 }
 
@@ -1096,23 +1112,6 @@ bool App::InitialCommit() {
   main_surface_.Get()->Damage(0, 0, width_, height_);
   main_surface_.Get()->Commit();
   main_buf_.Get()->busy = true;
-
-  // Wait for the compositor's initial configure.
-  if (!RoundtripWithTimeout()) {
-    std::fprintf(stderr,
-                 "subsurfaces: timed out waiting for initial configure\n");
-    return false;
-  }
-
-  if (!configured_) {
-    // Some compositors (e.g. wlroots) defer configure until the surface is
-    // committed once.  Re-commit and try once more.
-    main_surface_.Get()->Commit();
-    if (!RoundtripWithTimeout()) {
-      std::fprintf(stderr, "subsurfaces: no configure received\n");
-      return false;
-    }
-  }
 
   // Arm the first frame callback on the red surface to drive the animation.
   RequestFrameCallback();

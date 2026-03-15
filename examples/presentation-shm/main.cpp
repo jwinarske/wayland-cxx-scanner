@@ -773,9 +773,6 @@ class App {
     return true;
   }
 
-  // Pending configure serial (0 = none pending).
-  uint32_t configure_serial_ = 0;
-
   static void LogWlError(wl_display* display, const char* ctx) noexcept;
 };
 
@@ -1098,10 +1095,15 @@ void App::AttachPresentationFeedback(uint32_t stamp_ms) noexcept {
   clock_gettime(presentation_.Get()->clk_id, &fb->commit);
   fb->target = fb->commit;
 
-  // wp_presentation.feedback(surface) → new wp_presentation_feedback.
-  if (wl_proxy* raw = wl::construct<wp_presentation_feedback_traits,
-                                    wp_presentation_traits::Op::Feedback>(
-          *presentation_.Get(), surface_.Get()->GetProxy())) {
+  // wp_presentation.feedback has protocol signature "on" — the surface object
+  // argument comes FIRST, then the new_id.  wl::construct<> always prepends
+  // nullptr (the new_id placeholder) before user args, which is correct for
+  // "no" requests but wrong for "on".  Use _MarshalNew directly so the args
+  // are in wire order: (surface, nullptr).
+  if (wl_proxy* raw = presentation_.Get()->_MarshalNew(
+          wp_presentation_traits::Op::Feedback,
+          &wp_presentation_feedback_traits::wl_iface(),
+          surface_.Get()->GetProxy(), nullptr)) {
     fb->_SetProxy(raw);
     feedback_list_.push_back(fb);
   } else {
@@ -1115,11 +1117,6 @@ void App::CommitNext(uint32_t stamp_ms) noexcept {
     std::fprintf(stderr,
                  "presentation-shm: all buffers busy — skipping frame\n");
     return;
-  }
-
-  if (configure_serial_) {
-    xdg_surface_.Get()->AckConfigure(configure_serial_);
-    configure_serial_ = 0;
   }
 
   surface_.Get()->Attach(pool_.bufs[idx].Get()->GetProxy(), 0, 0);
@@ -1139,8 +1136,7 @@ void App::RequestFrameCallback() noexcept {
 
 // ── Feedback callback implementations ────────────────────────────────────────
 
-void App::OnXdgSurfaceConfigure(uint32_t serial) {
-  configure_serial_ = serial;
+void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
   configured_ = true;
 }
 
@@ -1289,9 +1285,12 @@ void App::Feedkick() noexcept {
 
   auto* fk = new FeedkickHandler();
   fk->app_ = this;
-  if (wl_proxy* raw = wl::construct<wp_presentation_feedback_traits,
-                                    wp_presentation_traits::Op::Feedback>(
-          *presentation_.Get(), surface_.Get()->GetProxy())) {
+  // Same "on" signature fix as AttachPresentationFeedback: surface before
+  // nullptr.
+  if (wl_proxy* raw = presentation_.Get()->_MarshalNew(
+          wp_presentation_traits::Op::Feedback,
+          &wp_presentation_feedback_traits::wl_iface(),
+          surface_.Get()->GetProxy(), nullptr)) {
     fk->_SetProxy(raw);
   } else {
     delete fk;
