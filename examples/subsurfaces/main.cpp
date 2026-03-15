@@ -62,6 +62,7 @@ extern "C" {
 // ── Standard library
 // ──────────────────────────────────────────────────────────
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cerrno>
 #include <cmath>
@@ -70,6 +71,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <iterator>  // std::data
+#include <span>
 
 // ── POSIX
 // ─────────────────────────────────────────────────────────────────────
@@ -117,9 +119,11 @@ static GLuint CompileShader(GLenum type, const char* src) noexcept {
   GLint ok = GL_FALSE;
   glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
   if (!ok) {
-    char log[512];
-    glGetShaderInfoLog(sh, sizeof(log), nullptr, log);
-    std::fprintf(stderr, "subsurfaces: shader compile failed:\n%s\n", log);
+    std::array<char, 512> log{};
+    glGetShaderInfoLog(sh, static_cast<GLsizei>(log.size()), nullptr,
+                       log.data());
+    std::fprintf(stderr, "subsurfaces: shader compile failed:\n%s\n",
+                 log.data());
     glDeleteShader(sh);
     return 0;
   }
@@ -136,9 +140,10 @@ static GLuint LinkProgram(GLuint vert, GLuint frag) noexcept {
   GLint ok = GL_FALSE;
   glGetProgramiv(prog, GL_LINK_STATUS, &ok);
   if (!ok) {
-    char log[512];
-    glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
-    std::fprintf(stderr, "subsurfaces: program link failed:\n%s\n", log);
+    std::array<char, 512> log{};
+    glGetProgramInfoLog(prog, static_cast<GLsizei>(log.size()), nullptr,
+                        log.data());
+    std::fprintf(stderr, "subsurfaces: program link failed:\n%s\n", log.data());
     glDeleteProgram(prog);
     return 0;
   }
@@ -625,12 +630,12 @@ class App {
     EGLDisplay display = EGL_NO_DISPLAY;
     EGLContext context = EGL_NO_CONTEXT;
     EGLSurface surface = EGL_NO_SURFACE;
-    EGLConfig  config  = {};
+    EGLConfig config = {};
     wl_egl_window* window = nullptr;
-    GLuint prog    = 0;
-    GLint  a_pos   = -1;
-    GLint  a_color = -1;
-    GLint  u_angle = -1;
+    GLuint prog = 0;
+    GLint a_pos = -1;
+    GLint a_color = -1;
+    GLint u_angle = -1;
 
     ~GlState() noexcept {
       if (display == EGL_NO_DISPLAY)
@@ -702,7 +707,7 @@ class App {
   /// Initialise EGL + compile GL shaders for the red sub-surface triangle.
   bool InitGl() noexcept;
   bool InitialCommit();
-  bool MainLoop();
+  [[nodiscard]] bool MainLoop() const;
 
   [[nodiscard]] bool RoundtripWithTimeout(
       int timeout_ms = kRoundtripTimeoutMs) const noexcept;
@@ -1145,13 +1150,15 @@ bool App::ReallocBuffers() noexcept {
     return false;
   }
 
-  // Paint solid colours.
-  auto* pixels = static_cast<uint32_t*>(shm_mem_.data);
-  // Green: XRGB  (R=0, G=0xCC, B=0)
-  std::fill(pixels, pixels + (main_size / 4u), 0x0000CC00u);
-  // Blue: XRGB
-  auto* blue_px = pixels + (main_size / 4u);
-  std::fill(blue_px, blue_px + (blue_size / 4u), 0x000000CCu);
+  // Paint solid colours via a span to avoid raw pointer arithmetic.
+  const std::size_t main_px = main_size / sizeof(uint32_t);
+  const std::size_t blue_px = blue_size / sizeof(uint32_t);
+  std::span<uint32_t> all{static_cast<uint32_t*>(shm_mem_.data),
+                          main_px + blue_px};
+  std::fill(all.first(main_px).begin(), all.first(main_px).end(),
+            0x0000CC00u);  // Green: XRGB
+  std::fill(all.last(blue_px).begin(), all.last(blue_px).end(),
+            0x000000CCu);  // Blue: XRGB
 
   // Create a single pool covering main + blue surfaces.
   wl::WlPtr<WlShmPoolHandler> pool;
@@ -1318,16 +1325,22 @@ bool App::InitGl() noexcept {
 
   // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
   static const EGLint kCfgAttribs[] = {
-      EGL_SURFACE_TYPE,    EGL_WINDOW_BIT,
-      EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-      EGL_RED_SIZE,        8,
-      EGL_GREEN_SIZE,      8,
-      EGL_BLUE_SIZE,       8,
-      EGL_ALPHA_SIZE,      8,
+      EGL_SURFACE_TYPE,
+      EGL_WINDOW_BIT,
+      EGL_RENDERABLE_TYPE,
+      EGL_OPENGL_ES2_BIT,
+      EGL_RED_SIZE,
+      8,
+      EGL_GREEN_SIZE,
+      8,
+      EGL_BLUE_SIZE,
+      8,
+      EGL_ALPHA_SIZE,
+      8,
       EGL_NONE,
   };
   static constexpr EGLint kCtxAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 2,
-                                            EGL_NONE};
+                                           EGL_NONE};
   // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
 
   EGLint n = 0;
@@ -1348,8 +1361,8 @@ bool App::InitGl() noexcept {
   // Create an EGL window surface backed by the red wl_surface.
   gl_.window = wl_egl_window_create(
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-      reinterpret_cast<wl_surface*>(red_surface_.Get()->GetProxy()),
-      red_w_, red_h_);
+      reinterpret_cast<wl_surface*>(red_surface_.Get()->GetProxy()), red_w_,
+      red_h_);
   if (!gl_.window) {
     std::fprintf(stderr, "subsurfaces: wl_egl_window_create failed\n");
     return false;
@@ -1387,7 +1400,7 @@ bool App::InitGl() noexcept {
   if (!gl_.prog)
     return false;
 
-  gl_.a_pos   = glGetAttribLocation(gl_.prog, "a_pos");
+  gl_.a_pos = glGetAttribLocation(gl_.prog, "a_pos");
   gl_.a_color = glGetAttribLocation(gl_.prog, "a_color");
   gl_.u_angle = glGetUniformLocation(gl_.prog, "u_angle");
 
@@ -1417,21 +1430,27 @@ void App::RenderTriangle(uint32_t anim_ms) noexcept {
   // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
   static constexpr float kVerts[] = {
       // x      y      r     g     b
-       0.0f,  0.8f,  1.0f, 0.0f, 0.0f,   // top         — red
-      -0.7f, -0.4f,  0.0f, 1.0f, 0.0f,   // bottom-left  — green
-       0.7f, -0.4f,  0.0f, 0.0f, 1.0f,   // bottom-right — blue
+      0.0f,  0.8f,  1.0f, 0.0f, 0.0f,  // top         — red
+      -0.7f, -0.4f, 0.0f, 1.0f, 0.0f,  // bottom-left  — green
+      0.7f,  -0.4f, 0.0f, 0.0f, 1.0f,  // bottom-right — blue
   };
   // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
 
   constexpr GLsizei kStride = 5 * static_cast<GLsizei>(sizeof(float));
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+  // Compute the two attribute base pointers; wrap each in a lint-suppression
+  // block because the violations are on continuation lines (not the first line
+  // of the declaration), so NOLINTNEXTLINE would target the wrong line.
+  // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast)
+  const auto* const pos_ptr = reinterpret_cast<const void*>(std::data(kVerts));
+  // NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  const auto* const col_ptr =
+      reinterpret_cast<const void*>(std::data(kVerts) + 2);
+  // NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast)
   glVertexAttribPointer(static_cast<GLuint>(gl_.a_pos), 2, GL_FLOAT, GL_FALSE,
-                        kStride,
-                        reinterpret_cast<const void*>(std::data(kVerts)));
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  glVertexAttribPointer(
-      static_cast<GLuint>(gl_.a_color), 3, GL_FLOAT, GL_FALSE, kStride,
-      reinterpret_cast<const void*>(std::data(kVerts) + 2));
+                        kStride, pos_ptr);
+  glVertexAttribPointer(static_cast<GLuint>(gl_.a_color), 3, GL_FLOAT, GL_FALSE,
+                        kStride, col_ptr);
   glEnableVertexAttribArray(static_cast<GLuint>(gl_.a_pos));
   glEnableVertexAttribArray(static_cast<GLuint>(gl_.a_color));
 
@@ -1598,7 +1617,7 @@ static void LogWlError(wl_display* display, const char* context) noexcept {
   }
 }
 
-bool App::MainLoop() {
+bool App::MainLoop() const {
   std::printf("subsurfaces: entering event loop\n");
   std::printf("  Space  — toggle red sub-surface animation\n");
   std::printf("  Up/Down — resize window\n");
