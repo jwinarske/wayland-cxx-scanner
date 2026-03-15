@@ -25,7 +25,8 @@
 #include "wayland_client.hpp"
 #include "xdg_shell_client.hpp"
 
-// ── System Wayland C headers ──────────────────────────────────────────────────
+// ── System Wayland C headers
+// ──────────────────────────────────────────────────
 extern "C" {
 // Provides extern wl_*_interface symbols used by wl_iface() below.
 #include <wayland-client-protocol.h>
@@ -36,12 +37,14 @@ extern "C" {
 #include <unistd.h>  // close()
 }
 
-// ── Framework headers ─────────────────────────────────────────────────────────
+// ── Framework headers
+// ─────────────────────────────────────────────────────────
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
 #include <wl/wl_ptr.hpp>
 
-// ── Standard library ──────────────────────────────────────────────────────────
+// ── Standard library
+// ──────────────────────────────────────────────────────────
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
@@ -52,7 +55,8 @@ extern "C" {
 #include <cstring>
 #include <iterator>  // std::data
 
-// ── POSIX ─────────────────────────────────────────────────────────────────────
+// ── POSIX
+// ─────────────────────────────────────────────────────────────────────
 #include <poll.h>
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -315,9 +319,10 @@ struct ShmMapping {
 // Forward-declare App so handler callbacks can reach back into it.
 class App;
 
-// ── WlCompositorHandler ───────────────────────────────────────────────────────
-// wl_compositor has no events — provide the required ProcessEvent stub and use
-// WlPtr::Attach() (not _SetProxy) so no listener table is needed.
+// ── WlCompositorHandler
+// ─────────────────────────────────────────────────────── wl_compositor has no
+// events — provide the required ProcessEvent stub and use WlPtr::Attach() (not
+// _SetProxy) so no listener table is needed.
 
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {
@@ -325,8 +330,9 @@ class WlCompositorHandler
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── WlSubcompositorHandler ────────────────────────────────────────────────────
-// wl_subcompositor has no events.
+// ── WlSubcompositorHandler
+// ──────────────────────────────────────────────────── wl_subcompositor has no
+// events.
 
 class WlSubcompositorHandler
     : public wayland::client::CWlSubcompositor<WlSubcompositorHandler> {
@@ -334,8 +340,9 @@ class WlSubcompositorHandler
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── WlSubsurfaceHandler ───────────────────────────────────────────────────────
-// wl_subsurface has no events.
+// ── WlSubsurfaceHandler
+// ─────────────────────────────────────────────────────── wl_subsurface has no
+// events.
 
 class WlSubsurfaceHandler
     : public wayland::client::CWlSubsurface<WlSubsurfaceHandler> {
@@ -343,16 +350,17 @@ class WlSubsurfaceHandler
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── WlShmPoolHandler ──────────────────────────────────────────────────────────
-// wl_shm_pool has no events — short-lived object used to create buffers.
+// ── WlShmPoolHandler
+// ────────────────────────────────────────────────────────── wl_shm_pool has no
+// events — short-lived object used to create buffers.
 
-class WlShmPoolHandler
-    : public wayland::client::CWlShmPool<WlShmPoolHandler> {
+class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
  public:
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── WlShmHandler ──────────────────────────────────────────────────────────────
+// ── WlShmHandler
+// ──────────────────────────────────────────────────────────────
 
 class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
  public:
@@ -363,7 +371,8 @@ class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
   }
 };
 
-// ── WlBufferHandler ───────────────────────────────────────────────────────────
+// ── WlBufferHandler
+// ───────────────────────────────────────────────────────────
 
 class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
  public:
@@ -376,7 +385,8 @@ class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
-// ── WlCallbackHandler ─────────────────────────────────────────────────────────
+// ── WlCallbackHandler
+// ─────────────────────────────────────────────────────────
 
 class WlCallbackHandler
     : public wayland::client::CWlCallback<WlCallbackHandler> {
@@ -385,7 +395,8 @@ class WlCallbackHandler
   void OnDone(uint32_t time_ms) override;
 };
 
-// ── WlSeatHandler ─────────────────────────────────────────────────────────────
+// ── WlSeatHandler
+// ─────────────────────────────────────────────────────────────
 
 class WlSeatHandler : public wayland::client::CWlSeat<WlSeatHandler> {
  public:
@@ -394,7 +405,8 @@ class WlSeatHandler : public wayland::client::CWlSeat<WlSeatHandler> {
   void OnName(const char* /*name*/) override {}
 };
 
-// ── WlKeyboardHandler ─────────────────────────────────────────────────────────
+// ── WlKeyboardHandler
+// ─────────────────────────────────────────────────────────
 
 class WlKeyboardHandler
     : public wayland::client::CWlKeyboard<WlKeyboardHandler> {
@@ -403,18 +415,24 @@ class WlKeyboardHandler
   void OnKeymap(uint32_t /*fmt*/, int32_t fd, uint32_t /*sz*/) override {
     close(fd);
   }
-  void OnEnter(uint32_t /*serial*/, wl_proxy* /*surface*/,
+  void OnEnter(uint32_t /*serial*/,
+               wl_proxy* /*surface*/,
                wl_array* /*keys*/) override {}
   void OnLeave(uint32_t /*serial*/, wl_proxy* /*surface*/) override {}
-  void OnKey(uint32_t /*serial*/, uint32_t /*time*/, uint32_t key,
+  void OnKey(uint32_t /*serial*/,
+             uint32_t /*time*/,
+             uint32_t key,
              uint32_t state) override;
-  void OnModifiers(uint32_t /*serial*/, uint32_t /*mods_depressed*/,
-                   uint32_t /*mods_latched*/, uint32_t /*mods_locked*/,
+  void OnModifiers(uint32_t /*serial*/,
+                   uint32_t /*mods_depressed*/,
+                   uint32_t /*mods_latched*/,
+                   uint32_t /*mods_locked*/,
                    uint32_t /*group*/) override {}
   void OnRepeatInfo(int32_t /*rate*/, int32_t /*delay*/) override {}
 };
 
-// ── XdgWmBaseHandler ──────────────────────────────────────────────────────────
+// ── XdgWmBaseHandler
+// ──────────────────────────────────────────────────────────
 
 class XdgWmBaseHandler
     : public xdg_shell::client::CXdgWmBase<XdgWmBaseHandler> {
@@ -422,7 +440,8 @@ class XdgWmBaseHandler
   void OnPing(uint32_t serial) override { Pong(serial); }
 };
 
-// ── XdgSurfaceHandler ─────────────────────────────────────────────────────────
+// ── XdgSurfaceHandler
+// ─────────────────────────────────────────────────────────
 
 class XdgSurfaceHandler
     : public xdg_shell::client::CXdgSurface<XdgSurfaceHandler> {
@@ -431,7 +450,8 @@ class XdgSurfaceHandler
   void OnConfigure(uint32_t serial) override;
 };
 
-// ── XdgToplevelHandler ────────────────────────────────────────────────────────
+// ── XdgToplevelHandler
+// ────────────────────────────────────────────────────────
 
 class XdgToplevelHandler
     : public xdg_shell::client::CXdgToplevel<XdgToplevelHandler> {
@@ -528,15 +548,15 @@ class App {
   int height_ = 300;
 
   // Derived geometry (recalculated in ApplyGeometry).
-  int side_ = 0;       // sub-surface side dimension
-  int red_x_ = 0;      // base x of red sub-surface
-  int red_y_ = 0;      // base y of red sub-surface
-  int red_w_ = 0;      // width of red sub-surface
-  int red_h_ = 0;      // height of red sub-surface
-  int blue_x_ = 0;     // base x of blue sub-surface
-  int blue_y_ = 0;     // base y of blue sub-surface
-  int blue_w_ = 0;     // width of blue sub-surface
-  int blue_h_ = 0;     // height of blue sub-surface
+  int side_ = 0;    // sub-surface side dimension
+  int red_x_ = 0;   // base x of red sub-surface
+  int red_y_ = 0;   // base y of red sub-surface
+  int red_w_ = 0;   // width of red sub-surface
+  int red_h_ = 0;   // height of red sub-surface
+  int blue_x_ = 0;  // base x of blue sub-surface
+  int blue_y_ = 0;  // base y of blue sub-surface
+  int blue_w_ = 0;  // width of blue sub-surface
+  int blue_h_ = 0;  // height of blue sub-surface
 
   // Animation phase (driven by frame timestamps).
   double anim_phase_ = 0.0;
@@ -578,7 +598,8 @@ class App {
 
   // ── Helper: bind a registry global and install the CRTP event listener ─
   template <typename Traits, typename Handler>
-  [[nodiscard]] bool BindHandler(wl::WlPtr<Handler>& ptr, uint32_t name,
+  [[nodiscard]] bool BindHandler(wl::WlPtr<Handler>& ptr,
+                                 uint32_t name,
                                  uint32_t ver) noexcept {
     wl_proxy* raw =
         registry_.Bind<Traits>(name, std::min(ver, Traits::version));
@@ -601,7 +622,8 @@ void XdgSurfaceHandler::OnConfigure(uint32_t serial) {
   app_->OnXdgSurfaceConfigure(serial);
 }
 
-void XdgToplevelHandler::OnConfigure(int32_t w, int32_t h,
+void XdgToplevelHandler::OnConfigure(int32_t w,
+                                     int32_t h,
                                      wl_array* /*states*/) {
   app_->OnToplevelConfigure(w, h);
 }
@@ -614,8 +636,10 @@ void WlSeatHandler::OnCapabilities(uint32_t caps) {
   app_->OnSeatCapabilities(caps);
 }
 
-void WlKeyboardHandler::OnKey(uint32_t /*serial*/, uint32_t /*time*/,
-                               uint32_t key, uint32_t state) {
+void WlKeyboardHandler::OnKey(uint32_t /*serial*/,
+                              uint32_t /*time*/,
+                              uint32_t key,
+                              uint32_t state) {
   app_->OnKey(key, state);
 }
 
@@ -649,7 +673,8 @@ int App::Run() {
   return MainLoop() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-// ── ConnectDisplay ────────────────────────────────────────────────────────────
+// ── ConnectDisplay
+// ────────────────────────────────────────────────────────────
 
 bool App::ConnectDisplay() {
   display_.d = wl_display_connect(nullptr);
@@ -661,7 +686,8 @@ bool App::ConnectDisplay() {
   return true;
 }
 
-// ── RoundtripWithTimeout ──────────────────────────────────────────────────────
+// ── RoundtripWithTimeout
+// ──────────────────────────────────────────────────────
 
 bool App::RoundtripWithTimeout(int timeout_ms) const noexcept {
   bool sync_done = false;
@@ -711,7 +737,8 @@ bool App::RoundtripWithTimeout(int timeout_ms) const noexcept {
   return ok && sync_done;
 }
 
-// ── ScanGlobals ───────────────────────────────────────────────────────────────
+// ── ScanGlobals
+// ───────────────────────────────────────────────────────────────
 
 bool App::ScanGlobals() {
   if (!registry_.Create(display_.d)) {
@@ -720,7 +747,7 @@ bool App::ScanGlobals() {
   }
 
   registry_.OnGlobal([this](wl::CRegistry& /*reg*/, uint32_t name,
-                             std::string_view iface, uint32_t ver) {
+                            std::string_view iface, uint32_t ver) {
     using namespace wayland::client;
     using namespace xdg_shell::client;
 
@@ -743,8 +770,7 @@ bool App::ScanGlobals() {
   });
 
   if (!RoundtripWithTimeout()) {
-    std::fprintf(stderr,
-                 "subsurfaces: timed out waiting for globals\n");
+    std::fprintf(stderr, "subsurfaces: timed out waiting for globals\n");
     return false;
   }
 
@@ -767,7 +793,8 @@ bool App::ScanGlobals() {
   return true;
 }
 
-// ── BindGlobals ───────────────────────────────────────────────────────────────
+// ── BindGlobals
+// ───────────────────────────────────────────────────────────────
 
 bool App::BindGlobals() {
   using namespace wayland::client;
@@ -792,8 +819,7 @@ bool App::BindGlobals() {
   // wl_subcompositor — no events.
   if (wl_proxy* raw = registry_.Bind<wl_subcompositor_traits>(
           subcompositor_name_,
-          std::min(subcompositor_ver_,
-                   wl_subcompositor_traits::version))) {
+          std::min(subcompositor_ver_, wl_subcompositor_traits::version))) {
     subcompositor_.Attach(raw);
   } else {
     std::fprintf(stderr, "subsurfaces: wl_subcompositor bind failed\n");
@@ -802,7 +828,7 @@ bool App::BindGlobals() {
 
   // xdg_wm_base — handles ping events.
   if (!BindHandler<xdg_wm_base_traits>(xdg_wm_base_, xdg_wm_base_name_,
-                                        xdg_wm_base_ver_)) {
+                                       xdg_wm_base_ver_)) {
     std::fprintf(stderr, "subsurfaces: xdg_wm_base bind failed\n");
     return false;
   }
@@ -820,14 +846,14 @@ bool App::BindGlobals() {
   // WL_SHM_FORMAT_XRGB8888 = 1 — must be supported.
   constexpr uint32_t kXrgb8888 = 1u;
   if (!(shm_.Get()->formats & (1u << kXrgb8888))) {
-    std::fprintf(stderr,
-                 "subsurfaces: WL_SHM_FORMAT_XRGB8888 not supported\n");
+    std::fprintf(stderr, "subsurfaces: WL_SHM_FORMAT_XRGB8888 not supported\n");
     return false;
   }
   return true;
 }
 
-// ── Geometry helpers ──────────────────────────────────────────────────────────
+// ── Geometry helpers
+// ──────────────────────────────────────────────────────────
 
 void App::ApplyGeometry() noexcept {
   // Mirror Weston's original layout:
@@ -848,17 +874,17 @@ void App::ApplyGeometry() noexcept {
   blue_y_ = remaining_h;
 }
 
-// ── CreateSurfaces ────────────────────────────────────────────────────────────
+// ── CreateSurfaces
+// ────────────────────────────────────────────────────────────
 
 bool App::CreateSurfaces() {
   using namespace wayland::client;
   using namespace xdg_shell::client;
 
   // ── Main wl_surface ──────────────────────────────────────────────────────
-  if (wl_proxy* raw =
-          wl::construct<wl_surface_traits,
-                        wl_compositor_traits::Op::CreateSurface>(
-              *compositor_.Get())) {
+  if (wl_proxy* raw = wl::construct<wl_surface_traits,
+                                    wl_compositor_traits::Op::CreateSurface>(
+          *compositor_.Get())) {
     main_surface_.Get()->_SetProxy(raw);
   } else {
     std::fprintf(stderr,
@@ -867,10 +893,9 @@ bool App::CreateSurfaces() {
   }
 
   // ── xdg_surface ──────────────────────────────────────────────────────────
-  if (wl_proxy* raw =
-          wl::construct<xdg_surface_traits,
-                        xdg_wm_base_traits::Op::GetXdgSurface>(
-              *xdg_wm_base_.Get(), main_surface_.Get()->GetProxy())) {
+  if (wl_proxy* raw = wl::construct<xdg_surface_traits,
+                                    xdg_wm_base_traits::Op::GetXdgSurface>(
+          *xdg_wm_base_.Get(), main_surface_.Get()->GetProxy())) {
     xdg_surface_.Get()->app_ = this;
     xdg_surface_.Get()->_SetProxy(raw);
   } else {
@@ -879,10 +904,9 @@ bool App::CreateSurfaces() {
   }
 
   // ── xdg_toplevel ─────────────────────────────────────────────────────────
-  if (wl_proxy* raw =
-          wl::construct<xdg_toplevel_traits,
-                        xdg_surface_traits::Op::GetToplevel>(
-              *xdg_surface_.Get())) {
+  if (wl_proxy* raw = wl::construct<xdg_toplevel_traits,
+                                    xdg_surface_traits::Op::GetToplevel>(
+          *xdg_surface_.Get())) {
     xdg_toplevel_.Get()->app_ = this;
     xdg_toplevel_.Get()->_SetProxy(raw);
   } else {
@@ -896,10 +920,9 @@ bool App::CreateSurfaces() {
   xdg_toplevel_.Get()->SetMinSize(100, 100);
 
   // ── Red sub-surface ───────────────────────────────────────────────────────
-  if (wl_proxy* raw =
-          wl::construct<wl_surface_traits,
-                        wl_compositor_traits::Op::CreateSurface>(
-              *compositor_.Get())) {
+  if (wl_proxy* raw = wl::construct<wl_surface_traits,
+                                    wl_compositor_traits::Op::CreateSurface>(
+          *compositor_.Get())) {
     red_surface_.Get()->_SetProxy(raw);
   } else {
     std::fprintf(stderr,
@@ -907,11 +930,10 @@ bool App::CreateSurfaces() {
     return false;
   }
 
-  if (wl_proxy* raw =
-          wl::construct<wl_subsurface_traits,
-                        wl_subcompositor_traits::Op::GetSubsurface>(
-              *subcompositor_.Get(), red_surface_.Get()->GetProxy(),
-              main_surface_.Get()->GetProxy())) {
+  if (wl_proxy* raw = wl::construct<wl_subsurface_traits,
+                                    wl_subcompositor_traits::Op::GetSubsurface>(
+          *subcompositor_.Get(), red_surface_.Get()->GetProxy(),
+          main_surface_.Get()->GetProxy())) {
     red_subsurface_.Attach(raw);
   } else {
     std::fprintf(stderr,
@@ -922,10 +944,9 @@ bool App::CreateSurfaces() {
   red_subsurface_.Get()->SetDesync();
 
   // ── Blue sub-surface ──────────────────────────────────────────────────────
-  if (wl_proxy* raw =
-          wl::construct<wl_surface_traits,
-                        wl_compositor_traits::Op::CreateSurface>(
-              *compositor_.Get())) {
+  if (wl_proxy* raw = wl::construct<wl_surface_traits,
+                                    wl_compositor_traits::Op::CreateSurface>(
+          *compositor_.Get())) {
     blue_surface_.Get()->_SetProxy(raw);
   } else {
     std::fprintf(stderr,
@@ -933,11 +954,10 @@ bool App::CreateSurfaces() {
     return false;
   }
 
-  if (wl_proxy* raw =
-          wl::construct<wl_subsurface_traits,
-                        wl_subcompositor_traits::Op::GetSubsurface>(
-              *subcompositor_.Get(), blue_surface_.Get()->GetProxy(),
-              main_surface_.Get()->GetProxy())) {
+  if (wl_proxy* raw = wl::construct<wl_subsurface_traits,
+                                    wl_subcompositor_traits::Op::GetSubsurface>(
+          *subcompositor_.Get(), blue_surface_.Get()->GetProxy(),
+          main_surface_.Get()->GetProxy())) {
     blue_subsurface_.Attach(raw);
   } else {
     std::fprintf(stderr,
@@ -951,7 +971,8 @@ bool App::CreateSurfaces() {
   return true;
 }
 
-// ── CreateBuffers ─────────────────────────────────────────────────────────────
+// ── CreateBuffers
+// ─────────────────────────────────────────────────────────────
 
 bool App::CreateBuffers() {
   ApplyGeometry();
@@ -967,15 +988,12 @@ bool App::ReallocBuffers() noexcept {
   blue_buf_.Reset();
   shm_mem_.Reset();
 
-  const std::size_t main_stride =
-      static_cast<std::size_t>(width_) * 4u;
+  const std::size_t main_stride = static_cast<std::size_t>(width_) * 4u;
   const std::size_t main_size = main_stride * static_cast<std::size_t>(height_);
   const std::size_t red_stride = static_cast<std::size_t>(red_w_) * 4u;
-  const std::size_t red_size =
-      red_stride * static_cast<std::size_t>(red_h_);
+  const std::size_t red_size = red_stride * static_cast<std::size_t>(red_h_);
   const std::size_t blue_stride = static_cast<std::size_t>(blue_w_) * 4u;
-  const std::size_t blue_size =
-      blue_stride * static_cast<std::size_t>(blue_h_);
+  const std::size_t blue_size = blue_stride * static_cast<std::size_t>(blue_h_);
 
   const std::size_t total = main_size + red_size + blue_size;
 
@@ -998,8 +1016,7 @@ bool App::ReallocBuffers() noexcept {
   // Create a single pool covering all surfaces.
   wl::WlPtr<WlShmPoolHandler> pool;
   if (wl_proxy* raw =
-          wl::construct<wl_shm_pool_traits,
-                        wl_shm_traits::Op::CreatePool>(
+          wl::construct<wl_shm_pool_traits, wl_shm_traits::Op::CreatePool>(
               *shm_.Get(), static_cast<int32_t>(shm_mem_.fd),
               static_cast<int32_t>(total))) {
     pool.Attach(raw);
@@ -1010,22 +1027,20 @@ bool App::ReallocBuffers() noexcept {
 
   // Main buffer.
   if (wl_proxy* raw =
-          wl::construct<wl_buffer_traits,
-                        wl_shm_pool_traits::Op::CreateBuffer>(
+          wl::construct<wl_buffer_traits, wl_shm_pool_traits::Op::CreateBuffer>(
               *pool.Get(), 0, static_cast<int32_t>(width_),
-              static_cast<int32_t>(height_),
-              static_cast<int32_t>(main_stride),
+              static_cast<int32_t>(height_), static_cast<int32_t>(main_stride),
               WL_SHM_FORMAT_XRGB8888)) {
     main_buf_.Get()->_SetProxy(raw);
   } else {
-    std::fprintf(stderr, "subsurfaces: wl_shm_pool.create_buffer (main) failed\n");
+    std::fprintf(stderr,
+                 "subsurfaces: wl_shm_pool.create_buffer (main) failed\n");
     return false;
   }
 
   // Red buffer.
   if (wl_proxy* raw =
-          wl::construct<wl_buffer_traits,
-                        wl_shm_pool_traits::Op::CreateBuffer>(
+          wl::construct<wl_buffer_traits, wl_shm_pool_traits::Op::CreateBuffer>(
               *pool.Get(), static_cast<int32_t>(main_size),
               static_cast<int32_t>(red_w_), static_cast<int32_t>(red_h_),
               static_cast<int32_t>(red_stride), WL_SHM_FORMAT_XRGB8888)) {
@@ -1038,10 +1053,8 @@ bool App::ReallocBuffers() noexcept {
 
   // Blue buffer.
   if (wl_proxy* raw =
-          wl::construct<wl_buffer_traits,
-                        wl_shm_pool_traits::Op::CreateBuffer>(
-              *pool.Get(),
-              static_cast<int32_t>(main_size + red_size),
+          wl::construct<wl_buffer_traits, wl_shm_pool_traits::Op::CreateBuffer>(
+              *pool.Get(), static_cast<int32_t>(main_size + red_size),
               static_cast<int32_t>(blue_w_), static_cast<int32_t>(blue_h_),
               static_cast<int32_t>(blue_stride), WL_SHM_FORMAT_XRGB8888)) {
     blue_buf_.Get()->_SetProxy(raw);
@@ -1057,7 +1070,8 @@ bool App::ReallocBuffers() noexcept {
   return true;
 }
 
-// ── InitialCommit ─────────────────────────────────────────────────────────────
+// ── InitialCommit
+// ─────────────────────────────────────────────────────────────
 
 bool App::InitialCommit() {
   // Position the sub-surfaces.
@@ -1106,12 +1120,14 @@ bool App::InitialCommit() {
   return true;
 }
 
-// ── Frame-callback helpers ────────────────────────────────────────────────────
+// ── Frame-callback helpers
+// ────────────────────────────────────────────────────
 
 void App::RequestFrameCallback() noexcept {
   using wl_s = wayland::client::wl_surface_traits;
   using wl_c = wayland::client::wl_callback_traits;
-  if (wl_proxy* raw = wl::construct<wl_c, wl_s::Op::Frame>(*red_surface_.Get())) {
+  if (wl_proxy* raw =
+          wl::construct<wl_c, wl_s::Op::Frame>(*red_surface_.Get())) {
     frame_cb_.Get()->app_ = this;
     frame_cb_.Get()->_SetProxy(raw);
   }
@@ -1148,7 +1164,8 @@ void App::AdvanceAnimation(uint32_t time_ms) noexcept {
   red_surface_.Get()->Commit();
 }
 
-// ── App callbacks ─────────────────────────────────────────────────────────────
+// ── App callbacks
+// ─────────────────────────────────────────────────────────────
 
 void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
   configured_ = true;
@@ -1193,8 +1210,7 @@ void App::OnKey(uint32_t key, uint32_t state) {
 
     case KEY_SPACE:
       animate_ = !animate_;
-      std::printf("subsurfaces: animation %s\n",
-                  animate_ ? "ON" : "OFF");
+      std::printf("subsurfaces: animation %s\n", animate_ ? "ON" : "OFF");
       break;
 
     case KEY_UP: {
@@ -1253,7 +1269,8 @@ void App::OnKey(uint32_t key, uint32_t state) {
   }
 }
 
-// ── Input teardown ────────────────────────────────────────────────────────────
+// ── Input teardown
+// ────────────────────────────────────────────────────────────
 
 void App::ReleaseKeyboard() noexcept {
   if (keyboard_.IsNull())
@@ -1273,10 +1290,10 @@ void App::ReleaseSeat() noexcept {
   seat_.Reset();
 }
 
-// ── MainLoop ──────────────────────────────────────────────────────────────────
+// ── MainLoop
+// ──────────────────────────────────────────────────────────────────
 
-static void LogWlError(wl_display* display,
-                       const char* context) noexcept {
+static void LogWlError(wl_display* display, const char* context) noexcept {
   const int err = wl_display_get_error(display);
   const int code = err ? err : errno;
   if (code == EPROTO) {

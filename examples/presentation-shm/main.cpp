@@ -24,20 +24,23 @@
 #include "wayland_client.hpp"            // namespace wayland::client
 #include "xdg_shell_client.hpp"          // namespace xdg_shell::client
 
-// ── System Wayland C headers ──────────────────────────────────────────────────
+// ── System Wayland C headers
+// ──────────────────────────────────────────────────
 extern "C" {
-#include <wayland-client-protocol.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+#include <wayland-client-protocol.h>
 }
 
-// ── Framework headers ─────────────────────────────────────────────────────────
+// ── Framework headers
+// ─────────────────────────────────────────────────────────
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
 #include <wl/wl_ptr.hpp>
 
-// ── Standard library ──────────────────────────────────────────────────────────
+// ── Standard library
+// ──────────────────────────────────────────────────────────
 #include <algorithm>
 #include <cassert>
 #include <cerrno>
@@ -51,7 +54,8 @@ extern "C" {
 #include <list>
 #include <string_view>
 
-// ── POSIX ─────────────────────────────────────────────────────────────────────
+// ── POSIX
+// ─────────────────────────────────────────────────────────────────────
 #include <poll.h>
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -131,10 +135,12 @@ static constexpr wl_message xdg_wm_base_requests[] = {
     {"get_xdg_surface", "no", &xdg_shell_types[5]},
     {"pong", "u", kScalarTypes},
 };
-static constexpr wl_message xdg_wm_base_events[] = {{"ping", "u", kScalarTypes}};
+static constexpr wl_message xdg_wm_base_events[] = {
+    {"ping", "u", kScalarTypes}};
 
 static constexpr wl_message xdg_positioner_requests[] = {
-    {"destroy", "", nullptr},       {"set_size", "ii", kScalarTypes},
+    {"destroy", "", nullptr},
+    {"set_size", "ii", kScalarTypes},
     {"set_anchor_rect", "iiii", kScalarTypes},
     {"set_anchor", "u", kScalarTypes},
     {"set_gravity", "u", kScalarTypes},
@@ -152,7 +158,8 @@ static constexpr wl_message xdg_surface_requests[] = {
     {"set_window_geometry", "iiii", kScalarTypes},
     {"ack_configure", "u", kScalarTypes},
 };
-static constexpr wl_message xdg_surface_events[] = {{"configure", "u", kScalarTypes}};
+static constexpr wl_message xdg_surface_events[] = {
+    {"configure", "u", kScalarTypes}};
 
 static constexpr wl_message xdg_toplevel_requests[] = {
     {"destroy", "", nullptr},
@@ -239,9 +246,9 @@ extern const wl_interface wp_presentation_feedback_iface_def;
 //             cppcoreguidelines-interfaces-global-init)
 static const wl_interface* presentation_time_types[] = {
     nullptr,                              // [0] scalar
-    &wl_surface_interface,               // [1] feedback → surface arg
-    &wp_presentation_feedback_iface_def, // [2] feedback → callback new_id
-    &wl_output_interface,                // [3] sync_output → output
+    &wl_surface_interface,                // [1] feedback → surface arg
+    &wp_presentation_feedback_iface_def,  // [2] feedback → callback new_id
+    &wl_output_interface,                 // [3] sync_output → output
 };
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays,
 //           cppcoreguidelines-avoid-non-const-global-variables,
@@ -249,16 +256,16 @@ static const wl_interface* presentation_time_types[] = {
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
 static constexpr wl_message wp_presentation_requests[] = {
-    {"destroy",  "",   nullptr},
+    {"destroy", "", nullptr},
     {"feedback", "on", &presentation_time_types[1]},
 };
 static constexpr wl_message wp_presentation_events[] = {
     {"clock_id", "u", &presentation_time_types[0]},
 };
 static constexpr wl_message wp_presentation_feedback_events[] = {
-    {"sync_output", "o",        &presentation_time_types[3]},
-    {"presented",   "uuuuuuu",  &presentation_time_types[0]},
-    {"discarded",   "",         nullptr},
+    {"sync_output", "o", &presentation_time_types[3]},
+    {"presented", "uuuuuuu", &presentation_time_types[0]},
+    {"discarded", "", nullptr},
 };
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
 
@@ -342,13 +349,13 @@ static constexpr std::string_view run_mode_name(RunMode m) noexcept {
 // Timing utilities
 // ══════════════════════════════════════════════════════════════════════════════
 
-static constexpr int64_t kNsecPerSec = 1'000'000'000LL;
-
 /// Combine the protocol's split tv_sec_hi / tv_sec_lo into a timespec.
-static void timespec_from_proto(timespec& ts, uint32_t sec_hi, uint32_t sec_lo,
+static void timespec_from_proto(timespec& ts,
+                                uint32_t sec_hi,
+                                uint32_t sec_lo,
                                 uint32_t nsec) noexcept {
-  ts.tv_sec = (static_cast<int64_t>(sec_hi) << 32) |
-              static_cast<int64_t>(sec_lo);
+  ts.tv_sec =
+      (static_cast<int64_t>(sec_hi) << 32) | static_cast<int64_t>(sec_lo);
   ts.tv_nsec = static_cast<long>(nsec);
 }
 
@@ -357,10 +364,8 @@ static uint32_t timespec_to_ms(const timespec& ts) noexcept {
          static_cast<uint32_t>(ts.tv_nsec / 1'000'000L);
 }
 
-static int64_t timespec_diff_us(const timespec& a,
-                                const timespec& b) noexcept {
-  return (a.tv_sec - b.tv_sec) * 1'000'000LL +
-         (a.tv_nsec - b.tv_nsec) / 1000LL;
+static int64_t timespec_diff_us(const timespec& a, const timespec& b) noexcept {
+  return (a.tv_sec - b.tv_sec) * 1'000'000LL + (a.tv_nsec - b.tv_nsec) / 1000LL;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -369,7 +374,9 @@ static int64_t timespec_diff_us(const timespec& a,
 
 /// Paint an animated spinning colour wheel into @p image (XRGB8888).
 /// @p phase drives the rotation; call with increasing values for animation.
-static void paint_pixels(void* image, int width, int height,
+static void paint_pixels(void* image,
+                         int width,
+                         int height,
                          uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
@@ -417,7 +424,8 @@ static void paint_pixels(void* image, int width, int height,
 
 class App;
 
-// ── WlCompositorHandler ───────────────────────────────────────────────────────
+// ── WlCompositorHandler
+// ───────────────────────────────────────────────────────
 
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {
@@ -425,15 +433,16 @@ class WlCompositorHandler
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── WlShmPoolHandler ──────────────────────────────────────────────────────────
+// ── WlShmPoolHandler
+// ──────────────────────────────────────────────────────────
 
-class WlShmPoolHandler
-    : public wayland::client::CWlShmPool<WlShmPoolHandler> {
+class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
  public:
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── WlShmHandler ──────────────────────────────────────────────────────────────
+// ── WlShmHandler
+// ──────────────────────────────────────────────────────────────
 
 class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
  public:
@@ -444,7 +453,8 @@ class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
   }
 };
 
-// ── WlBufferHandler ───────────────────────────────────────────────────────────
+// ── WlBufferHandler
+// ───────────────────────────────────────────────────────────
 
 class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
  public:
@@ -457,7 +467,8 @@ class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
-// ── WlCallbackHandler ─────────────────────────────────────────────────────────
+// ── WlCallbackHandler
+// ─────────────────────────────────────────────────────────
 
 class WlCallbackHandler
     : public wayland::client::CWlCallback<WlCallbackHandler> {
@@ -466,7 +477,8 @@ class WlCallbackHandler
   void OnDone(uint32_t time_ms) override;
 };
 
-// ── XdgWmBaseHandler ──────────────────────────────────────────────────────────
+// ── XdgWmBaseHandler
+// ──────────────────────────────────────────────────────────
 
 class XdgWmBaseHandler
     : public xdg_shell::client::CXdgWmBase<XdgWmBaseHandler> {
@@ -474,7 +486,8 @@ class XdgWmBaseHandler
   void OnPing(uint32_t serial) override { Pong(serial); }
 };
 
-// ── XdgSurfaceHandler ─────────────────────────────────────────────────────────
+// ── XdgSurfaceHandler
+// ─────────────────────────────────────────────────────────
 
 class XdgSurfaceHandler
     : public xdg_shell::client::CXdgSurface<XdgSurfaceHandler> {
@@ -483,31 +496,33 @@ class XdgSurfaceHandler
   void OnConfigure(uint32_t serial) override;
 };
 
-// ── XdgToplevelHandler ────────────────────────────────────────────────────────
+// ── XdgToplevelHandler
+// ────────────────────────────────────────────────────────
 
 class XdgToplevelHandler
     : public xdg_shell::client::CXdgToplevel<XdgToplevelHandler> {
  public:
   App* app_ = nullptr;
-  void OnConfigure(int32_t /*w*/, int32_t /*h*/,
+  void OnConfigure(int32_t /*w*/,
+                   int32_t /*h*/,
                    wl_array* /*states*/) override {}
   void OnClose() override;
   void OnConfigureBounds(int32_t /*w*/, int32_t /*h*/) override {}
   void OnWmCapabilities(wl_array* /*caps*/) override {}
 };
 
-// ── WpPresentationHandler ─────────────────────────────────────────────────────
+// ── WpPresentationHandler
+// ─────────────────────────────────────────────────────
 
 class WpPresentationHandler
     : public presentation_time::client::CWpPresentation<WpPresentationHandler> {
  public:
   clockid_t clk_id = CLOCK_MONOTONIC;
-  void OnClockId(uint32_t id) override {
-    clk_id = static_cast<clockid_t>(id);
-  }
+  void OnClockId(uint32_t id) override { clk_id = static_cast<clockid_t>(id); }
 };
 
-// ── WpPresentationFeedbackHandler ─────────────────────────────────────────────
+// ── WpPresentationFeedbackHandler
+// ─────────────────────────────────────────────
 //
 // One instance is allocated per submitted frame and freed on presented /
 // discarded.  The App is notified via virtual callbacks.
@@ -523,8 +538,12 @@ class WpPresentationFeedbackHandler
   uint32_t frame_stamp = 0;  // wl_callback timestamp at the time of commit
 
   void OnSyncOutput(wl_proxy* /*output*/) override {}
-  void OnPresented(uint32_t tv_sec_hi, uint32_t tv_sec_lo, uint32_t tv_nsec,
-                   uint32_t refresh_ns, uint32_t seq_hi, uint32_t seq_lo,
+  void OnPresented(uint32_t tv_sec_hi,
+                   uint32_t tv_sec_lo,
+                   uint32_t tv_nsec,
+                   uint32_t refresh_ns,
+                   uint32_t seq_hi,
+                   uint32_t seq_lo,
                    uint32_t flags) override;
   void OnDiscarded() override;
 };
@@ -595,11 +614,10 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
     // The cleanest approach: use the C API directly here.
     wl_shm_pool* raw_pool =
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-        wl_shm_create_pool(reinterpret_cast<wl_shm*>(shm_raw),
-                           mem.fd, static_cast<int>(total));
+        wl_shm_create_pool(reinterpret_cast<wl_shm*>(shm_raw), mem.fd,
+                           static_cast<int>(total));
     if (!raw_pool) {
-      std::fprintf(stderr,
-                   "presentation-shm: wl_shm_create_pool failed\n");
+      std::fprintf(stderr, "presentation-shm: wl_shm_create_pool failed\n");
       return false;
     }
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
@@ -607,12 +625,12 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
   }
 
   for (int i = 0; i < kNumBuffers; ++i) {
-    const int32_t offset = static_cast<int32_t>(static_cast<std::size_t>(i) * per_buf);
-    if (wl_proxy* raw =
-            wl::construct<wl_buffer_traits,
-                          wl_shm_pool_traits::Op::CreateBuffer>(
-                *pool.Get(), offset, w, h, static_cast<int32_t>(stride),
-                WL_SHM_FORMAT_XRGB8888)) {
+    const int32_t offset =
+        static_cast<int32_t>(static_cast<std::size_t>(i) * per_buf);
+    if (wl_proxy* raw = wl::construct<wl_buffer_traits,
+                                      wl_shm_pool_traits::Op::CreateBuffer>(
+            *pool.Get(), offset, w, h, static_cast<int32_t>(stride),
+            WL_SHM_FORMAT_XRGB8888)) {
       bufs[i].Get()->_SetProxy(raw);
     } else {
       std::fprintf(stderr,
@@ -644,14 +662,19 @@ class App {
   void OnToplevelClose();
   void OnFrameDone(uint32_t stamp_ms) noexcept;
   void OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
-                           uint32_t tv_sec_hi, uint32_t tv_sec_lo,
-                           uint32_t tv_nsec, uint32_t refresh_ns,
-                           uint32_t seq_hi, uint32_t seq_lo,
+                           uint32_t tv_sec_hi,
+                           uint32_t tv_sec_lo,
+                           uint32_t tv_nsec,
+                           uint32_t refresh_ns,
+                           uint32_t seq_hi,
+                           uint32_t seq_lo,
                            uint32_t flags) noexcept;
   void OnFeedbackDiscarded(WpPresentationFeedbackHandler& fb) noexcept;
 
   /// Called by FeedkickHandler to update the display refresh period estimate.
-  void UpdateRefresh(uint32_t refresh_ns) noexcept { refresh_nsec_ = refresh_ns; }
+  void UpdateRefresh(uint32_t refresh_ns) noexcept {
+    refresh_nsec_ = refresh_ns;
+  }
 
  private:
   // ── Configuration ────────────────────────────────────────────────────────
@@ -691,7 +714,7 @@ class App {
   bool running_ = true;
   bool configured_ = false;
   bool have_presentation_ = false;
-  unsigned frame_seq_ = 0;         // monotone frame counter
+  unsigned frame_seq_ = 0;               // monotone frame counter
   uint32_t refresh_nsec_ = 16'666'667u;  // 60 Hz default until feedback
 
   // Pending presentation-feedback objects (ownership transferred to the list).
@@ -736,7 +759,8 @@ class App {
   void Feedkick() noexcept;
 
   template <typename Traits, typename Handler>
-  [[nodiscard]] bool BindHandler(wl::WlPtr<Handler>& ptr, uint32_t name,
+  [[nodiscard]] bool BindHandler(wl::WlPtr<Handler>& ptr,
+                                 uint32_t name,
                                  uint32_t ver) noexcept {
     wl_proxy* raw =
         registry_.Bind<Traits>(name, std::min(ver, Traits::version));
@@ -812,7 +836,8 @@ int App::Run() {
   return MainLoop() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-// ── ConnectDisplay ────────────────────────────────────────────────────────────
+// ── ConnectDisplay
+// ────────────────────────────────────────────────────────────
 
 bool App::ConnectDisplay() {
   display_.d = wl_display_connect(nullptr);
@@ -824,7 +849,8 @@ bool App::ConnectDisplay() {
   return true;
 }
 
-// ── RoundtripWithTimeout ──────────────────────────────────────────────────────
+// ── RoundtripWithTimeout
+// ──────────────────────────────────────────────────────
 
 bool App::RoundtripWithTimeout(int timeout_ms) const noexcept {
   bool sync_done = false;
@@ -868,7 +894,8 @@ bool App::RoundtripWithTimeout(int timeout_ms) const noexcept {
   return ok && sync_done;
 }
 
-// ── ScanGlobals ───────────────────────────────────────────────────────────────
+// ── ScanGlobals
+// ───────────────────────────────────────────────────────────────
 
 bool App::ScanGlobals() {
   if (!registry_.Create(display_.d)) {
@@ -877,7 +904,7 @@ bool App::ScanGlobals() {
   }
 
   registry_.OnGlobal([this](wl::CRegistry&, uint32_t name,
-                             std::string_view iface, uint32_t ver) {
+                            std::string_view iface, uint32_t ver) {
     using namespace wayland::client;
     using namespace xdg_shell::client;
     using namespace presentation_time::client;
@@ -909,7 +936,8 @@ bool App::ScanGlobals() {
   return true;
 }
 
-// ── BindGlobals ───────────────────────────────────────────────────────────────
+// ── BindGlobals
+// ───────────────────────────────────────────────────────────────
 
 bool App::BindGlobals() {
   using namespace wayland::client;
@@ -934,7 +962,7 @@ bool App::BindGlobals() {
 
   // xdg_wm_base.
   if (!BindHandler<xdg_wm_base_traits>(xdg_wm_base_, xdg_wm_base_name_,
-                                        xdg_wm_base_ver_)) {
+                                       xdg_wm_base_ver_)) {
     std::fprintf(stderr, "presentation-shm: xdg_wm_base bind failed\n");
     return false;
   }
@@ -942,7 +970,7 @@ bool App::BindGlobals() {
   // wp_presentation — optional.
   if (presentation_name_) {
     if (BindHandler<wp_presentation_traits>(presentation_, presentation_name_,
-                                             presentation_ver_)) {
+                                            presentation_ver_)) {
       have_presentation_ = true;
     }
   }
@@ -967,17 +995,17 @@ bool App::BindGlobals() {
   return true;
 }
 
-// ── CreateWindow ──────────────────────────────────────────────────────────────
+// ── CreateWindow
+// ──────────────────────────────────────────────────────────────
 
 bool App::CreateWindow() {
   using namespace wayland::client;
   using namespace xdg_shell::client;
 
   // wl_surface.
-  if (wl_proxy* raw =
-          wl::construct<wl_surface_traits,
-                        wl_compositor_traits::Op::CreateSurface>(
-              *compositor_.Get())) {
+  if (wl_proxy* raw = wl::construct<wl_surface_traits,
+                                    wl_compositor_traits::Op::CreateSurface>(
+          *compositor_.Get())) {
     surface_.Get()->_SetProxy(raw);
   } else {
     std::fprintf(stderr,
@@ -986,10 +1014,9 @@ bool App::CreateWindow() {
   }
 
   // xdg_surface.
-  if (wl_proxy* raw =
-          wl::construct<xdg_surface_traits,
-                        xdg_wm_base_traits::Op::GetXdgSurface>(
-              *xdg_wm_base_.Get(), surface_.Get()->GetProxy())) {
+  if (wl_proxy* raw = wl::construct<xdg_surface_traits,
+                                    xdg_wm_base_traits::Op::GetXdgSurface>(
+          *xdg_wm_base_.Get(), surface_.Get()->GetProxy())) {
     xdg_surface_.Get()->app_ = this;
     xdg_surface_.Get()->_SetProxy(raw);
   } else {
@@ -999,15 +1026,13 @@ bool App::CreateWindow() {
   }
 
   // xdg_toplevel.
-  if (wl_proxy* raw =
-          wl::construct<xdg_toplevel_traits,
-                        xdg_surface_traits::Op::GetToplevel>(
-              *xdg_surface_.Get())) {
+  if (wl_proxy* raw = wl::construct<xdg_toplevel_traits,
+                                    xdg_surface_traits::Op::GetToplevel>(
+          *xdg_surface_.Get())) {
     xdg_toplevel_.Get()->app_ = this;
     xdg_toplevel_.Get()->_SetProxy(raw);
   } else {
-    std::fprintf(stderr,
-                 "presentation-shm: xdg_surface.get_toplevel failed\n");
+    std::fprintf(stderr, "presentation-shm: xdg_surface.get_toplevel failed\n");
     return false;
   }
 
@@ -1024,15 +1049,15 @@ bool App::CreateWindow() {
   // Commit to trigger the configure sequence.
   surface_.Get()->Commit();
   if (!RoundtripWithTimeout()) {
-    std::fprintf(stderr,
-                 "presentation-shm: timed out waiting for configure\n");
+    std::fprintf(stderr, "presentation-shm: timed out waiting for configure\n");
     return false;
   }
 
   return true;
 }
 
-// ── PreRender ─────────────────────────────────────────────────────────────────
+// ── PreRender
+// ─────────────────────────────────────────────────────────────────
 
 bool App::PreRender() {
   // Create the buffer pool.
@@ -1049,7 +1074,8 @@ bool App::PreRender() {
   return true;
 }
 
-// ── Commit helpers ────────────────────────────────────────────────────────────
+// ── Commit helpers
+// ────────────────────────────────────────────────────────────
 
 void App::EmulateRendering() const noexcept {
   if (commit_delay_ms_ <= 0)
@@ -1073,10 +1099,9 @@ void App::AttachPresentationFeedback(uint32_t stamp_ms) noexcept {
   fb->target = fb->commit;
 
   // wp_presentation.feedback(surface) → new wp_presentation_feedback.
-  if (wl_proxy* raw =
-          wl::construct<wp_presentation_feedback_traits,
-                        wp_presentation_traits::Op::Feedback>(
-              *presentation_.Get(), surface_.Get()->GetProxy())) {
+  if (wl_proxy* raw = wl::construct<wp_presentation_feedback_traits,
+                                    wp_presentation_traits::Op::Feedback>(
+          *presentation_.Get(), surface_.Get()->GetProxy())) {
     fb->_SetProxy(raw);
     feedback_list_.push_back(fb);
   } else {
@@ -1087,7 +1112,8 @@ void App::AttachPresentationFeedback(uint32_t stamp_ms) noexcept {
 void App::CommitNext(uint32_t stamp_ms) noexcept {
   const int idx = pool_.NextFree();
   if (idx < 0) {
-    std::fprintf(stderr, "presentation-shm: all buffers busy — skipping frame\n");
+    std::fprintf(stderr,
+                 "presentation-shm: all buffers busy — skipping frame\n");
     return;
   }
 
@@ -1141,10 +1167,13 @@ void App::OnFrameDone(uint32_t stamp_ms) noexcept {
 }
 
 void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
-                               uint32_t tv_sec_hi, uint32_t tv_sec_lo,
-                               uint32_t tv_nsec, uint32_t refresh_ns,
-                               uint32_t seq_hi, uint32_t seq_lo,
-                               uint32_t flags) noexcept {
+                              uint32_t tv_sec_hi,
+                              uint32_t tv_sec_lo,
+                              uint32_t tv_nsec,
+                              uint32_t refresh_ns,
+                              uint32_t seq_hi,
+                              uint32_t seq_lo,
+                              uint32_t flags) noexcept {
   timespec present{};
   timespec_from_proto(present, tv_sec_hi, tv_sec_lo, tv_nsec);
   refresh_nsec_ = refresh_ns;
@@ -1178,17 +1207,15 @@ void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
 
   switch (mode_) {
     case RunMode::LowLatPresent:
-      std::printf(
-          "%6u: c2p %4u ms, p2p %5" PRId64 " us, t2p %6" PRId64
-          " us, [%s] seq %" PRIu64 "\n",
-          fb.frame_no, c2p, p2p, t2p, flagstr, seq);
+      std::printf("%6u: c2p %4u ms, p2p %5" PRId64 " us, t2p %6" PRId64
+                  " us, [%s] seq %" PRIu64 "\n",
+                  fb.frame_no, c2p, p2p, t2p, flagstr, seq);
       break;
     case RunMode::Feedback:
     case RunMode::FeedbackIdle:
-      std::printf(
-          "%6u: f2c %2u ms, c2p %2u ms, f2p %2u ms, p2p %5" PRId64
-          " us, t2p %6" PRId64 " us, [%s] seq %" PRIu64 "\n",
-          fb.frame_no, f2c, c2p, f2p, p2p, t2p, flagstr, seq);
+      std::printf("%6u: f2c %2u ms, c2p %2u ms, f2p %2u ms, p2p %5" PRId64
+                  " us, t2p %6" PRId64 " us, [%s] seq %" PRIu64 "\n",
+                  fb.frame_no, f2c, c2p, f2p, p2p, t2p, flagstr, seq);
       break;
   }
   std::fflush(stdout);
@@ -1223,7 +1250,8 @@ void App::OnFeedbackDiscarded(WpPresentationFeedbackHandler& fb) noexcept {
   }
 }
 
-// ── Feedkick (low-latency mode) ────────────────────────────────────────────────
+// ── Feedkick (low-latency mode)
+// ────────────────────────────────────────────────
 //
 // In RUN_MODE_PRESENT, instead of using wl_surface.frame we wait for the
 // wp_presentation_feedback.presented event of a "kick" feedback object, then
@@ -1231,12 +1259,18 @@ void App::OnFeedbackDiscarded(WpPresentationFeedbackHandler& fb) noexcept {
 // latency while still pacing to the display.
 
 class FeedkickHandler
-    : public presentation_time::client::CWpPresentationFeedback<FeedkickHandler> {
+    : public presentation_time::client::CWpPresentationFeedback<
+          FeedkickHandler> {
  public:
   App* app_ = nullptr;
   void OnSyncOutput(wl_proxy* /*out*/) override {}
-  void OnPresented(uint32_t, uint32_t, uint32_t, uint32_t refresh_ns, uint32_t,
-                   uint32_t, uint32_t) override {
+  void OnPresented(uint32_t,
+                   uint32_t,
+                   uint32_t,
+                   uint32_t refresh_ns,
+                   uint32_t,
+                   uint32_t,
+                   uint32_t) override {
     // Update refresh estimate and trigger the next low-latency commit.
     app_->UpdateRefresh(refresh_ns);
     wl_proxy_destroy(Detach());
@@ -1255,17 +1289,17 @@ void App::Feedkick() noexcept {
 
   auto* fk = new FeedkickHandler();
   fk->app_ = this;
-  if (wl_proxy* raw =
-          wl::construct<wp_presentation_feedback_traits,
-                        wp_presentation_traits::Op::Feedback>(
-              *presentation_.Get(), surface_.Get()->GetProxy())) {
+  if (wl_proxy* raw = wl::construct<wp_presentation_feedback_traits,
+                                    wp_presentation_traits::Op::Feedback>(
+          *presentation_.Get(), surface_.Get()->GetProxy())) {
     fk->_SetProxy(raw);
   } else {
     delete fk;
   }
 }
 
-// ── MainLoop ──────────────────────────────────────────────────────────────────
+// ── MainLoop
+// ──────────────────────────────────────────────────────────────────
 
 void App::StartFeedbackMode() {
   // Kickstart: request the first frame callback, then commit.
@@ -1294,16 +1328,16 @@ void App::LogWlError(wl_display* display, const char* ctx) noexcept {
                  "code %u on %s object %u\n",
                  ctx, proto_code, iface ? iface->name : "unknown", obj_id);
   } else {
-    std::fprintf(stderr,
-                 "presentation-shm: compositor disconnected (%s): %s\n", ctx,
-                 std::strerror(code));
+    std::fprintf(stderr, "presentation-shm: compositor disconnected (%s): %s\n",
+                 ctx, std::strerror(code));
   }
 }
 
 bool App::MainLoop() {
-  std::printf("presentation-shm: mode=%.*s delay=%d ms (press Ctrl-C to quit)\n",
-              static_cast<int>(run_mode_name(mode_).size()),
-              run_mode_name(mode_).data(), commit_delay_ms_);
+  std::printf(
+      "presentation-shm: mode=%.*s delay=%d ms (press Ctrl-C to quit)\n",
+      static_cast<int>(run_mode_name(mode_).size()),
+      run_mode_name(mode_).data(), commit_delay_ms_);
 
   switch (mode_) {
     case RunMode::Feedback:
