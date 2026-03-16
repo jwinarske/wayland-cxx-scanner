@@ -40,6 +40,7 @@ install_headers(
     'include/wl/registry.hpp',
     'include/wl/wayland.hpp',
     'include/wl/xdg_shell.hpp',
+    'include/wl/seat.hpp',
     subdir: 'wl',
 )
 

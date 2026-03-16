@@ -39,6 +39,7 @@ extern "C" {
 #include <wl/client_helpers.hpp>
 #include <wl/display.hpp>
 #include <wl/registry.hpp>
+#include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
 
@@ -60,6 +61,8 @@ extern "C" {
 //
 // <wayland-client-protocol.h> exposes pre-built extern const wl_interface
 // symbols for every core Wayland interface.  We simply forward to them.
+// wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
+// inline by <wl/seat.hpp> (already included above).
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wayland::client {
@@ -73,12 +76,6 @@ const wl_interface& wl_compositor_traits::wl_iface() noexcept {
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
 }
-const wl_interface& wl_seat_traits::wl_iface() noexcept {
-  return wl_seat_interface;
-}
-const wl_interface& wl_keyboard_traits::wl_iface() noexcept {
-  return wl_keyboard_interface;
-}
 
 }  // namespace wayland::client
 
@@ -90,56 +87,16 @@ const wl_interface& wl_keyboard_traits::wl_iface() noexcept {
 //
 // Each handler inherits the generated CRTP base and overrides only the virtual
 // event methods it cares about.  Constructor requests (get_xdg_surface,
-// get_toplevel, get_keyboard, wl_surface.frame, …) are issued at the call site
-// using wl::construct<ChildTraits, Opcode>(parent, args…) from proxy_impl.hpp
-// — the WTL-pattern type-safe helper that encodes child interface and opcode as
-// compile-time template arguments instead of runtime pointer/opcode pairs.
+// get_toplevel, wl_surface.frame, …) are issued at the call site using
+// wl::construct<ChildTraits, Opcode>(parent, args…) from proxy_impl.hpp.
 //
 // wl::XdgWmBaseHandler, wl::XdgSurfaceHandler<App>, and
 // wl::XdgToplevelHandler<App> are provided by <wl/xdg_shell.hpp>.
+// wl::SeatManager<App> (seat + keyboard) is provided by <wl/seat.hpp>.
 // ══════════════════════════════════════════════════════════════════════════════
 
 // Forward-declare App so handler callbacks can call back into it.
 class App;
-
-// ── WlSeatHandler ────────────────────────────────────────────────────────────
-
-class WlSeatHandler : public wayland::client::CWlSeat<WlSeatHandler> {
- public:
-  App* app_ = nullptr;
-
-  void OnCapabilities(uint32_t caps) override;
-  void OnName(const char* /*name*/) override {}
-};
-
-// ── WlKeyboardHandler ────────────────────────────────────────────────────────
-
-class WlKeyboardHandler
-    : public wayland::client::CWlKeyboard<WlKeyboardHandler> {
- public:
-  App* app_ = nullptr;
-
-  // Close the keymap fd to avoid a leak (libwayland passes ownership).
-  void OnKeymap(uint32_t /*fmt*/,
-                const int32_t fd,
-                uint32_t /*size*/) override {
-    close(fd);
-  }
-  void OnEnter(uint32_t /*serial*/,
-               wl_proxy* /*surface*/,
-               wl_array* /*keys*/) override {}
-  void OnLeave(uint32_t /*serial*/, wl_proxy* /*surface*/) override {}
-  void OnKey(uint32_t /*serial*/,
-             uint32_t /*time*/,
-             uint32_t key,
-             uint32_t state) override;
-  void OnModifiers(uint32_t /*serial*/,
-                   uint32_t /*mods_depressed*/,
-                   uint32_t /*mods_latched*/,
-                   uint32_t /*mods_locked*/,
-                   uint32_t /*group*/) override {}
-  void OnRepeatInfo(int32_t /*rate*/, int32_t /*delay*/) override {}
-};
 
 // ── WlCallbackHandler ────────────────────────────────────────────────────────
 // Handles the one-shot wl_callback.done event emitted by the compositor to
@@ -188,7 +145,6 @@ class App {
   void OnXdgSurfaceConfigure(uint32_t serial);
   void OnToplevelConfigure(int32_t w, int32_t h);
   void OnToplevelClose();
-  void OnSeatCapabilities(uint32_t caps);
   void OnKey(uint32_t key, uint32_t state);
   /// Called by WlCallbackHandler::OnDone — render one frame and arm the next
   /// frame callback.
@@ -199,8 +155,9 @@ class App {
   //    Declared first → destroyed last; declared last → destroyed first.
   //
   //    Destruction sequence (reverse of declaration order):
-  //      frame_callback_ → keyboard_ → seat_ → xdg_toplevel_ → xdg_surface_ →
-  //      xdg_wm_base_ → egl_ → surface_ → compositor_ → registry_ → display_
+  //      frame_callback_ → seat_ (keyboard_ first, then seat_ inside) →
+  //      xdg_toplevel_ → xdg_surface_ → xdg_wm_base_ →
+  //      egl_ → surface_ → compositor_ → registry_ → display_
 
   // Wayland display — destroyed last so all proxy operations remain valid.
   wl::DisplayHandle display_;
@@ -243,12 +200,14 @@ class App {
     EglState& operator=(const EglState&) = delete;
   } egl_;
 
-  // CRTP handlers — destroyed in reverse: toplevel first, wm_base last.
+  // XDG CRTP handlers — destroyed in reverse: toplevel first, wm_base last.
   wl::WlPtr<wl::XdgWmBaseHandler>        xdg_wm_base_;
   wl::WlPtr<wl::XdgSurfaceHandler<App>>  xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
-  wl::WlPtr<WlSeatHandler> seat_;
-  wl::WlPtr<WlKeyboardHandler> keyboard_;
+
+  // Seat + keyboard manager — keyboard_ inside is destroyed before seat_.
+  wl::SeatManager<App> seat_;
+
   // Frame-pacing callback — destroyed first among all WlPtrs.
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
@@ -262,7 +221,6 @@ class App {
   // Globals recorded during registry scan
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
-  uint32_t seat_name_ = 0, seat_ver_ = 0;
 
   /// Maximum time (ms) to wait for a compositor response during startup.
   static constexpr int kRoundtripTimeoutMs = 5000;
@@ -283,12 +241,6 @@ class App {
 
   /// Render one frame (GL clear + colour cycle) and swap buffers.
   void RenderFrame() noexcept;
-
-  // ── Protocol teardown helpers ────────────────────────────────────────────
-  /// Send wl_keyboard.release (seat v≥3), then destroy the proxy.
-  void ReleaseKeyboard() noexcept;
-  /// Send wl_seat.release (seat v≥5), then destroy the proxy.
-  void ReleaseSeat() noexcept;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -297,17 +249,7 @@ class App {
 
 // XDG handler methods are provided by wl::XdgSurfaceHandler<App> and
 // wl::XdgToplevelHandler<App> from <wl/xdg_shell.hpp>.
-
-void WlSeatHandler::OnCapabilities(const uint32_t caps) {
-  app_->OnSeatCapabilities(caps);
-}
-
-void WlKeyboardHandler::OnKey(uint32_t /*serial*/,
-                              uint32_t /*time*/,
-                              const uint32_t key,
-                              const uint32_t state) {
-  app_->OnKey(key, state);
-}
+// Seat/keyboard handling is provided by wl::SeatManager<App> from <wl/seat.hpp>.
 
 void WlCallbackHandler::OnDone(const uint32_t time_ms) {
   app_->OnFrameReady(time_ms);
@@ -318,17 +260,16 @@ void WlCallbackHandler::OnDone(const uint32_t time_ms) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 App::~App() {
-  // Send versioned protocol release requests before member destructors run.
-  // These are conditional on the seat version and cannot be expressed purely
-  // through WlPtr::Reset(), so they remain as explicit teardown steps.
-  ReleaseKeyboard();  // wl_keyboard.release (seat v≥3), then WlPtr::Reset()
-                      // no-ops
-  ReleaseSeat();      // wl_seat.release (seat v≥5), then WlPtr::Reset() no-ops
+  // Send versioned seat/keyboard release requests before member destructors
+  // run.  SeatManager::Release() calls wl_keyboard.release (v≥3) then
+  // wl_seat.release (v≥5) before the WlPtr destructors fire.
+  seat_.Release();
 
   // Everything else is handled by member destructors in declaration-reverse
   // order:
-  //   frame_callback_ → keyboard_ → seat_ → xdg_toplevel_ → xdg_surface_ →
-  //   xdg_wm_base_ → egl_ (EglState dtor) → surface_ (wl_surface.destroy) →
+  //   frame_callback_ → seat_ (keyboard_ first, then seat_ inside) →
+  //   xdg_toplevel_ → xdg_surface_ → xdg_wm_base_ →
+  //   egl_ (EglState dtor) → surface_ (wl_surface.destroy) →
   //   compositor_ (wl_proxy_destroy) → registry_ → display_ (disconnect).
 }
 
@@ -380,8 +321,7 @@ bool App::ScanGlobals() {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
     } else if (iface == wl_s::interface_name) {
-      seat_name_ = name;
-      seat_ver_ = ver;
+      seat_.Record(name, ver);
     }
   });
 
@@ -429,12 +369,10 @@ bool App::BindGlobals() {
     return false;
   }
 
-  // wl_seat — optional; skip silently if not advertised.
-  // seat_.Get()->app_ provides the back-pointer used by OnCapabilities.
-  if (seat_name_) {
-    if (wl::BindHandler<wl_seat_traits>(registry_, seat_, seat_name_,
-                                        seat_ver_))
-      seat_.Get()->app_ = this;
+  // wl_seat — optional; SeatManager::Bind() is a no-op if not advertised.
+  if (!seat_.Bind(registry_, this)) {
+    std::fprintf(stderr, "simple-egl: wl_seat bind failed\n");
+    return false;
   }
 
   // Roundtrip so seat capabilities arrive before CreateSurfaces.
@@ -618,31 +556,6 @@ void App::RenderFrame() noexcept {
   ++frame_;
 }
 
-void App::ReleaseKeyboard() noexcept {
-  if (keyboard_.IsNull())
-    return;
-  // wl_keyboard.release is a destructor request available since seat version 3.
-  // It sends the protocol message and destroys the proxy internally.
-  // For older seats (v1/v2), fall through to Reset() which just calls
-  // wl_proxy_destroy without a protocol message (correct for those versions).
-  using Kbd = wayland::client::wl_keyboard_traits;
-  if (seat_ver_ >= Kbd::Op::Since::Release)
-    keyboard_.Get()
-        ->Release();  // marshals release + calls wl_proxy_destroy internally
-  keyboard_.Reset();  // no-op if Release() already detached the proxy
-}
-
-void App::ReleaseSeat() noexcept {
-  if (seat_.IsNull())
-    return;
-  // wl_seat.release is a destructor request available since seat version 5.
-  using S = wayland::client::wl_seat_traits;
-  if (seat_ver_ >= S::Op::Since::Release)
-    seat_.Get()
-        ->Release();  // marshals release + calls wl_proxy_destroy internally
-  seat_.Reset();      // no-op if Release() already detached the proxy
-}
-
 // ── Frame-callback helpers
 // ────────────────────────────────────────────────────
 
@@ -703,21 +616,6 @@ void App::OnToplevelConfigure(const int32_t w, const int32_t h) {
 
 void App::OnToplevelClose() {
   running_ = false;
-}
-
-void App::OnSeatCapabilities(const uint32_t caps) {
-  if (const bool has_kbd = (caps & WL_SEAT_CAPABILITY_KEYBOARD) != 0u;
-      has_kbd && keyboard_.IsNull()) {
-    using wl_s = wayland::client::wl_seat_traits;
-    using wl_k = wayland::client::wl_keyboard_traits;
-    if (wl::SetupHandler(keyboard_,
-                         wl::construct<wl_k, wl_s::Op::GetKeyboard>(
-                             *seat_.Get()))) {
-      keyboard_.Get()->app_ = this;
-    }
-  } else if (!has_kbd && !keyboard_.IsNull()) {
-    ReleaseKeyboard();
-  }
 }
 
 void App::OnKey(const uint32_t key, const uint32_t state) {
