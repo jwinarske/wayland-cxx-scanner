@@ -42,6 +42,7 @@ extern "C" {
 // ── Standard library
 // ──────────────────────────────────────────────────────────
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cerrno>
 #include <cinttypes>
@@ -380,7 +381,7 @@ static void paint_pixels(void* image,
                          uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
-  auto* pixel = static_cast<uint32_t*>(image);
+  auto* base = static_cast<uint32_t*>(image);
 
   const double ang = M_PI * 2.0 / 1'000'000.0 * static_cast<double>(phase);
   const double s = std::sin(ang);
@@ -396,9 +397,11 @@ static void paint_pixels(void* image,
 
     for (int x = 0; x < width; ++x) {
       const int ox = x - halfw;
+      const int idx = y * width + x;
 
       if (ox * ox + y2 > outer_r) {
-        *pixel++ = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        base[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
         continue;
       }
 
@@ -413,7 +416,8 @@ static void paint_pixels(void* image,
       if ((rx < 0.0) == (ry < 0.0))
         v |= 0x000000FFu;
 
-      *pixel++ = v;
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      base[idx] = v;
     }
   }
 }
@@ -559,16 +563,18 @@ static constexpr int kNumBuffers = 4;
 
 struct BufferPool {
   ShmMapping mem;
-  wl::WlPtr<WlBufferHandler> bufs[kNumBuffers];
+  std::array<wl::WlPtr<WlBufferHandler>, static_cast<std::size_t>(kNumBuffers)>
+      bufs;
   int next = 0;
   int width = 0;
   int height = 0;
 
-  [[nodiscard]] bool Create(int w, int h, wl_proxy* shm_proxy) noexcept;
+  [[nodiscard]] bool Create(int w, int h, wl_proxy* shm_raw) noexcept;
 
   // Returns the mapped pixel data for buffer index i.
   [[nodiscard]] void* PixelData(int i) const noexcept {
     const std::size_t stride = static_cast<std::size_t>(width) * 4u;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     return static_cast<uint8_t*>(mem.data) +
            static_cast<std::size_t>(i) * stride *
                static_cast<std::size_t>(height);
@@ -578,7 +584,7 @@ struct BufferPool {
   [[nodiscard]] int NextFree() noexcept {
     for (int attempt = 0; attempt < kNumBuffers; ++attempt) {
       const int idx = (next + attempt) % kNumBuffers;
-      if (!bufs[idx].Get()->busy) {
+      if (!bufs.at(static_cast<std::size_t>(idx)).Get()->busy) {
         next = (idx + 1) % kNumBuffers;
         return idx;
       }
@@ -625,13 +631,13 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
   }
 
   for (int i = 0; i < kNumBuffers; ++i) {
-    const int32_t offset =
+    const auto offset =
         static_cast<int32_t>(static_cast<std::size_t>(i) * per_buf);
     if (wl_proxy* raw = wl::construct<wl_buffer_traits,
                                       wl_shm_pool_traits::Op::CreateBuffer>(
             *pool.Get(), offset, w, h, static_cast<int32_t>(stride),
             WL_SHM_FORMAT_XRGB8888)) {
-      bufs[i].Get()->_SetProxy(raw);
+      bufs.at(static_cast<std::size_t>(i)).Get()->_SetProxy(raw);
     } else {
       std::fprintf(stderr,
                    "presentation-shm: wl_shm_pool.create_buffer [%d] "
@@ -818,6 +824,11 @@ App::~App() {
     delete fb;
   delete last_presented_;
 }
+
+// Set to 0 by signal_handler() on SIGINT so the event loop exits cleanly on
+// the first Ctrl+C.  Declared here (before App::Run) so the loop can read it.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static volatile std::sig_atomic_t g_running = 1;
 
 int App::Run() {
   if (!ConnectDisplay())
@@ -1034,11 +1045,12 @@ bool App::CreateWindow() {
   }
 
   // Format title like the original.
-  char title[128];
-  std::snprintf(title, sizeof(title), "presentation-shm: %.*s [delay %d ms]",
+  std::array<char, 128> title{};
+  std::snprintf(title.data(), title.size(),
+                "presentation-shm: %.*s [delay %d ms]",
                 static_cast<int>(run_mode_name(mode_).size()),
                 run_mode_name(mode_).data(), commit_delay_ms_);
-  xdg_toplevel_.Get()->SetTitle(title);
+  xdg_toplevel_.Get()->SetTitle(title.data());
   xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.presentation-shm");
   xdg_toplevel_.Get()->SetMinSize(kWidth, kHeight);
   xdg_toplevel_.Get()->SetMaxSize(kWidth, kHeight);
@@ -1119,10 +1131,11 @@ void App::CommitNext(uint32_t stamp_ms) noexcept {
     return;
   }
 
-  surface_.Get()->Attach(pool_.bufs[idx].Get()->GetProxy(), 0, 0);
+  surface_.Get()->Attach(
+      pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
   surface_.Get()->Damage(0, 0, kWidth, kHeight);
   surface_.Get()->Commit();
-  pool_.bufs[idx].Get()->busy = true;
+  pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->busy = true;
 }
 
 void App::RequestFrameCallback() noexcept {
@@ -1191,27 +1204,27 @@ void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
   const int64_t t2p = timespec_diff_us(present, fb.target);
 
   // Build flag string: s=vsync c=hw_clock e=hw_completion z=zero_copy.
-  char flagstr[8] = "____";
+  std::array<char, 8> flagstr{"____"};
   if (flags & 0x1u)
-    flagstr[0] = 's';
+    flagstr.at(0) = 's';
   if (flags & 0x2u)
-    flagstr[1] = 'c';
+    flagstr.at(1) = 'c';
   if (flags & 0x4u)
-    flagstr[2] = 'e';
+    flagstr.at(2) = 'e';
   if (flags & 0x8u)
-    flagstr[3] = 'z';
+    flagstr.at(3) = 'z';
 
   switch (mode_) {
     case RunMode::LowLatPresent:
       std::printf("%6u: c2p %4u ms, p2p %5" PRId64 " us, t2p %6" PRId64
                   " us, [%s] seq %" PRIu64 "\n",
-                  fb.frame_no, c2p, p2p, t2p, flagstr, seq);
+                  fb.frame_no, c2p, p2p, t2p, flagstr.data(), seq);
       break;
     case RunMode::Feedback:
     case RunMode::FeedbackIdle:
       std::printf("%6u: f2c %2u ms, c2p %2u ms, f2p %2u ms, p2p %5" PRId64
                   " us, t2p %6" PRId64 " us, [%s] seq %" PRIu64 "\n",
-                  fb.frame_no, f2c, c2p, f2p, p2p, t2p, flagstr, seq);
+                  fb.frame_no, f2c, c2p, f2p, p2p, t2p, flagstr.data(), seq);
       break;
   }
   std::fflush(stdout);
@@ -1350,7 +1363,10 @@ bool App::MainLoop() {
 
   const int fd = wl_display_get_fd(display_.d);
 
-  while (running_) {
+  // g_running is set to 0 by the SIGINT handler (first Ctrl+C).  Check it in
+  // the outer loop condition so the first signal exits cleanly rather than
+  // requiring a second Ctrl+C to kill the process via the reset default action.
+  while (running_ && g_running) {
     while (wl_display_flush(display_.d) < 0) {
       if (errno != EAGAIN) {
         LogWlError(display_.d, "flush");
@@ -1359,15 +1375,18 @@ bool App::MainLoop() {
       pollfd pfd{fd, POLLOUT, 0};
       if (poll(&pfd, 1, -1) < 0) {
         if (errno == EINTR)
-          continue;
+          break;  // break inner flush loop; outer condition will re-check
+                  // g_running
         return false;
       }
     }
+    if (!g_running)
+      break;
 
     pollfd pfd{fd, POLLIN, 0};
     if (poll(&pfd, 1, -1) < 0) {
       if (errno == EINTR)
-        continue;
+        continue;  // re-check outer condition (running_ && g_running)
       return false;
     }
 
@@ -1384,8 +1403,6 @@ bool App::MainLoop() {
 // ══════════════════════════════════════════════════════════════════════════════
 // Entry point
 // ══════════════════════════════════════════════════════════════════════════════
-
-static volatile std::sig_atomic_t g_running = 1;
 
 static void signal_handler(int /*sig*/) noexcept {
   g_running = 0;
@@ -1415,6 +1432,8 @@ int main(int argc, char* argv[]) {
   RunMode mode = RunMode::Feedback;
   int commit_delay_ms = 0;
 
+  // argv is a C-API parameter; pointer arithmetic on it is unavoidable.
+  // NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   for (int i = 1; i < argc; ++i) {
     std::string_view arg{argv[i]};
     if (arg == "-f")
@@ -1423,13 +1442,15 @@ int main(int argc, char* argv[]) {
       mode = RunMode::FeedbackIdle;
     else if (arg == "-p")
       mode = RunMode::LowLatPresent;
-    else if (arg == "-d" && i + 1 < argc)
-      commit_delay_ms = std::atoi(argv[++i]);
-    else {
+    else if (arg == "-d" && i + 1 < argc) {
+      char* end = nullptr;
+      commit_delay_ms = static_cast<int>(std::strtol(argv[++i], &end, 10));
+    } else {
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
   }
+  // NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 
   App app{mode, commit_delay_ms};
   return app.Run();
