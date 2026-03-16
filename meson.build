@@ -39,6 +39,7 @@ install_headers(
     'include/wl/resource_impl.hpp',
     'include/wl/registry.hpp',
     'include/wl/wayland.hpp',
+    'include/wl/xdg_shell.hpp',
     subdir: 'wl',
 )
 
