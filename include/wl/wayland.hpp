@@ -4,6 +4,8 @@
 // Main umbrella header — include this to pull in the full WTL-style
 // Wayland C++23 framework.
 #pragma once
+#include <wl/client_helpers.hpp>
+#include <wl/display.hpp>
 #include <wl/event_map.hpp>
 #include <wl/fd_handle.hpp>
 #include <wl/proxy.hpp>

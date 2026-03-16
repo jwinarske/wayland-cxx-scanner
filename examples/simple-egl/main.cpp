@@ -36,6 +36,8 @@ extern "C" {
 
 // ── Framework headers
 // ─────────────────────────────────────────────────────────
+#include <wl/client_helpers.hpp>
+#include <wl/display.hpp>
 #include <wl/registry.hpp>
 #include <wl/wl_ptr.hpp>
 
@@ -421,13 +423,7 @@ class App {
   //      xdg_wm_base_ → egl_ → surface_ → compositor_ → registry_ → display_
 
   // Wayland display — destroyed last so all proxy operations remain valid.
-  struct DisplayRaii {
-    wl_display* d = nullptr;
-    ~DisplayRaii() noexcept {
-      if (d)
-        wl_display_disconnect(d);
-    }
-  } display_;
+  wl::DisplayHandle display_;
 
   // Registry — destroyed before display_.
   wl::CRegistry registry_;
@@ -502,10 +498,6 @@ class App {
   bool MainLoop();
   // (No CleanupEgl — EglState::~EglState() handles teardown automatically.)
 
-  /// Timeout-aware replacement for wl_display_roundtrip().
-  [[nodiscard]] bool RoundtripWithTimeout(
-      int timeout_ms = kRoundtripTimeoutMs) const noexcept;
-
   /// Register a wl_surface.frame callback with the compositor.
   void RequestFrameCallback() noexcept;
 
@@ -517,30 +509,6 @@ class App {
   void ReleaseKeyboard() noexcept;
   /// Send wl_seat.release (seat v≥5), then destroy the proxy.
   void ReleaseSeat() noexcept;
-
-  // ── Template helpers ─────────────────────────────────────────────────────
-
-  /// Attach @p raw to a WlPtr handler, install its event listener, and wire
-  /// the back-pointer.  Returns false (and does nothing) if @p raw is null.
-  template <typename Handler>
-  [[nodiscard]] bool SetupHandler(wl::WlPtr<Handler>& ptr,
-                                  wl_proxy* raw) noexcept {
-    if (!raw)
-      return false;
-    ptr.Get()->app_ = this;
-    ptr.Get()->_SetProxy(raw);
-    return true;
-  }
-
-  /// Bind a registry global capped to the version the traits were compiled
-  /// against, then set up the CRTP handler.  Returns false on failure.
-  template <typename Traits, typename Handler>
-  [[nodiscard]] bool BindHandler(wl::WlPtr<Handler>& ptr,
-                                 const uint32_t name,
-                                 uint32_t ver) noexcept {
-    return SetupHandler(
-        ptr, registry_.Bind<Traits>(name, std::min(ver, Traits::version)));
-  }
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -614,8 +582,7 @@ int App::Run() {
 // ────────────────────────────────────────────────────────────
 
 bool App::ConnectDisplay() {
-  display_.d = wl_display_connect(nullptr);
-  if (!display_.d) {
+  if (!display_.Connect()) {
     std::fprintf(stderr, "simple-egl: wl_display_connect: %s\n",
                  std::strerror(errno));
     return false;
@@ -623,78 +590,11 @@ bool App::ConnectDisplay() {
   return true;
 }
 
-// ── RoundtripWithTimeout
-// ──────────────────────────────────────────────────────
-
-bool App::RoundtripWithTimeout(const int timeout_ms) const noexcept {
-  // wl_display_sync creates a server-side sync marker.  The compositor fires
-  // wl_callback.done when all requests queued before the sync have been
-  // processed.  We use poll() around each blocking read, so we never wait
-  // longer than timeout_ms milliseconds for an unresponsive compositor.
-  bool sync_done = false;
-
-  wl_callback* const sync_cb = wl_display_sync(display_.d);
-  if (!sync_cb)
-    return false;
-
-  // ScopeExit guarantees wl_callback_destroy on every return path — success,
-  // timeout, and I/O error alike — without duplicated cleanup calls.
-  const auto guard = wl::ScopeExit{[sync_cb] { wl_callback_destroy(sync_cb); }};
-
-  // Stateless lambda converts to a plain C function pointer (C++11 §5.1.2).
-  static constexpr wl_callback_listener kSyncListener = {
-      [](void* data, wl_callback* /*cb*/, uint32_t /*serial*/) noexcept {
-        *static_cast<bool*>(data) = true;
-      }};
-  wl_callback_add_listener(sync_cb, &kSyncListener, &sync_done);
-
-  const int fd = wl_display_get_fd(display_.d);
-  bool ok = true;
-
-  while (!sync_done && ok) {
-    // ── Write ──────────────────────────────────────────────────────────────
-    // Flush outgoing requests (including the sync) to the compositor.
-    if (wl_display_flush(display_.d) < 0) {
-      if (errno != EAGAIN) {
-        ok = false;
-        break;
-      }
-      // Socket buffer is full; wait for it to drain, then retry the flush.
-      pollfd out{fd, POLLOUT, 0};
-      if (poll(&out, 1, timeout_ms) <= 0) {
-        ok = false;
-        break;
-      }
-      continue;
-    }
-
-    // ── Wait ───────────────────────────────────────────────────────────────
-    // Block until the compositor sends data or the deadline elapses.
-    pollfd in{fd, POLLIN, 0};
-    const int n = poll(&in, 1, timeout_ms);
-    if (n < 0 && errno == EINTR)
-      continue;  // signal — retry
-    if (n <= 0) {
-      ok = false;
-      break;
-    }  // 0 = timeout, -1 = I/O error
-
-    // ── Read & dispatch ────────────────────────────────────────────────────
-    if (wl_display_dispatch(display_.d) < 0) {
-      ok = false;
-      break;
-    }
-  }
-
-  // guard fires here — wl_callback_destroy(sync_cb) called automatically.
-  return ok && sync_done;
-}
-
 // ── ScanGlobals
 // ───────────────────────────────────────────────────────────────
 
 bool App::ScanGlobals() {
-  if (!registry_.Create(display_.d)) {
+  if (!registry_.Create(display_.Get())) {
     std::fprintf(stderr, "simple-egl: wl_display_get_registry failed\n");
     return false;
   }
@@ -717,7 +617,7 @@ bool App::ScanGlobals() {
     }
   });
 
-  if (!RoundtripWithTimeout()) {
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr,
                  "simple-egl: timed out waiting for global advertisements\n");
     return false;
@@ -753,18 +653,23 @@ bool App::BindGlobals() {
   }
 
   // xdg_wm_base — CRTP handler receives ping events
-  if (!BindHandler<xdg_wm_base_traits>(xdg_wm_base_, xdg_wm_base_name_,
-                                       xdg_wm_base_ver_)) {
+  if (!wl::BindHandler<xdg_wm_base_traits>(registry_, xdg_wm_base_,
+                                            xdg_wm_base_name_,
+                                            xdg_wm_base_ver_)) {
     std::fprintf(stderr, "simple-egl: xdg_wm_base bind failed\n");
     return false;
   }
+  xdg_wm_base_.Get()->app_ = this;
 
   // wl_seat — optional; skip silently if not advertised
-  if (seat_name_)
-    std::ignore = BindHandler<wl_seat_traits>(seat_, seat_name_, seat_ver_);
+  if (seat_name_) {
+    if (wl::BindHandler<wl_seat_traits>(registry_, seat_, seat_name_,
+                                        seat_ver_))
+      seat_.Get()->app_ = this;
+  }
 
   // Roundtrip so seat capabilities arrive before CreateSurfaces.
-  if (!RoundtripWithTimeout()) {
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr,
                  "simple-egl: timed out waiting for seat capabilities\n");
     return false;
@@ -792,28 +697,30 @@ bool App::CreateSurfaces() {
   }
 
   // xdg_wm_base.get_xdg_surface → xdg_surface.
-  if (!SetupHandler(xdg_surface_,
-                    wl::construct<xdg_surface_traits,
-                                  xdg_wm_base_traits::Op::GetXdgSurface>(
-                        *xdg_wm_base_.Get(), surface_.Get()->GetProxy()))) {
+  if (!wl::SetupHandler(xdg_surface_,
+                        wl::construct<xdg_surface_traits,
+                                      xdg_wm_base_traits::Op::GetXdgSurface>(
+                            *xdg_wm_base_.Get(), surface_.Get()->GetProxy()))) {
     std::fprintf(stderr, "simple-egl: xdg_wm_base.get_xdg_surface failed\n");
     return false;
   }
+  xdg_surface_.Get()->app_ = this;
 
   // xdg_surface.get_toplevel → xdg_toplevel.
-  if (!SetupHandler(xdg_toplevel_,
-                    wl::construct<xdg_toplevel_traits,
-                                  xdg_surface_traits::Op::GetToplevel>(
-                        *xdg_surface_.Get()))) {
+  if (!wl::SetupHandler(xdg_toplevel_,
+                        wl::construct<xdg_toplevel_traits,
+                                      xdg_surface_traits::Op::GetToplevel>(
+                            *xdg_surface_.Get()))) {
     std::fprintf(stderr, "simple-egl: xdg_surface.get_toplevel failed\n");
     return false;
   }
+  xdg_toplevel_.Get()->app_ = this;
 
   xdg_toplevel_.Get()->SetTitle("simple-egl");
   xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.simple-egl");
 
   surface_.Get()->Commit();
-  if (!RoundtripWithTimeout()) {
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr,
                  "simple-egl: timed out waiting for xdg_surface configure\n");
     return false;
@@ -827,7 +734,7 @@ bool App::CreateSurfaces() {
 bool App::InitEgl() {
   egl_.display = eglGetDisplay(
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-cstyle-cast)
-      static_cast<EGLNativeDisplayType>(display_.d));
+      static_cast<EGLNativeDisplayType>(display_.Get()));
   if (egl_.display == EGL_NO_DISPLAY) {
     std::fprintf(stderr, "simple-egl: eglGetDisplay failed\n");
     return false;
@@ -917,30 +824,6 @@ bool App::InitEgl() {
 // ── MainLoop
 // ──────────────────────────────────────────────────────────────────
 
-/// Log the reason for a Wayland display error.
-///
-/// wl_display_get_error() returns an errno-compatible code:
-///   • EPROTO  → the compositor sent a bad protocol message; use
-///               wl_display_get_protocol_error() for the exact code.
-///   • anything else → a plain I/O error (EPIPE, ECONNRESET, …).
-static void LogWlError(wl_display* display, const char* context) noexcept {
-  const int err = wl_display_get_error(display);
-  const int code = err ? err : errno;
-  if (code == EPROTO) {
-    const wl_interface* iface = nullptr;
-    uint32_t obj_id = 0;
-    const uint32_t proto_code =
-        wl_display_get_protocol_error(display, &iface, &obj_id);
-    std::fprintf(stderr,
-                 "simple-egl: compositor protocol error (%s): code %u"
-                 " on %s object %u\n",
-                 context, proto_code, iface ? iface->name : "unknown", obj_id);
-  } else {
-    std::fprintf(stderr, "simple-egl: compositor disconnected (%s): %s\n",
-                 context, std::strerror(code));
-  }
-}
-
 bool App::MainLoop() {
   std::printf("simple-egl: entering render loop (ESC or close to quit)\n");
 
@@ -950,56 +833,12 @@ bool App::MainLoop() {
   RequestFrameCallback();
   RenderFrame();  // eglSwapBuffers commits the buffer + the callback request
 
-  const int fd = wl_display_get_fd(display_.d);
-
-  while (running_) {
-    // ── Write phase ──────────────────────────────────────────────────────────
-    // Flush all outgoing protocol messages (frame-callback requests, acks…).
-    // If the compositor socket is temporarily full, poll for writeability
-    // instead of spinning.
-    while (wl_display_flush(display_.d) < 0) {
-      if (errno != EAGAIN) {
-        LogWlError(display_.d, "flush");
-        return false;
-      }
-      pollfd pfd{fd, POLLOUT, 0};
-      if (poll(&pfd, 1, -1) < 0) {
-        if (errno == EINTR)
-          continue;
-        std::fprintf(stderr, "simple-egl: poll(POLLOUT) failed: %s\n",
-                     std::strerror(errno));
-        return false;
-      }
-    }
-
-    // ── Dispatch phase ───────────────────────────────────────────────────────
-    // Dispatch events already in the client-side queue (no blocking).
-    if (wl_display_dispatch_pending(display_.d) < 0) {
-      LogWlError(display_.d, "dispatch_pending");
-      return false;
-    }
-
-    // ── Wait phase ───────────────────────────────────────────────────────────
-    // Block until the compositor sends at least one event (frame done,
-    // configure, keyboard input, …).
-    pollfd pfd{fd, POLLIN, 0};
-    if (poll(&pfd, 1, -1) < 0) {
-      if (errno == EINTR)
-        continue;
-      std::fprintf(stderr, "simple-egl: poll(POLLIN) failed: %s\n",
-                   std::strerror(errno));
-      return false;
-    }
-
-    // Read and dispatch the incoming event(s).
-    if (wl_display_dispatch(display_.d) < 0) {
-      LogWlError(display_.d, "dispatch");
-      return false;
-    }
-  }
-
-  std::printf("simple-egl: exiting cleanly\n");
-  return true;
+  const bool ok = wl::RunEventLoop(display_.Get(),
+                                   [this] { return !running_; },
+                                   "simple-egl");
+  if (ok)
+    std::printf("simple-egl: exiting cleanly\n");
+  return ok;
 }
 
 void App::RenderFrame() noexcept {
@@ -1102,9 +941,10 @@ void App::OnSeatCapabilities(const uint32_t caps) {
       has_kbd && keyboard_.IsNull()) {
     using wl_s = wayland::client::wl_seat_traits;
     using wl_k = wayland::client::wl_keyboard_traits;
-    if (auto* raw = wl::construct<wl_k, wl_s::Op::GetKeyboard>(*seat_.Get())) {
+    if (wl::SetupHandler(keyboard_,
+                         wl::construct<wl_k, wl_s::Op::GetKeyboard>(
+                             *seat_.Get()))) {
       keyboard_.Get()->app_ = this;
-      keyboard_.Get()->_SetProxy(raw);
     }
   } else if (!has_kbd && !keyboard_.IsNull()) {
     ReleaseKeyboard();

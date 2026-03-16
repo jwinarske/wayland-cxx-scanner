@@ -35,6 +35,8 @@ extern "C" {
 
 // ── Framework headers
 // ─────────────────────────────────────────────────────────
+#include <wl/client_helpers.hpp>
+#include <wl/display.hpp>
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
 #include <wl/wl_ptr.hpp>
@@ -696,13 +698,7 @@ class App {
   static constexpr int kRoundtripTimeoutMs = 5000;
 
   // ── Wayland objects (destruction order = reverse declaration) ────────────
-  struct DisplayRaii {
-    wl_display* d = nullptr;
-    ~DisplayRaii() noexcept {
-      if (d)
-        wl_display_disconnect(d);
-    }
-  } display_;
+  wl::DisplayHandle display_;
 
   wl::CRegistry registry_;
 
@@ -752,9 +748,6 @@ class App {
   void StartFeedbackMode();
   void StartPresentMode();
 
-  [[nodiscard]] bool RoundtripWithTimeout(
-      int timeout_ms = kRoundtripTimeoutMs) const noexcept;
-
   // ── Commit helpers ────────────────────────────────────────────────────────
 
   /// Apply optional rendering delay (emulates GPU work).
@@ -771,23 +764,6 @@ class App {
 
   /// Kick the first commit in RUN_MODE_PRESENT.
   void Feedkick() noexcept;
-
-  template <typename Traits, typename Handler>
-  [[nodiscard]] bool BindHandler(wl::WlPtr<Handler>& ptr,
-                                 uint32_t name,
-                                 uint32_t ver) noexcept {
-    wl_proxy* raw =
-        registry_.Bind<Traits>(name, std::min(ver, Traits::version));
-    if (!raw)
-      return false;
-    // Set the back-pointer only when the handler exposes one (C++23 requires).
-    if constexpr (requires { ptr.Get()->app_; })
-      ptr.Get()->app_ = this;
-    ptr.Get()->_SetProxy(raw);
-    return true;
-  }
-
-  static void LogWlError(wl_display* display, const char* ctx) noexcept;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -849,8 +825,7 @@ int App::Run() {
 // ────────────────────────────────────────────────────────────
 
 bool App::ConnectDisplay() {
-  display_.d = wl_display_connect(nullptr);
-  if (!display_.d) {
+  if (!display_.Connect()) {
     std::fprintf(stderr, "presentation-shm: wl_display_connect: %s\n",
                  std::strerror(errno));
     return false;
@@ -858,56 +833,11 @@ bool App::ConnectDisplay() {
   return true;
 }
 
-// ── RoundtripWithTimeout
-// ──────────────────────────────────────────────────────
-
-bool App::RoundtripWithTimeout(int timeout_ms) const noexcept {
-  bool sync_done = false;
-  wl_callback* const sync_cb = wl_display_sync(display_.d);
-  if (!sync_cb)
-    return false;
-  const auto guard = wl::ScopeExit{[sync_cb] { wl_callback_destroy(sync_cb); }};
-  static constexpr wl_callback_listener kSyncListener = {
-      [](void* data, wl_callback*, uint32_t) noexcept {
-        *static_cast<bool*>(data) = true;
-      }};
-  wl_callback_add_listener(sync_cb, &kSyncListener, &sync_done);
-  const int fd = wl_display_get_fd(display_.d);
-  bool ok = true;
-  while (!sync_done && ok) {
-    if (wl_display_flush(display_.d) < 0) {
-      if (errno != EAGAIN) {
-        ok = false;
-        break;
-      }
-      pollfd out{fd, POLLOUT, 0};
-      if (poll(&out, 1, timeout_ms) <= 0) {
-        ok = false;
-        break;
-      }
-      continue;
-    }
-    pollfd in{fd, POLLIN, 0};
-    const int n = poll(&in, 1, timeout_ms);
-    if (n < 0 && errno == EINTR)
-      continue;
-    if (n <= 0) {
-      ok = false;
-      break;
-    }
-    if (wl_display_dispatch(display_.d) < 0) {
-      ok = false;
-      break;
-    }
-  }
-  return ok && sync_done;
-}
-
 // ── ScanGlobals
 // ───────────────────────────────────────────────────────────────
 
 bool App::ScanGlobals() {
-  if (!registry_.Create(display_.d)) {
+  if (!registry_.Create(display_.Get())) {
     std::fprintf(stderr, "presentation-shm: registry creation failed\n");
     return false;
   }
@@ -933,7 +863,7 @@ bool App::ScanGlobals() {
     }
   });
 
-  if (!RoundtripWithTimeout()) {
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "presentation-shm: timed out waiting for globals\n");
     return false;
   }
@@ -964,22 +894,24 @@ bool App::BindGlobals() {
   }
 
   // wl_shm.
-  if (!BindHandler<wl_shm_traits>(shm_, shm_name_, shm_ver_)) {
+  if (!wl::BindHandler<wl_shm_traits>(registry_, shm_, shm_name_, shm_ver_)) {
     std::fprintf(stderr, "presentation-shm: wl_shm bind failed\n");
     return false;
   }
 
   // xdg_wm_base.
-  if (!BindHandler<xdg_wm_base_traits>(xdg_wm_base_, xdg_wm_base_name_,
-                                       xdg_wm_base_ver_)) {
+  if (!wl::BindHandler<xdg_wm_base_traits>(registry_, xdg_wm_base_,
+                                            xdg_wm_base_name_,
+                                            xdg_wm_base_ver_)) {
     std::fprintf(stderr, "presentation-shm: xdg_wm_base bind failed\n");
     return false;
   }
 
   // wp_presentation — optional.
   if (presentation_name_) {
-    if (BindHandler<wp_presentation_traits>(presentation_, presentation_name_,
-                                            presentation_ver_)) {
+    if (wl::BindHandler<wp_presentation_traits>(registry_, presentation_,
+                                                presentation_name_,
+                                                presentation_ver_)) {
       have_presentation_ = true;
     }
   }
@@ -990,7 +922,7 @@ bool App::BindGlobals() {
   }
 
   // Roundtrip so wl_shm.format and wp_presentation.clock_id arrive.
-  if (!RoundtripWithTimeout()) {
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "presentation-shm: timed out waiting for formats\n");
     return false;
   }
@@ -1023,27 +955,26 @@ bool App::CreateWindow() {
   }
 
   // xdg_surface.
-  if (wl_proxy* raw = wl::construct<xdg_surface_traits,
-                                    xdg_wm_base_traits::Op::GetXdgSurface>(
-          *xdg_wm_base_.Get(), surface_.Get()->GetProxy())) {
-    xdg_surface_.Get()->app_ = this;
-    xdg_surface_.Get()->_SetProxy(raw);
-  } else {
+  if (!wl::SetupHandler(xdg_surface_,
+                        wl::construct<xdg_surface_traits,
+                                      xdg_wm_base_traits::Op::GetXdgSurface>(
+                            *xdg_wm_base_.Get(),
+                            surface_.Get()->GetProxy()))) {
     std::fprintf(stderr,
                  "presentation-shm: xdg_wm_base.get_xdg_surface failed\n");
     return false;
   }
+  xdg_surface_.Get()->app_ = this;
 
   // xdg_toplevel.
-  if (wl_proxy* raw = wl::construct<xdg_toplevel_traits,
-                                    xdg_surface_traits::Op::GetToplevel>(
-          *xdg_surface_.Get())) {
-    xdg_toplevel_.Get()->app_ = this;
-    xdg_toplevel_.Get()->_SetProxy(raw);
-  } else {
+  if (!wl::SetupHandler(xdg_toplevel_,
+                        wl::construct<xdg_toplevel_traits,
+                                      xdg_surface_traits::Op::GetToplevel>(
+                            *xdg_surface_.Get()))) {
     std::fprintf(stderr, "presentation-shm: xdg_surface.get_toplevel failed\n");
     return false;
   }
+  xdg_toplevel_.Get()->app_ = this;
 
   // Format title like the original.
   std::array<char, 128> title{};
@@ -1058,7 +989,7 @@ bool App::CreateWindow() {
 
   // Commit to trigger the configure sequence.
   surface_.Get()->Commit();
-  if (!RoundtripWithTimeout()) {
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "presentation-shm: timed out waiting for configure\n");
     return false;
   }
@@ -1353,24 +1284,6 @@ void App::StartPresentMode() {
   CommitNext(0);
 }
 
-void App::LogWlError(wl_display* display, const char* ctx) noexcept {
-  const int err = wl_display_get_error(display);
-  const int code = err ? err : errno;
-  if (code == EPROTO) {
-    const wl_interface* iface = nullptr;
-    uint32_t obj_id = 0;
-    const uint32_t proto_code =
-        wl_display_get_protocol_error(display, &iface, &obj_id);
-    std::fprintf(stderr,
-                 "presentation-shm: compositor protocol error (%s): "
-                 "code %u on %s object %u\n",
-                 ctx, proto_code, iface ? iface->name : "unknown", obj_id);
-  } else {
-    std::fprintf(stderr, "presentation-shm: compositor disconnected (%s): %s\n",
-                 ctx, std::strerror(code));
-  }
-}
-
 bool App::MainLoop() {
   std::printf(
       "presentation-shm: mode=%.*s delay=%d ms (press Ctrl-C to quit)\n",
@@ -1387,50 +1300,15 @@ bool App::MainLoop() {
       break;
   }
 
-  const int fd = wl_display_get_fd(display_.d);
-
-  // g_running is set to 0 by the SIGINT handler (first Ctrl+C).  Check it in
-  // the outer loop condition so the first signal exits cleanly rather than
-  // requiring a second Ctrl+C to kill the process via the reset default action.
-  while (running_ && g_running) {
-    while (wl_display_flush(display_.d) < 0) {
-      if (errno != EAGAIN) {
-        LogWlError(display_.d, "flush");
-        return false;
-      }
-      pollfd pfd{fd, POLLOUT, 0};
-      if (poll(&pfd, 1, -1) < 0) {
-        if (errno == EINTR)
-          break;  // break inner flush loop; outer condition will re-check
-                  // g_running
-        return false;
-      }
-    }
-    if (!g_running)
-      break;
-
-    // Dispatch any events that libwayland has already read into its internal
-    // buffer (avoids blocking in poll() when data is already available).
-    if (wl_display_dispatch_pending(display_.d) < 0) {
-      LogWlError(display_.d, "dispatch_pending");
-      return false;
-    }
-
-    pollfd pfd{fd, POLLIN, 0};
-    if (poll(&pfd, 1, -1) < 0) {
-      if (errno == EINTR)
-        continue;  // re-check outer condition (running_ && g_running)
-      return false;
-    }
-
-    if (wl_display_dispatch(display_.d) < 0) {
-      LogWlError(display_.d, "dispatch");
-      return false;
-    }
-  }
+  // g_running is set to 0 by the SIGINT handler (first Ctrl+C).  Include it
+  // in the stop predicate so the first signal exits cleanly.
+  const bool ok = wl::RunEventLoop(
+      display_.Get(),
+      [this] { return !running_ || !g_running; },
+      "presentation-shm");
 
   std::fprintf(stderr, "presentation-shm exiting\n");
-  return true;
+  return ok;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
