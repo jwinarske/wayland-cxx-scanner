@@ -15,8 +15,9 @@
 
 wp_dep         = dependency('wayland-protocols', required: false)
 wl_scanner_dep = dependency('wayland-scanner',   required: false)
+xkbcommon_dep  = dependency('xkbcommon',         required: false)
 
-if not (wp_dep.found() and wl_scanner_dep.found())
+if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found())
     subdir_done()
 endif
 
@@ -65,6 +66,6 @@ executable(
         presentation_time_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
-    dependencies: [wayland_client_dep],
+    dependencies: [wayland_client_dep, xkbcommon_dep],
     cpp_args: ['-Wno-unused-parameter'],
 )

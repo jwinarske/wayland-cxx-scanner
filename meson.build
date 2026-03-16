@@ -28,6 +28,8 @@ pugixml_dep        = dependency('pugixml',
 # ── Framework headers — install to ${includedir}/wl/ ─────────────────────────
 
 install_headers(
+    'include/wl/client_helpers.hpp',
+    'include/wl/display.hpp',
     'include/wl/fd_handle.hpp',
     'include/wl/raii.hpp',
     'include/wl/event_map.hpp',
@@ -37,6 +39,9 @@ install_headers(
     'include/wl/resource_impl.hpp',
     'include/wl/registry.hpp',
     'include/wl/wayland.hpp',
+    'include/wl/xdg_shell.hpp',
+    'include/wl/keyboard.hpp',
+    'include/wl/seat.hpp',
     subdir: 'wl',
 )
 

@@ -5,9 +5,9 @@
 #
 # Demonstrates wl_subsurface using mixed SHM + EGL surfaces:
 #   • Main surface (green, SHM) — XDG toplevel
-#   • Red sub-surface (EGL, desync) — renders a spinning GL triangle,
+#   • Red subsurface (EGL, desync) — renders a spinning GL triangle,
 #     position also oscillates independently of the parent
-#   • Blue sub-surface (SHM, sync) — commits only with the parent
+#   • Blue subsurface (SHM, sync) — commits only with the parent
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 
@@ -16,9 +16,10 @@ glesv2_dep      = dependency('glesv2',            required: false)
 wayland_egl_dep = dependency('wayland-egl',       required: false)
 wp_dep          = dependency('wayland-protocols',  required: false)
 wl_scanner_dep  = dependency('wayland-scanner',   required: false)
+xkbcommon_dep   = dependency('xkbcommon',         required: false)
 
 if not (egl_dep.found() and glesv2_dep.found() and wayland_egl_dep.found() and
-        wp_dep.found() and wl_scanner_dep.found())
+        wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found())
     subdir_done()
 endif
 
@@ -60,6 +61,6 @@ executable(
         xdg_shell_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
-    dependencies: [wayland_client_dep, egl_dep, glesv2_dep, wayland_egl_dep],
+    dependencies: [wayland_client_dep, egl_dep, glesv2_dep, wayland_egl_dep, xkbcommon_dep],
     cpp_args: ['-Wno-unused-parameter'],
 )
