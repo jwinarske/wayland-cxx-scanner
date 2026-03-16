@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// seat — header-only wl_seat + wl_keyboard CRTP handler templates and a
-//        self-contained SeatManager that encapsulates the full
-//        seat/keyboard lifecycle common to every input-capable example.
+// seat — header-only wl_seat CRTP handler template and self-contained
+//        SeatManager that encapsulates the full seat/keyboard lifecycle
+//        common to every input-capable example.
 //
-// ── Include order ─────────────────────────────────────────────────────────────
-// This header must be included AFTER the generated wayland_client.hpp:
+// ── Include order
+// ───────────────────────────────────────────────────────────── This header
+// must be included AFTER the generated wayland_client.hpp:
 //
 //   #include "wayland_client.hpp"   // defines CWlSeat, CWlKeyboard, …
 //   #include <wl/seat.hpp>          // wl_iface() impls + SeatManager
 //
-// ── Provided utilities ────────────────────────────────────────────────────────
+// seat.hpp automatically includes keyboard.hpp which provides the richer
+// wl::KeyboardHandler<App> CRTP class (xkbcommon-capable when available).
+//
+// ── Provided utilities
+// ────────────────────────────────────────────────────────
 //
 // wl_iface() implementations (namespace wayland::client):
 //   Inline out-of-line definitions of the pure-virtual wl_iface() methods
@@ -20,13 +25,17 @@
 //   previously duplicated in its .cpp file.
 //
 // wl::SeatManager<App>:
-//   Bundles wl_seat + wl_keyboard proxy ownership, capability-change handling,
-//   and versioned protocol teardown.  The App class needs only one additional
-//   callback:
+//   Bundles wl_seat + wl::KeyboardHandler<App> proxy ownership,
+//   capability-change handling, and versioned protocol teardown.
+//   The App class needs only:
 //
 //     void OnKey(uint32_t key, uint32_t state);
 //
-//   Typical usage (three lines in the App class):
+//   Optionally (when WL_HAS_XKBCOMMON is defined):
+//
+//     void OnKeySym(xkb_keysym_t sym, uint32_t key, uint32_t state);
+//
+//   Typical usage:
 //
 //     // member:
 //     wl::SeatManager<App> seat_;
@@ -34,7 +43,7 @@
 //     // ScanGlobals lambda:
 //     if (iface == wl_seat_traits::interface_name) seat_.Record(name, ver);
 //
-//     // BindGlobals (optional — no-op if no seat was advertised):
+//     // BindGlobals (no-op if seat not advertised):
 //     seat_.Bind(registry_, this);
 //
 //     // App::~App (before RAII member dtors run):
@@ -42,10 +51,10 @@
 #pragma once
 
 #include <wl/client_helpers.hpp>
+#include <wl/keyboard.hpp>
 #include <wl/wl_ptr.hpp>
 
 extern "C" {
-#include <unistd.h>  // close()
 #include <wayland-client-protocol.h>
 }
 
@@ -158,10 +167,10 @@ class SeatManager {
     using namespace wayland::client;
     const bool has_kbd = (caps & WL_SEAT_CAPABILITY_KEYBOARD) != 0u;
     if (has_kbd && keyboard_.IsNull()) {
-      if (wl::SetupHandler(keyboard_,
-                           wl::construct<wl_keyboard_traits,
-                                         wl_seat_traits::Op::GetKeyboard>(
-                               *seat_.Get()))) {
+      if (wl::SetupHandler(
+              keyboard_,
+              wl::construct<wl_keyboard_traits,
+                            wl_seat_traits::Op::GetKeyboard>(*seat_.Get()))) {
         keyboard_.Get()->app_ = app_;
       }
     } else if (!has_kbd && !keyboard_.IsNull()) {
@@ -179,43 +188,15 @@ class SeatManager {
     void OnName(const char* /*name*/) override {}
   };
 
-  // ── Internal keyboard handler ─────────────────────────────────────────────
-  // Delegates OnKey(key, state) to App.  All other events are no-ops:
-  //   • OnKeymap closes the ownership-transferred fd to avoid a leak.
-  //   • OnEnter / OnLeave / OnModifiers / OnRepeatInfo are ignored.
-  struct KeyboardHandler
-      : public wayland::client::CWlKeyboard<KeyboardHandler> {
-    App* app_ = nullptr;
-    void OnKeymap(uint32_t /*fmt*/, int32_t fd, uint32_t /*sz*/) override {
-      close(fd);
-    }
-    void OnEnter(uint32_t /*serial*/,
-                 wl_proxy* /*surface*/,
-                 wl_array* /*keys*/) override {}
-    void OnLeave(uint32_t /*serial*/, wl_proxy* /*surface*/) override {}
-    void OnKey(uint32_t /*serial*/,
-               uint32_t /*time*/,
-               uint32_t key,
-               uint32_t state) override {
-      app_->OnKey(key, state);
-    }
-    void OnModifiers(uint32_t /*serial*/,
-                     uint32_t /*mods_depressed*/,
-                     uint32_t /*mods_latched*/,
-                     uint32_t /*mods_locked*/,
-                     uint32_t /*group*/) override {}
-    void OnRepeatInfo(int32_t /*rate*/, int32_t /*delay*/) override {}
-  };
-
   // ── Members ────────────────────────────────────────────────────────────────
   // Declaration order = reverse destruction order.
   // seat_ declared before keyboard_ → seat_ is destroyed AFTER keyboard_.
-  wl::WlPtr<SeatHandler>    seat_;
-  wl::WlPtr<KeyboardHandler> keyboard_;
+  wl::WlPtr<SeatHandler> seat_;
+  wl::WlPtr<wl::KeyboardHandler<App>> keyboard_;
 
-  uint32_t name_ = 0;      // global id recorded during ScanGlobals
-  uint32_t ver_adv_ = 0;   // advertised version
-  uint32_t ver_ = 0;       // negotiated (clamped) version used for teardown
+  uint32_t name_ = 0;     // global id recorded during ScanGlobals
+  uint32_t ver_adv_ = 0;  // advertised version
+  uint32_t ver_ = 0;      // negotiated (clamped) version used for teardown
   App* app_ = nullptr;
 
   // ── Teardown helpers ───────────────────────────────────────────────────────

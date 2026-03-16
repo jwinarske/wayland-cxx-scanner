@@ -13,9 +13,11 @@ glesv2_dep      = dependency('glesv2',            required: false)
 wayland_egl_dep = dependency('wayland-egl',       required: false)
 wp_dep          = dependency('wayland-protocols',  required: false)
 wl_scanner_dep  = dependency('wayland-scanner',   required: false)
+xkbcommon_dep   = dependency('xkbcommon',         required: false)
 
 if not (egl_dep.found() and glesv2_dep.found() and
-        wayland_egl_dep.found() and wp_dep.found() and wl_scanner_dep.found())
+        wayland_egl_dep.found() and wp_dep.found() and wl_scanner_dep.found() and
+        xkbcommon_dep.found())
     subdir_done()
 endif
 
@@ -62,6 +64,7 @@ executable(
         egl_dep,
         glesv2_dep,
         wayland_egl_dep,
+        xkbcommon_dep,
     ],
     # The generated headers use /* param */ comment-suppression for unused
     # virtual-method parameters, but the outer -Werror/-Wunused-parameter

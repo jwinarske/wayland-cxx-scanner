@@ -27,6 +27,7 @@
 // ── System Wayland C headers
 // ──────────────────────────────────────────────────
 extern "C" {
+#include <linux/input-event-codes.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -39,6 +40,7 @@ extern "C" {
 #include <wl/display.hpp>
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
+#include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 
 // ── Standard library
@@ -57,12 +59,11 @@ extern "C" {
 #include <list>
 #include <string_view>
 
-// ── POSIX
-// ─────────────────────────────────────────────────────────────────────
-#include <poll.h>
-
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
+//
+// wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
+// inline by <wl/seat.hpp> (already included above).
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wayland::client {
@@ -375,12 +376,12 @@ static int64_t timespec_diff_us(const timespec& a, const timespec& b) noexcept {
 // Pixel painting — identical to the Weston original
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Paint an animated spinning colour wheel into @p image (XRGB8888).
-/// @p phase drives the rotation; call with increasing values for animation.
+/// Paint an animated spinning color wheel into the @p image (XRGB8888).
+/// @p Phase drives the rotation; call with increasing values for animation.
 static void paint_pixels(void* image,
                          int width,
                          int height,
-                         uint32_t phase) noexcept {
+                         const uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
   auto* base = static_cast<uint32_t*>(image);
@@ -609,7 +610,7 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
     return false;
   }
 
-  // Create pool.
+  // Create the pool.
   // We build a temporary CProxyImpl wrapper around the raw shm proxy.
   // Since WlShmHandler (which owns the shm proxy) is stored in the App,
   // we receive the raw proxy and marshal via _MarshalNew directly.
@@ -657,13 +658,13 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
 // App class
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Forward-declare so App can hold a tracking pointer to the live feedkick
+// Forward-declare so the App can hold a tracking pointer to the live feedkick
 // handler (heap-allocated, self-deleting on callback).  Defined after App.
 class FeedkickHandler;
 
 class App {
  public:
-  App(RunMode mode, int commit_delay_ms)
+  App(const RunMode mode, const int commit_delay_ms)
       : mode_(mode), commit_delay_ms_(commit_delay_ms) {}
   ~App();
 
@@ -672,6 +673,7 @@ class App {
   // ── Callbacks from CRTP handlers ────────────────────────────────────────
   void OnXdgSurfaceConfigure(uint32_t serial);
   void OnToplevelClose();
+  void OnKey(uint32_t key, uint32_t state);
   void OnFrameDone(uint32_t stamp_ms) noexcept;
   void OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
                            uint32_t tv_sec_hi,
@@ -684,7 +686,7 @@ class App {
   void OnFeedbackDiscarded(WpPresentationFeedbackHandler& fb) noexcept;
 
   /// Called by FeedkickHandler to update the display refresh period estimate.
-  void UpdateRefresh(uint32_t refresh_ns) noexcept {
+  void UpdateRefresh(const uint32_t refresh_ns) noexcept {
     refresh_nsec_ = refresh_ns;
   }
 
@@ -706,6 +708,9 @@ class App {
   wl::WlPtr<WlShmHandler> shm_;
   wl::WlPtr<WpPresentationHandler> presentation_;
   wl::WlPtr<XdgWmBaseHandler> xdg_wm_base_;
+
+  // ── Input: seat + keyboard (optional; ESC quits) ─────────────────────────
+  wl::SeatManager<App> seat_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
   wl::WlPtr<XdgSurfaceHandler> xdg_surface_;
@@ -737,6 +742,7 @@ class App {
   uint32_t shm_name_ = 0, shm_ver_ = 0;
   uint32_t presentation_name_ = 0, presentation_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
+  // wl_seat is tracked directly by seat_ (SeatManager::Record).
 
   // ── Pipeline ─────────────────────────────────────────────────────────────
   bool ConnectDisplay();
@@ -803,7 +809,7 @@ void WpPresentationFeedbackHandler::OnDiscarded() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // Set to 0 by signal_handler() on SIGINT so the event loop exits cleanly on
-// the first Ctrl+C.  Declared here (before App::Run) so the loop can read it.
+// the first Ctrl+C. Declared here (before App::Run) so the loop can read it.
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static volatile std::sig_atomic_t g_running = 1;
 
@@ -860,6 +866,8 @@ bool App::ScanGlobals() {
     } else if (iface == xdg_wm_base_traits::interface_name) {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
+    } else if (iface == wl_seat_traits::interface_name) {
+      seat_.Record(name, ver);
     }
   });
 
@@ -900,18 +908,16 @@ bool App::BindGlobals() {
   }
 
   // xdg_wm_base.
-  if (!wl::BindHandler<xdg_wm_base_traits>(registry_, xdg_wm_base_,
-                                            xdg_wm_base_name_,
-                                            xdg_wm_base_ver_)) {
+  if (!wl::BindHandler<xdg_wm_base_traits>(
+          registry_, xdg_wm_base_, xdg_wm_base_name_, xdg_wm_base_ver_)) {
     std::fprintf(stderr, "presentation-shm: xdg_wm_base bind failed\n");
     return false;
   }
 
   // wp_presentation — optional.
   if (presentation_name_) {
-    if (wl::BindHandler<wp_presentation_traits>(registry_, presentation_,
-                                                presentation_name_,
-                                                presentation_ver_)) {
+    if (wl::BindHandler<wp_presentation_traits>(
+            registry_, presentation_, presentation_name_, presentation_ver_)) {
       have_presentation_ = true;
     }
   }
@@ -921,7 +927,14 @@ bool App::BindGlobals() {
                  "timing feedback disabled\n");
   }
 
-  // Roundtrip so wl_shm.format and wp_presentation.clock_id arrive.
+  // wl_seat — optional; provides keyboard (ESC to quit).
+  if (!seat_.Bind(registry_, this)) {
+    std::fprintf(stderr, "presentation-shm: wl_seat bind failed\n");
+    return false;
+  }
+
+  // Roundtrip so wl_shm.format, wp_presentation.clock_id, and seat
+  // capabilities arrive.
   if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "presentation-shm: timed out waiting for formats\n");
     return false;
@@ -958,8 +971,7 @@ bool App::CreateWindow() {
   if (!wl::SetupHandler(xdg_surface_,
                         wl::construct<xdg_surface_traits,
                                       xdg_wm_base_traits::Op::GetXdgSurface>(
-                            *xdg_wm_base_.Get(),
-                            surface_.Get()->GetProxy()))) {
+                            *xdg_wm_base_.Get(), surface_.Get()->GetProxy()))) {
     std::fprintf(stderr,
                  "presentation-shm: xdg_wm_base.get_xdg_surface failed\n");
     return false;
@@ -1005,8 +1017,8 @@ bool App::PreRender() {
   if (!pool_.Create(kWidth, kHeight, shm_.Get()->GetProxy()))
     return false;
 
-  // Pre-paint all buffers at evenly-spaced phases (like the original).
-  const int timefactor = 1'000'000 / kNumBuffers;
+  // Pre-paint all buffers at evenly spaced phases (like the original).
+  constexpr int timefactor = 1'000'000 / kNumBuffers;
   for (int i = 0; i < kNumBuffers; ++i) {
     paint_pixels(pool_.PixelData(i), kWidth, kHeight,
                  static_cast<uint32_t>(i * timefactor));
@@ -1021,8 +1033,8 @@ bool App::PreRender() {
 void App::EmulateRendering() const noexcept {
   if (commit_delay_ms_ <= 0)
     return;
-  timespec delay{.tv_sec = commit_delay_ms_ / 1000,
-                 .tv_nsec = (commit_delay_ms_ % 1000) * 1'000'000L};
+  const timespec delay{.tv_sec = commit_delay_ms_ / 1000,
+                       .tv_nsec = (commit_delay_ms_ % 1000) * 1'000'000L};
   nanosleep(&delay, nullptr);
 }
 
@@ -1040,7 +1052,7 @@ void App::AttachPresentationFeedback(uint32_t stamp_ms) noexcept {
   fb->target = fb->commit;
 
   // wp_presentation.feedback has protocol signature "on" — the surface object
-  // argument comes FIRST, then the new_id.  wl::construct<> always prepends
+  // argument comes FIRST, then the new_id. wl::construct<> always prepends
   // nullptr (the new_id placeholder) before user args, which is correct for
   // "no" requests but wrong for "on".  Use _MarshalNew directly so the args
   // are in wire order: (surface, nullptr).
@@ -1089,7 +1101,12 @@ void App::OnToplevelClose() {
   running_ = false;
 }
 
-void App::OnFrameDone(uint32_t stamp_ms) noexcept {
+void App::OnKey(const uint32_t key, const uint32_t state) {
+  if (key == KEY_ESC && state == WL_KEYBOARD_KEY_STATE_PRESSED)
+    running_ = false;
+}
+
+void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
   // Destroy the spent callback proxy before arming the next one.
   wl_proxy* const spent = frame_cb_.Detach();
   const auto guard = wl::ScopeExit{[spent] {
@@ -1108,13 +1125,13 @@ void App::OnFrameDone(uint32_t stamp_ms) noexcept {
 }
 
 void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
-                              uint32_t tv_sec_hi,
-                              uint32_t tv_sec_lo,
-                              uint32_t tv_nsec,
-                              uint32_t refresh_ns,
-                              uint32_t seq_hi,
-                              uint32_t seq_lo,
-                              uint32_t flags) noexcept {
+                              const uint32_t tv_sec_hi,
+                              const uint32_t tv_sec_lo,
+                              const uint32_t tv_nsec,
+                              const uint32_t refresh_ns,
+                              const uint32_t seq_hi,
+                              const uint32_t seq_lo,
+                              const uint32_t flags) noexcept {
   timespec present{};
   timespec_from_proto(present, tv_sec_hi, tv_sec_lo, tv_nsec);
   refresh_nsec_ = refresh_ns;
@@ -1131,7 +1148,7 @@ void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
 
   const timespec* prev_present =
       last_presented_ ? &last_presented_->commit : &present;
-  // We store 'present' in commit field for p2p tracking below.
+  // We store 'present' in the commit field for p2p tracking below.
   const int64_t p2p = timespec_diff_us(present, *prev_present);
   const int64_t t2p = timespec_diff_us(present, fb.target);
 
@@ -1161,10 +1178,10 @@ void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
   }
   std::fflush(stdout);
 
-  // Store 'present' timestamp in commit field so p2p works next round.
+  // Store the 'present' timestamp in the commit field so p2p works next round.
   fb.commit = present;
 
-  // Remove from list, transfer to last_presented_.
+  // Remove from a list, transfer to last_presented_.
   feedback_list_.remove(&fb);
   delete last_presented_;
   last_presented_ = &fb;
@@ -1208,7 +1225,7 @@ class FeedkickHandler
   void OnPresented(uint32_t,
                    uint32_t,
                    uint32_t,
-                   uint32_t refresh_ns,
+                   const uint32_t refresh_ns,
                    uint32_t,
                    uint32_t,
                    uint32_t) override {
@@ -1250,14 +1267,17 @@ void App::Feedkick() noexcept {
 // ── MainLoop
 // ──────────────────────────────────────────────────────────────────
 
-// App::~App() is defined here (after FeedkickHandler is complete) so it can
+// App::~App() is defined here (after FeedkickHandler is complete), so it can
 // call feedkick_->Detach() and delete feedkick_ without using an incomplete
 // type.
 App::~App() {
+  // Send versioned seat/keyboard release requests before member destructors
+  // run.
+  seat_.Release();
   // Destroy any live feedkick handler before the display disconnects.
   // FeedkickHandler is heap-allocated and normally self-deletes when its
   // wp_presentation_feedback callback fires; if the app exits before that
-  // event (e.g. Ctrl+C), we must explicitly release the proxy and free the
+  // event (e.g., Ctrl+C), we must explicitly release the proxy and free the
   // object here so neither the proxy nor the C++ object is leaked.
   if (feedkick_) {
     if (wl_proxy* p = feedkick_->Detach())
@@ -1265,7 +1285,7 @@ App::~App() {
     delete feedkick_;
   }
   // Clean up pending feedback objects.
-  for (auto* fb : feedback_list_)
+  for (const auto* fb : feedback_list_)
     delete fb;
   delete last_presented_;
 }
@@ -1286,7 +1306,8 @@ void App::StartPresentMode() {
 
 bool App::MainLoop() {
   std::printf(
-      "presentation-shm: mode=%.*s delay=%d ms (press Ctrl-C to quit)\n",
+      "presentation-shm: mode=%.*s delay=%d ms "
+      "(press ESC or Ctrl-C to quit)\n",
       static_cast<int>(run_mode_name(mode_).size()),
       run_mode_name(mode_).data(), commit_delay_ms_);
 
@@ -1303,8 +1324,7 @@ bool App::MainLoop() {
   // g_running is set to 0 by the SIGINT handler (first Ctrl+C).  Include it
   // in the stop predicate so the first signal exits cleanly.
   const bool ok = wl::RunEventLoop(
-      display_.Get(),
-      [this] { return !running_ || !g_running; },
+      display_.Get(), [this] { return !running_ || !g_running; },
       "presentation-shm");
 
   std::fprintf(stderr, "presentation-shm exiting\n");
@@ -1340,14 +1360,13 @@ int main(int argc, char* argv[]) {
   sa.sa_flags = SA_RESETHAND;
   sigaction(SIGINT, &sa, nullptr);
 
-  RunMode mode = RunMode::Feedback;
+  auto mode = RunMode::Feedback;
   int commit_delay_ms = 0;
 
   // argv is a C-API parameter; pointer arithmetic on it is unavoidable.
   // NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic)
   for (int i = 1; i < argc; ++i) {
-    std::string_view arg{argv[i]};
-    if (arg == "-f")
+    if (const std::string_view arg{argv[i]}; arg == "-f")
       mode = RunMode::Feedback;
     else if (arg == "-i")
       mode = RunMode::FeedbackIdle;

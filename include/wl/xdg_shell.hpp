@@ -4,13 +4,15 @@
 // xdg-shell — header-only wl_interface tables and generic CRTP handler
 // templates for the XDG shell protocol (xdg-shell.xml, version 7).
 //
-// ── Include order ─────────────────────────────────────────────────────────────
-// This header must be included AFTER the generated xdg_shell_client.hpp:
+// ── Include order
+// ───────────────────────────────────────────────────────────── This header
+// must be included AFTER the generated xdg_shell_client.hpp:
 //
 //   #include "xdg_shell_client.hpp"  // defines CXdgWmBase, CXdgSurface, …
 //   #include <wl/xdg_shell.hpp>      // tables + wl_iface() impls + handlers
 //
-// ── Provided utilities ────────────────────────────────────────────────────────
+// ── Provided utilities
+// ────────────────────────────────────────────────────────
 //
 // Interface tables (namespace wl::xdg, version 7):
 //   Inline wl_interface objects for all five xdg-shell interfaces plus the
@@ -54,9 +56,10 @@ extern "C" {
 
 namespace wl::xdg {
 
-// ── Forward declarations ──────────────────────────────────────────────────────
-// Needed so that types[] can take the addresses of the five interfaces before
-// any of their definitions appear.
+// ── Forward declarations
+// ────────────────────────────────────────────────────── Needed so that types[]
+// can take the addresses of the five interfaces before any of their definitions
+// appear.
 
 extern const wl_interface wm_base_iface;
 extern const wl_interface positioner_iface;
@@ -64,8 +67,9 @@ extern const wl_interface surface_iface;
 extern const wl_interface toplevel_iface;
 extern const wl_interface popup_iface;
 
-// ── Shared pointer array ──────────────────────────────────────────────────────
-// Mirrors xdg_shell_types[] from xdg-shell-protocol.c (C wayland-scanner v7).
+// ── Shared pointer array
+// ────────────────────────────────────────────────────── Mirrors
+// xdg_shell_types[] from xdg-shell-protocol.c (C wayland-scanner v7).
 //
 // • avoid-non-const-global-variables: element type must be non-const pointer
 //   (const wl_interface*) because wl_message::types is const wl_interface**;
@@ -78,32 +82,32 @@ extern const wl_interface popup_iface;
 //             cppcoreguidelines-avoid-non-const-global-variables,
 //             cppcoreguidelines-interfaces-global-init)
 inline const wl_interface* types[] = {
-    nullptr,               // [0]  scalar / no-type slots
-    nullptr,               // [1]
-    nullptr,               // [2]
-    nullptr,               // [3]
-    &positioner_iface,     // [4]  create_positioner → new_id
-    &surface_iface,        // [5]  get_xdg_surface   → new_id
-    &wl_surface_interface, // [6]  get_xdg_surface   → surface object
-    &toplevel_iface,       // [7]  get_toplevel       → new_id
-    &popup_iface,          // [8]  get_popup          → new_id
-    &surface_iface,        // [9]  get_popup          → parent (?o)
-    &positioner_iface,     // [10] get_popup          → positioner
-    &toplevel_iface,       // [11] set_parent         → ?o
-    &wl_seat_interface,    // [12] show_window_menu   → seat
-    nullptr,               // [13] show_window_menu   → serial
-    nullptr,               // [14] show_window_menu   → x
-    nullptr,               // [15] show_window_menu   → y
-    &wl_seat_interface,    // [16] move               → seat
-    nullptr,               // [17] move               → serial
-    &wl_seat_interface,    // [18] resize             → seat
-    nullptr,               // [19] resize             → serial
-    nullptr,               // [20] resize             → edges
-    &wl_output_interface,  // [21] set_fullscreen     → output (?o)
-    &wl_seat_interface,    // [22] grab               → seat
-    nullptr,               // [23] grab               → serial
-    &positioner_iface,     // [24] reposition         → positioner
-    nullptr,               // [25] reposition         → token
+    nullptr,                // [0]  scalar / no-type slots
+    nullptr,                // [1]
+    nullptr,                // [2]
+    nullptr,                // [3]
+    &positioner_iface,      // [4]  create_positioner → new_id
+    &surface_iface,         // [5]  get_xdg_surface   → new_id
+    &wl_surface_interface,  // [6]  get_xdg_surface   → surface object
+    &toplevel_iface,        // [7]  get_toplevel       → new_id
+    &popup_iface,           // [8]  get_popup          → new_id
+    &surface_iface,         // [9]  get_popup          → parent (?o)
+    &positioner_iface,      // [10] get_popup          → positioner
+    &toplevel_iface,        // [11] set_parent         → ?o
+    &wl_seat_interface,     // [12] show_window_menu   → seat
+    nullptr,                // [13] show_window_menu   → serial
+    nullptr,                // [14] show_window_menu   → x
+    nullptr,                // [15] show_window_menu   → y
+    &wl_seat_interface,     // [16] move               → seat
+    nullptr,                // [17] move               → serial
+    &wl_seat_interface,     // [18] resize             → seat
+    nullptr,                // [19] resize             → serial
+    nullptr,                // [20] resize             → edges
+    &wl_output_interface,   // [21] set_fullscreen     → output (?o)
+    &wl_seat_interface,     // [22] grab               → seat
+    nullptr,                // [23] grab               → serial
+    &positioner_iface,      // [24] reposition         → positioner
+    nullptr,                // [25] reposition         → token
 };
 
 // kScalars points at the null-filled head of types[]; used by scalar-only
@@ -111,79 +115,79 @@ inline const wl_interface* types[] = {
 // duration object) so kScalars can be constexpr.
 inline constexpr const wl_interface** kScalars = &types[0];
 
-// ── Message tables ────────────────────────────────────────────────────────────
+// ── Message tables
+// ────────────────────────────────────────────────────────────
 
 inline constexpr wl_message wm_base_requests[] = {
-    {"destroy",           "",    nullptr   },
-    {"create_positioner", "n",   &types[4] },
-    {"get_xdg_surface",   "no",  &types[5] },
-    {"pong",              "u",   kScalars  },
+    {"destroy", "", nullptr},
+    {"create_positioner", "n", &types[4]},
+    {"get_xdg_surface", "no", &types[5]},
+    {"pong", "u", kScalars},
 };
 inline constexpr wl_message wm_base_events[] = {
-    {"ping",              "u",   kScalars  },
+    {"ping", "u", kScalars},
 };
 
 inline constexpr wl_message positioner_requests[] = {
-    {"destroy",                   "",      nullptr  },
-    {"set_size",                  "ii",    kScalars },
-    {"set_anchor_rect",           "iiii",  kScalars },
-    {"set_anchor",                "u",     kScalars },
-    {"set_gravity",               "u",     kScalars },
-    {"set_constraint_adjustment", "u",     kScalars },
-    {"set_offset",                "ii",    kScalars },
-    {"set_reactive",              "3",     nullptr  },  // version tag only
-    {"set_parent_size",           "3ii",   kScalars },
-    {"set_parent_configure",      "3u",    kScalars },
+    {"destroy", "", nullptr},
+    {"set_size", "ii", kScalars},
+    {"set_anchor_rect", "iiii", kScalars},
+    {"set_anchor", "u", kScalars},
+    {"set_gravity", "u", kScalars},
+    {"set_constraint_adjustment", "u", kScalars},
+    {"set_offset", "ii", kScalars},
+    {"set_reactive", "3", nullptr},  // version tag only
+    {"set_parent_size", "3ii", kScalars},
+    {"set_parent_configure", "3u", kScalars},
 };
 
 inline constexpr wl_message surface_requests[] = {
-    {"destroy",            "",      nullptr   },
-    {"get_toplevel",       "n",     &types[7] },
-    {"get_popup",          "n?oo",  &types[8] },
-    {"set_window_geometry","iiii",  kScalars  },
-    {"ack_configure",      "u",     kScalars  },
+    {"destroy", "", nullptr},         {"get_toplevel", "n", &types[7]},
+    {"get_popup", "n?oo", &types[8]}, {"set_window_geometry", "iiii", kScalars},
+    {"ack_configure", "u", kScalars},
 };
 inline constexpr wl_message surface_events[] = {
-    {"configure",          "u",     kScalars  },
+    {"configure", "u", kScalars},
 };
 
 inline constexpr wl_message toplevel_requests[] = {
-    {"destroy",          "",      nullptr    },
-    {"set_parent",       "?o",    &types[11] },
-    {"set_title",        "s",     kScalars   },
-    {"set_app_id",       "s",     kScalars   },
-    {"show_window_menu", "ouii",  &types[12] },
-    {"move",             "ou",    &types[16] },
-    {"resize",           "ouu",   &types[18] },
-    {"set_max_size",     "ii",    kScalars   },
-    {"set_min_size",     "ii",    kScalars   },
-    {"set_maximized",    "",      nullptr    },
-    {"unset_maximized",  "",      nullptr    },
-    {"set_fullscreen",   "?o",    &types[21] },
-    {"unset_fullscreen", "",      nullptr    },
-    {"set_minimized",    "",      nullptr    },
+    {"destroy", "", nullptr},
+    {"set_parent", "?o", &types[11]},
+    {"set_title", "s", kScalars},
+    {"set_app_id", "s", kScalars},
+    {"show_window_menu", "ouii", &types[12]},
+    {"move", "ou", &types[16]},
+    {"resize", "ouu", &types[18]},
+    {"set_max_size", "ii", kScalars},
+    {"set_min_size", "ii", kScalars},
+    {"set_maximized", "", nullptr},
+    {"unset_maximized", "", nullptr},
+    {"set_fullscreen", "?o", &types[21]},
+    {"unset_fullscreen", "", nullptr},
+    {"set_minimized", "", nullptr},
 };
 inline constexpr wl_message toplevel_events[] = {
-    {"configure",        "iia",   kScalars  },
-    {"close",            "",      nullptr   },
-    {"configure_bounds", "4ii",   kScalars  },
-    {"wm_capabilities",  "5a",    kScalars  },
+    {"configure", "iia", kScalars},
+    {"close", "", nullptr},
+    {"configure_bounds", "4ii", kScalars},
+    {"wm_capabilities", "5a", kScalars},
 };
 
 inline constexpr wl_message popup_requests[] = {
-    {"destroy",      "",     nullptr    },
-    {"grab",         "ou",   &types[22] },
-    {"reposition",   "3ou",  &types[24] },
+    {"destroy", "", nullptr},
+    {"grab", "ou", &types[22]},
+    {"reposition", "3ou", &types[24]},
 };
 inline constexpr wl_message popup_events[] = {
-    {"configure",    "iiii", kScalars  },
-    {"popup_done",   "",     nullptr   },
-    {"repositioned", "3u",   kScalars  },
+    {"configure", "iiii", kScalars},
+    {"popup_done", "", nullptr},
+    {"repositioned", "3u", kScalars},
 };
 
-// ── Interface object definitions ──────────────────────────────────────────────
-// std::data() converts the constexpr array to a const wl_message* pointer
-// without triggering the array-decay diagnostic.
+// ── Interface object definitions
+// ────────────────────────────────────────────── std::data() converts the
+// constexpr array to a const wl_message* pointer without triggering the
+// array-decay diagnostic.
 // clang-format off
 inline const wl_interface wm_base_iface = {
     "xdg_wm_base",    7,
@@ -288,7 +292,8 @@ class XdgSurfaceHandler
 /// XDG toplevel handler — delegates configure and close to App; ignores bounds
 /// and wm_capabilities (suitable for most simple applications).
 ///
-/// @tparam App  Application class providing OnToplevelConfigure(int32_t, int32_t)
+/// @tparam App  Application class providing OnToplevelConfigure(int32_t,
+/// int32_t)
 ///              and OnToplevelClose().
 template <typename App>
 class XdgToplevelHandler

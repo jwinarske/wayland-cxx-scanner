@@ -19,7 +19,7 @@
 //   https://gitlab.freedesktop.org/wayland/wayland-utils/-/blob/main/wayland-info/wayland-info.c
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
-// wayland_client.hpp → namespace wayland::client  (from wayland.xml, always)
+// wayland_client.hpp → namespace wayland::client (from wayland.xml, always)
 #include "wayland_client.hpp"
 
 #if defined(HAVE_XDG_OUTPUT)
@@ -87,7 +87,7 @@ const wl_interface& wl_output_traits::wl_iface() noexcept {
 // wayland-scanner generates from xdg-output-unstable-v1.xml (version 3).
 //
 // Layout mirrors what the reference C scanner emits for this protocol:
-//   • xdg_output_types[]   shared pointer array (types fields point into it)
+//   • xdg_output_types[] shared pointer array (types fields point into it)
 //   • per-interface wl_message arrays (requests / events)
 //   • wl_interface object definitions
 // ══════════════════════════════════════════════════════════════════════════════
@@ -113,7 +113,7 @@ static const wl_interface* xdg_output_types[] = {
 //           cppcoreguidelines-avoid-non-const-global-variables,
 //           cppcoreguidelines-interfaces-global-init)
 
-// Scalar-only types pointer (re-used by every event that has no object args).
+// Scalar-only types a pointer (re-used by every event that has no object args).
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static constexpr const wl_interface** kXdgOutputScalars = &xdg_output_types[0];
 
@@ -222,9 +222,9 @@ const wl_interface& zwp_linux_dmabuf_v1_traits::wl_iface() noexcept {
 // ══════════════════════════════════════════════════════════════════════════════
 
 struct GlobalInfo {
-  uint32_t name;
+  uint32_t name{};
   std::string interface;
-  uint32_t version;
+  uint32_t version{};
 };
 
 struct OutputMode {
@@ -244,7 +244,7 @@ class WlShmInfo : public wayland::client::CWlShm<WlShmInfo> {
  public:
   std::vector<uint32_t> formats;
 
-  void OnFormat(uint32_t format) override { formats.push_back(format); }
+  void OnFormat(const uint32_t format) override { formats.push_back(format); }
 };
 
 // ── wl_seat ──────────────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ class WlSeatInfo : public wayland::client::CWlSeat<WlSeatInfo> {
   uint32_t capabilities = 0;
   std::string name;
 
-  void OnCapabilities(uint32_t caps) override { capabilities = caps; }
+  void OnCapabilities(const uint32_t caps) override { capabilities = caps; }
   void OnName(const char* n) override { name = n ? n : ""; }
 };
 
@@ -275,14 +275,14 @@ class WlOutputInfo : public wayland::client::CWlOutput<WlOutputInfo> {
   std::string output_name, description;
   std::vector<OutputMode> modes;
 
-  void OnGeometry(int32_t x_,
-                  int32_t y_,
-                  int32_t pw,
-                  int32_t ph,
-                  uint32_t sub,
+  void OnGeometry(const int32_t x_,
+                  const int32_t y_,
+                  const int32_t pw,
+                  const int32_t ph,
+                  const uint32_t sub,
                   const char* mk,
                   const char* mdl,
-                  uint32_t tr) override {
+                  const uint32_t tr) override {
     x = x_;
     y = y_;
     phys_width = pw;
@@ -292,11 +292,14 @@ class WlOutputInfo : public wayland::client::CWlOutput<WlOutputInfo> {
     model = mdl ? mdl : "";
     transform = tr;
   }
-  void OnMode(uint32_t flags, int32_t w, int32_t h, int32_t refresh) override {
+  void OnMode(const uint32_t flags,
+              const int32_t w,
+              const int32_t h,
+              const int32_t refresh) override {
     modes.push_back({flags, w, h, refresh});
   }
   void OnDone() override {}
-  void OnScale(int32_t factor) override { scale = factor; }
+  void OnScale(const int32_t factor) override { scale = factor; }
   void OnName(const char* n) override { output_name = n ? n : ""; }
   void OnDescription(const char* d) override { description = d ? d : ""; }
 };
@@ -326,11 +329,11 @@ class WlXdgOutputInfo
   int32_t log_width = 0, log_height = 0;
   std::string name, description;
 
-  void OnLogicalPosition(int32_t x, int32_t y) override {
+  void OnLogicalPosition(const int32_t x, const int32_t y) override {
     log_x = x;
     log_y = y;
   }
-  void OnLogicalSize(int32_t w, int32_t h) override {
+  void OnLogicalSize(const int32_t w, const int32_t h) override {
     log_width = w;
     log_height = h;
   }
@@ -357,10 +360,10 @@ class WlLinuxDmabufInfo
   std::vector<uint32_t> formats;
   std::vector<Modifier> modifiers;
 
-  void OnFormat(uint32_t format) override { formats.push_back(format); }
-  void OnModifier(uint32_t format,
-                  uint32_t modifier_hi,
-                  uint32_t modifier_lo) override {
+  void OnFormat(const uint32_t format) override { formats.push_back(format); }
+  void OnModifier(const uint32_t format,
+                  const uint32_t modifier_hi,
+                  const uint32_t modifier_lo) override {
     const uint64_t mod =
         (static_cast<uint64_t>(modifier_hi) << 32) | modifier_lo;
     modifiers.push_back({format, mod});
@@ -375,7 +378,7 @@ class WlLinuxDmabufInfo
 
 // Map wl_shm_format enum value → short name string (returns nullptr if
 // unknown).
-static const char* shm_format_name(uint32_t fmt) {
+static const char* shm_format_name(const uint32_t fmt) {
   // clang-format off
   switch (fmt) {
     case WL_SHM_FORMAT_ARGB8888:    return "ARGB8888";
@@ -441,7 +444,7 @@ static const char* shm_format_name(uint32_t fmt) {
   // clang-format on
 }
 
-static const char* subpixel_name(uint32_t sub) {
+static const char* subpixel_name(const uint32_t sub) {
   switch (sub) {
     case WL_OUTPUT_SUBPIXEL_UNKNOWN:
       return "unknown";
@@ -460,7 +463,7 @@ static const char* subpixel_name(uint32_t sub) {
   }
 }
 
-static const char* transform_name(uint32_t tr) {
+static const char* transform_name(const uint32_t tr) {
   switch (tr) {
     case WL_OUTPUT_TRANSFORM_NORMAL:
       return "normal";
@@ -486,8 +489,7 @@ static const char* transform_name(uint32_t tr) {
 static void print_shm(const WlShmInfo& shm) {
   std::printf("\tpixel formats:\n");
   for (const uint32_t fmt : shm.formats) {
-    const char* name = shm_format_name(fmt);
-    if (name)
+    if (const char* name = shm_format_name(fmt))
       std::printf("\t\t0x%08" PRIx32 " / WL_SHM_FORMAT_%s\n", fmt, name);
     else
       std::printf("\t\t0x%08" PRIx32 "\n", fmt);
@@ -527,14 +529,14 @@ static void print_output(const WlOutputInfo& out
     std::printf("\tname: %s,\n", out.output_name.c_str());
   if (!out.description.empty())
     std::printf("\tdescription: %s,\n", out.description.c_str());
-  for (const auto& mode : out.modes) {
+  for (const auto& [flags, width, height, refresh] : out.modes) {
     std::printf("\tmode: width: %" PRId32 " px, height: %" PRId32
                 " px,"
                 " refresh: %.3f Hz, flags:",
-                mode.width, mode.height, mode.refresh / 1000.0);
-    if (mode.flags & WL_OUTPUT_MODE_CURRENT)
+                width, height, refresh / 1000.0);
+    if (flags & WL_OUTPUT_MODE_CURRENT)
       std::printf(" current");
-    if (mode.flags & WL_OUTPUT_MODE_PREFERRED)
+    if (flags & WL_OUTPUT_MODE_PREFERRED)
       std::printf(" preferred");
     std::printf(",\n");
   }
@@ -559,9 +561,8 @@ static void print_dmabuf(const WlLinuxDmabufInfo& dmabuf) {
     std::printf("\t\t0x%08" PRIx32 "\n", fmt);
   if (!dmabuf.modifiers.empty()) {
     std::printf("\tformat + modifier pairs:\n");
-    for (const auto& m : dmabuf.modifiers)
-      std::printf("\t\t0x%08" PRIx32 " / 0x%016" PRIx64 "\n", m.format,
-                  m.modifier);
+    for (const auto& [format, modifier] : dmabuf.modifiers)
+      std::printf("\t\t0x%08" PRIx32 " / 0x%016" PRIx64 "\n", format, modifier);
   }
 }
 #endif
@@ -614,8 +615,7 @@ int main() {
 
     if (iface == wl_shm_tr::interface_name) {
       // Bind at version 1 (format event only; release added in v2).
-      wl_proxy* raw = reg.Bind<wl_shm_tr>(name, 1u);
-      if (raw) {
+      if (wl_proxy* raw = reg.Bind<wl_shm_tr>(name, 1u)) {
         shm._SetProxy(raw);
         shm_found = true;
       }
@@ -645,8 +645,8 @@ int main() {
                             zxdg_output_manager_v1_traits::interface_name) {
       using mgr_tr =
           xdg_output_unstable_v1::client::zxdg_output_manager_v1_traits;
-      wl_proxy* raw = reg.Bind<mgr_tr>(name, std::min(ver, mgr_tr::version));
-      if (raw)
+      if (wl_proxy* raw =
+              reg.Bind<mgr_tr>(name, std::min(ver, mgr_tr::version)))
         // Use Attach() — the manager has no events, so no listener table is
         // generated and _SetProxy() would fail to compile.
         xdg_mgr.Attach(raw);
@@ -658,8 +658,7 @@ int main() {
       using dmabuf_tr =
           linux_dmabuf_unstable_v1::client::zwp_linux_dmabuf_v1_traits;
       // Bind at version 3 to receive both format (v1) and modifier (v3) events.
-      wl_proxy* raw = reg.Bind<dmabuf_tr>(name, std::min(ver, 3u));
-      if (raw) {
+      if (wl_proxy* raw = reg.Bind<dmabuf_tr>(name, std::min(ver, 3u))) {
         dmabuf = std::make_unique<WlLinuxDmabufInfo>();
         dmabuf->_SetProxy(raw);
       }
@@ -695,37 +694,37 @@ int main() {
   wl_display_roundtrip(display);
 
   // ── Print all globals in registry order ────────────────────────────────────
-  for (const auto& g : globals) {
+  for (const auto& [name, interface, version] : globals) {
     std::printf("interface: '%s', version: %" PRIu32 ", name: %" PRIu32 "\n",
-                g.interface.c_str(), g.version, g.name);
+                interface.c_str(), version, name);
 
-    if (g.interface == "wl_shm" && shm_found) {
+    if (interface == "wl_shm" && shm_found) {
       print_shm(shm);
 
-    } else if (g.interface == "wl_seat") {
+    } else if (interface == "wl_seat") {
       for (const auto& seat : seats) {
-        if (seat->global.name == g.name) {
+        if (seat->global.name == name) {
           print_seat(*seat);
           break;
         }
       }
 
-    } else if (g.interface == "wl_output") {
+    } else if (interface == "wl_output") {
       for (std::size_t i = 0; i < outputs.size(); ++i) {
-        if (outputs[i]->global.name == g.name) {
+        if (outputs.at(i)->global.name == name) {
 #if defined(HAVE_XDG_OUTPUT)
           const WlXdgOutputInfo* xdg =
-              (i < xdg_outputs.size()) ? xdg_outputs[i].get() : nullptr;
-          print_output(*outputs[i], xdg);
+              (i < xdg_outputs.size()) ? xdg_outputs.at(i).get() : nullptr;
+          print_output(*outputs.at(i), xdg);
 #else
-          print_output(*outputs[i]);
+          print_output(*outputs.at(i));
 #endif
           break;
         }
       }
 
 #if defined(HAVE_LINUX_DMABUF)
-    } else if (g.interface == "zwp_linux_dmabuf_v1" && dmabuf) {
+    } else if (interface == "zwp_linux_dmabuf_v1" && dmabuf) {
       print_dmabuf(*dmabuf);
 #endif
     }
@@ -733,9 +732,9 @@ int main() {
 
   // ── Cleanup ────────────────────────────────────────────────────────────────
   // Destroy proxies before disconnecting so libwayland can flush any pending
-  // destroy requests and avoid "leaked proxy" debug warnings.
+  // destruction requests and avoid "leaked proxy" debug warnings.
 #if defined(HAVE_XDG_OUTPUT)
-  for (auto& xdg : xdg_outputs)
+  for (const auto& xdg : xdg_outputs)
     if (xdg && !xdg->IsNull())
       xdg->Destroy();
   if (!xdg_mgr.IsNull())
@@ -745,10 +744,10 @@ int main() {
   if (dmabuf && !dmabuf->IsNull())
     dmabuf->Destroy();
 #endif
-  for (auto& seat : seats)
+  for (const auto& seat : seats)
     if (seat && !seat->IsNull())
       seat->Destroy();
-  for (auto& out : outputs)
+  for (const auto& out : outputs)
     if (out && !out->IsNull())
       out->Destroy();
   if (shm_found)

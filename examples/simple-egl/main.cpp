@@ -60,7 +60,7 @@ extern "C" {
 // wl_iface() definitions — core Wayland interfaces
 //
 // <wayland-client-protocol.h> exposes pre-built extern const wl_interface
-// symbols for every core Wayland interface.  We simply forward to them.
+// symbols for every core Wayland interface.
 // wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
 // inline by <wl/seat.hpp> (already included above).
 // ══════════════════════════════════════════════════════════════════════════════
@@ -201,8 +201,8 @@ class App {
   } egl_;
 
   // XDG CRTP handlers — destroyed in reverse: toplevel first, wm_base last.
-  wl::WlPtr<wl::XdgWmBaseHandler>        xdg_wm_base_;
-  wl::WlPtr<wl::XdgSurfaceHandler<App>>  xdg_surface_;
+  wl::WlPtr<wl::XdgWmBaseHandler> xdg_wm_base_;
+  wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
   // Seat + keyboard manager — keyboard_ inside is destroyed before seat_.
@@ -249,7 +249,8 @@ class App {
 
 // XDG handler methods are provided by wl::XdgSurfaceHandler<App> and
 // wl::XdgToplevelHandler<App> from <wl/xdg_shell.hpp>.
-// Seat/keyboard handling is provided by wl::SeatManager<App> from <wl/seat.hpp>.
+// Seat/keyboard handling is provided by wl::SeatManager<App> from
+// <wl/seat.hpp>.
 
 void WlCallbackHandler::OnDone(const uint32_t time_ms) {
   app_->OnFrameReady(time_ms);
@@ -362,9 +363,8 @@ bool App::BindGlobals() {
 
   // xdg_wm_base — CRTP handler receives ping events; OnPing calls Pong() only,
   // so no app_ back-pointer is needed.
-  if (!wl::BindHandler<xdg_wm_base_traits>(registry_, xdg_wm_base_,
-                                            xdg_wm_base_name_,
-                                            xdg_wm_base_ver_)) {
+  if (!wl::BindHandler<xdg_wm_base_traits>(
+          registry_, xdg_wm_base_, xdg_wm_base_name_, xdg_wm_base_ver_)) {
     std::fprintf(stderr, "simple-egl: xdg_wm_base bind failed\n");
     return false;
   }
@@ -540,9 +540,8 @@ bool App::MainLoop() {
   RequestFrameCallback();
   RenderFrame();  // eglSwapBuffers commits the buffer + the callback request
 
-  const bool ok = wl::RunEventLoop(display_.Get(),
-                                   [this] { return !running_; },
-                                   "simple-egl");
+  const bool ok = wl::RunEventLoop(
+      display_.Get(), [this] { return !running_; }, "simple-egl");
   if (ok)
     std::printf("simple-egl: exiting cleanly\n");
   return ok;

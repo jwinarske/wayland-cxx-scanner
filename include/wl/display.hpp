@@ -170,9 +170,10 @@ inline void LogWlError(wl_display* display,
 /// @returns true on a clean exit (should_stop() became true); false on I/O
 ///          or protocol error.
 template <typename StopFn>
-[[nodiscard]] inline bool RunEventLoop(wl_display* display,
-                                       StopFn&& should_stop,
-                                       std::string_view prefix = "wl") noexcept {
+[[nodiscard]] inline bool RunEventLoop(
+    wl_display* display,
+    StopFn&& should_stop,
+    std::string_view prefix = "wl") noexcept {
   const int fd = wl_display_get_fd(display);
 
   while (!should_stop()) {
