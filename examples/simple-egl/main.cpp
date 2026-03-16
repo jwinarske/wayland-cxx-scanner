@@ -652,16 +652,17 @@ bool App::BindGlobals() {
     return false;
   }
 
-  // xdg_wm_base — CRTP handler receives ping events
+  // xdg_wm_base — CRTP handler receives ping events; OnPing calls Pong() only,
+  // so no app_ back-pointer is needed.
   if (!wl::BindHandler<xdg_wm_base_traits>(registry_, xdg_wm_base_,
                                             xdg_wm_base_name_,
                                             xdg_wm_base_ver_)) {
     std::fprintf(stderr, "simple-egl: xdg_wm_base bind failed\n");
     return false;
   }
-  xdg_wm_base_.Get()->app_ = this;
 
-  // wl_seat — optional; skip silently if not advertised
+  // wl_seat — optional; skip silently if not advertised.
+  // seat_.Get()->app_ provides the back-pointer used by OnCapabilities.
   if (seat_name_) {
     if (wl::BindHandler<wl_seat_traits>(registry_, seat_, seat_name_,
                                         seat_ver_))

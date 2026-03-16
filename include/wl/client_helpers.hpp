@@ -16,7 +16,10 @@ namespace wl {
 /// Returns false (and leaves @p ptr unchanged) when @p raw is null, making it
 /// safe to chain directly after a failed wl::construct<> or registry bind.
 ///
-/// Example:
+/// **Note:** This function does not set any application back-pointer (e.g.,
+/// `app_` members used to dispatch events back to the owning class).  Set it
+/// explicitly after a successful call when the handler requires it:
+///
 /// @code
 ///   if (!wl::SetupHandler(xdg_surface_,
 ///                         wl::construct<xdg_surface_traits,
@@ -24,7 +27,7 @@ namespace wl {
 ///                             *xdg_wm_base_.Get(), surface_proxy))) {
 ///     // handle failure
 ///   }
-///   xdg_surface_.Get()->app_ = this;  // set back-pointer if needed
+///   xdg_surface_.Get()->app_ = this;  // set back-pointer when needed
 /// @endcode
 ///
 /// @tparam Handler  A CProxyImpl-derived type exposing _SetProxy().
