@@ -655,6 +655,10 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
 // App class
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Forward-declare so App can hold a tracking pointer to the live feedkick
+// handler (heap-allocated, self-deleting on callback).  Defined after App.
+class FeedkickHandler;
+
 class App {
  public:
   App(RunMode mode, int commit_delay_ms)
@@ -727,6 +731,10 @@ class App {
   std::list<WpPresentationFeedbackHandler*> feedback_list_;
   // Last-presented feedback record (for p2p timing).
   WpPresentationFeedbackHandler* last_presented_ = nullptr;
+  // Live feedkick handler in LowLatPresent mode (at most one at a time;
+  // self-deletes on callback, so track it for cleanup on exit).
+  FeedkickHandler* feedkick_ = nullptr;
+  friend class FeedkickHandler;  // needs access to feedkick_
 
   // ── Global IDs from registry scan ────────────────────────────────────────
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
@@ -817,13 +825,6 @@ void WpPresentationFeedbackHandler::OnDiscarded() {
 // ══════════════════════════════════════════════════════════════════════════════
 // App method implementations
 // ══════════════════════════════════════════════════════════════════════════════
-
-App::~App() {
-  // Clean up pending feedback objects.
-  for (auto* fb : feedback_list_)
-    delete fb;
-  delete last_presented_;
-}
 
 // Set to 0 by signal_handler() on SIGINT so the event loop exits cleanly on
 // the first Ctrl+C.  Declared here (before App::Run) so the loop can read it.
@@ -1280,12 +1281,16 @@ class FeedkickHandler
                    uint32_t,
                    uint32_t,
                    uint32_t) override {
+    // Clear the App's tracking pointer before self-deleting so the destructor
+    // doesn't double-free if App outlives this callback for any reason.
+    app_->feedkick_ = nullptr;
     // Update refresh estimate and trigger the next low-latency commit.
     app_->UpdateRefresh(refresh_ns);
     wl_proxy_destroy(Detach());
     delete this;
   }
   void OnDiscarded() override {
+    app_->feedkick_ = nullptr;
     wl_proxy_destroy(Detach());
     delete this;
   }
@@ -1305,6 +1310,7 @@ void App::Feedkick() noexcept {
           &wp_presentation_feedback_traits::wl_iface(),
           surface_.Get()->GetProxy(), nullptr)) {
     fk->_SetProxy(raw);
+    feedkick_ = fk;  // take ownership; cleared by OnPresented/OnDiscarded
   } else {
     delete fk;
   }
@@ -1312,6 +1318,26 @@ void App::Feedkick() noexcept {
 
 // ── MainLoop
 // ──────────────────────────────────────────────────────────────────
+
+// App::~App() is defined here (after FeedkickHandler is complete) so it can
+// call feedkick_->Detach() and delete feedkick_ without using an incomplete
+// type.
+App::~App() {
+  // Destroy any live feedkick handler before the display disconnects.
+  // FeedkickHandler is heap-allocated and normally self-deletes when its
+  // wp_presentation_feedback callback fires; if the app exits before that
+  // event (e.g. Ctrl+C), we must explicitly release the proxy and free the
+  // object here so neither the proxy nor the C++ object is leaked.
+  if (feedkick_) {
+    if (wl_proxy* p = feedkick_->Detach())
+      wl_proxy_destroy(p);
+    delete feedkick_;
+  }
+  // Clean up pending feedback objects.
+  for (auto* fb : feedback_list_)
+    delete fb;
+  delete last_presented_;
+}
 
 void App::StartFeedbackMode() {
   // Kickstart: request the first frame callback, then commit.
@@ -1382,6 +1408,13 @@ bool App::MainLoop() {
     }
     if (!g_running)
       break;
+
+    // Dispatch any events that libwayland has already read into its internal
+    // buffer (avoids blocking in poll() when data is already available).
+    if (wl_display_dispatch_pending(display_.d) < 0) {
+      LogWlError(display_.d, "dispatch_pending");
+      return false;
+    }
 
     pollfd pfd{fd, POLLIN, 0};
     if (poll(&pfd, 1, -1) < 0) {
