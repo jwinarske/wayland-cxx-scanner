@@ -1,0 +1,101 @@
+# Doxyfile.in — Doxygen configuration template for wayland-cxx-scanner.
+# Processed by Meson's configure_file(); placeholders like @VERSION@ are substituted.
+#
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 wayland-cxx-scanner contributors
+
+# ---------------------------------------------------------------------------
+# Project identity
+# ---------------------------------------------------------------------------
+PROJECT_NAME           = "wayland-cxx-scanner"
+PROJECT_NUMBER         = @VERSION@
+PROJECT_BRIEF          = "Wayland Scanner that outputs C++23"
+PROJECT_LOGO           =
+
+# ---------------------------------------------------------------------------
+# Input
+# ---------------------------------------------------------------------------
+INPUT                  = @SOURCE_ROOT@/include \
+                         @SOURCE_ROOT@/src \
+                         @SOURCE_ROOT@/ARCHITECTURE.md \
+                         @SOURCE_ROOT@/README.md
+RECURSIVE              = YES
+FILE_PATTERNS          = *.hpp *.cpp *.h *.md
+EXTENSION_MAPPING      = hpp=C++ cpp=C++
+EXCLUDE_PATTERNS       = */subprojects/* \
+                         */examples/* \
+                         */tests/*
+
+# Use ARCHITECTURE.md as the main page
+USE_MDFILE_AS_MAINPAGE = @SOURCE_ROOT@/ARCHITECTURE.md
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+OUTPUT_DIRECTORY       = @OUTPUT_DIR@
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+GENERATE_MAN           = NO
+
+# ---------------------------------------------------------------------------
+# Extraction settings
+# ---------------------------------------------------------------------------
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+SHOW_INCLUDE_FILES     = YES
+INLINE_SOURCES         = NO
+STRIP_CODE_COMMENTS    = YES
+
+# ---------------------------------------------------------------------------
+# Build / language settings
+# ---------------------------------------------------------------------------
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = NO
+PREDEFINED             = WLSCANNER_BUILD \
+                         __cplusplus=202302L
+
+# ---------------------------------------------------------------------------
+# Diagrams / graphs (requires Graphviz dot)
+# ---------------------------------------------------------------------------
+HAVE_DOT               = @HAVE_DOT@
+DOT_NUM_THREADS        = 0
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+CLASS_GRAPH            = YES
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = NO
+COLLABORATION_GRAPH    = YES
+GROUP_GRAPHS           = YES
+TEMPLATE_RELATIONS     = YES
+
+# ---------------------------------------------------------------------------
+# HTML appearance
+# ---------------------------------------------------------------------------
+HTML_DYNAMIC_SECTIONS  = YES
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+HTML_COLORSTYLE        = LIGHT
+
+# ---------------------------------------------------------------------------
+# Source browsing
+# ---------------------------------------------------------------------------
+SOURCE_BROWSER         = YES
+VERBATIM_HEADERS       = YES
+ALPHABETICAL_INDEX     = YES
+
+# ---------------------------------------------------------------------------
+# Warnings
+# ---------------------------------------------------------------------------
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO

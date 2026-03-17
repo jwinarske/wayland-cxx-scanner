@@ -70,3 +70,30 @@ endif
 if get_option('examples') and wayland_client_dep.found() and wayland_server_dep.found()
     subdir('examples')
 endif
+
+# ── Doxygen HTML documentation ────────────────────────────────────────────────
+
+if get_option('docs')
+    doxygen = find_program('doxygen', required: true)
+    dot     = find_program('dot',     required: false)
+
+    doxyfile = configure_file(
+        input:         'Doxyfile.in',
+        output:        'Doxyfile',
+        configuration: {
+            'VERSION':     meson.project_version(),
+            'SOURCE_ROOT': meson.project_source_root(),
+            'OUTPUT_DIR':  meson.project_build_root() / 'docs',
+            'HAVE_DOT':    dot.found() ? 'YES' : 'NO',
+        },
+    )
+
+    custom_target(
+        'docs',
+        input:   doxyfile,
+        output:  'html',
+        command: [doxygen, doxyfile],
+        build_by_default: true,
+        install:          false,
+    )
+endif

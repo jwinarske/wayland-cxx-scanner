@@ -1,3 +1,4 @@
 # SPDX-License-Identifier: MIT
-option('tests',    type: 'boolean', value: false,  description: 'Build and run unit/integration tests')
+option('tests',    type: 'boolean', value: false, description: 'Build and run unit/integration tests')
 option('examples', type: 'boolean', value: false, description: 'Build example applications')
+option('docs',     type: 'boolean', value: false, description: 'Generate Doxygen HTML documentation')
