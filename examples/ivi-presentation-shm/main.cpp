@@ -368,7 +368,7 @@ class App {
   bool CreateBuffers();
   bool CreateIviSurface();
   bool InitialCommit();
-  [[nodiscard]] bool MainLoop();
+  [[nodiscard]] bool MainLoop() const;
 
   void RequestFrameCallback() noexcept;
   void CommitFrame() noexcept;
@@ -612,7 +612,7 @@ bool App::CreateIviSurface() {
   ivi_surface_.Get()->app_ = this;
   std::printf("ivi-shell: IVI surface created (id=%u)\n", ivi_id_);
 
-  // Commit the surface so the compositor can send a configure event.
+  // Commit the surface so the compositor can send a `configure` event.
   surface_.Get()->Commit();
   if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr,
@@ -627,8 +627,8 @@ bool App::CreateIviSurface() {
 
 int App::NextFreeBuf() noexcept {
   for (int attempt = 0; attempt < kNumBufs; ++attempt) {
-    const int idx = (next_buf_ + attempt) % kNumBufs;
-    if (!bufs_.at(static_cast<std::size_t>(idx)).Get()->busy) {
+    if (const int idx = (next_buf_ + attempt) % kNumBufs;
+        !bufs_.at(static_cast<std::size_t>(idx)).Get()->busy) {
       next_buf_ = (idx + 1) % kNumBufs;
       return idx;
     }
@@ -716,7 +716,7 @@ void App::OnFrameDone(uint32_t /*time_ms*/) noexcept {
   CommitFrame();
 }
 
-void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
+void App::OnIviConfigure(const int32_t width, const int32_t height) noexcept {
   if (width <= 0 || height <= 0)
     return;
 
@@ -741,12 +741,13 @@ void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
   height_ = height;
 
   // Destroy the buffer proxies (sends wl_buffer.destroy for each).  Then do a
-  // roundtrip so the compositor can process the destroys and flush any pending
-  // wl_buffer.release events before we munmap the underlying SHM region.
+  // roundtrip so the compositor can process the destruction and flush any
+  // pending wl_buffer.release events before we munmap the underlying SHM
+  // region.
   for (auto& b : bufs_)
     b.Reset();
   // Critical: ensures the compositor has finished reading the SHM region
-  // (signalled by wl_buffer.release) before munmap in shm_mem_.Reset() below.
+  // (signaled by wl_buffer.release) before munmap in shm_mem_.Reset() below.
   wl_display_roundtrip(display_.Get());
   shm_mem_.Reset();
   next_buf_ = 0;
@@ -763,7 +764,7 @@ void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
   }
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  wl_shm* raw_shm = reinterpret_cast<wl_shm*>(shm_.Get()->GetProxy());
+  auto* raw_shm = reinterpret_cast<wl_shm*>(shm_.Get()->GetProxy());
   wl_shm_pool* raw_pool =
       wl_shm_create_pool(raw_shm, shm_mem_.fd, static_cast<int>(total));
   if (!raw_pool) {
@@ -805,7 +806,7 @@ void App::OnKey(const uint32_t key, const uint32_t state) {
 // ── MainLoop
 // ──────────────────────────────────────────────────────────────────
 
-bool App::MainLoop() {
+bool App::MainLoop() const {
   std::printf("ivi-shell: running with IVI surface ID %u (ESC to quit)\n",
               ivi_id_);
   const bool ok = wl::RunEventLoop(
@@ -825,11 +826,11 @@ int main(int argc, char* argv[]) {
   uint32_t ivi_id = 9000u;  // default IVI surface ID
   if (argc >= 2) {
     char* end = nullptr;
-    const long val = std::strtol(argv[1], &end, 10);
     // Reject partial parses, overflow, and 0 (IVI ID 0 is reserved/invalid
     // on all known IVI compositors; strtol also returns 0 for non-numeric
     // input, so this check catches both cases).
-    if (end != argv[1] && *end == '\0' && val > 0 &&
+    if (const long val = std::strtol(argv[1], &end, 10);
+        end != argv[1] && *end == '\0' && val > 0 &&
         val <= static_cast<long>(UINT32_MAX))
       ivi_id = static_cast<uint32_t>(val);
     else

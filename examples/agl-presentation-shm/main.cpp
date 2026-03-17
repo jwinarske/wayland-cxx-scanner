@@ -366,7 +366,7 @@ class App {
 // Handler callbacks (need full App definition)
 // ══════════════════════════════════════════════════════════════════════════════
 
-void WlCallbackHandler::OnDone(uint32_t time_ms) {
+void WlCallbackHandler::OnDone(const uint32_t time_ms) {
   app_->OnFrameDone(time_ms);
 }
 
@@ -761,8 +761,8 @@ bool App::CreateBuffers() {
 
 int App::NextFreeBuf() noexcept {
   for (int attempt = 0; attempt < kNumBufs; ++attempt) {
-    const int idx = (next_buf_ + attempt) % kNumBufs;
-    if (!bufs_.at(static_cast<std::size_t>(idx)).Get()->busy) {
+    if (const int idx = (next_buf_ + attempt) % kNumBufs;
+        !bufs_.at(static_cast<std::size_t>(idx)).Get()->busy) {
       next_buf_ = (idx + 1) % kNumBufs;
       return idx;
     }
