@@ -11,6 +11,6 @@ subdir('subsurfaces')
 # presentation-shm uses subdir_done() internally if deps absent.
 subdir('presentation-shm')
 # agl-compositor uses subdir_done() internally if wayland-scanner/xkbcommon absent.
-subdir('agl-compositor')
+subdir('agl-presentation-shm')
 # ivi-shell uses subdir_done() internally if wayland-scanner/xkbcommon absent.
-subdir('ivi-shell')
+subdir('ivi-presentation-shm')
