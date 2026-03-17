@@ -3,26 +3,28 @@
 #
 # agl-compositor: AGL shell background client example.
 #
-# Demonstrates the agl_shell protocol: connects to an AGL compositor,
-# creates a wl_surface backed by a shared-memory buffer, promotes it to
-# the output background with agl_shell.set_background, then calls
-# agl_shell.ready to signal the compositor that the shell is ready.
+# Demonstrates the agl_shell protocol alongside xdg-shell, as required by
+# the AGL compositor: creates an xdg_surface/xdg_toplevel on top of the
+# wl_surface (for the XDG configure flow), registers it as the background
+# via agl_shell.set_background, then calls agl_shell.ready.
 #
-# The bundled protocols/agl-shell.xml provides the protocol definition;
-# no system package is required beyond wayland-scanner.
+# The bundled protocols/agl-shell.xml provides the AGL protocol definition.
+# xdg-shell.xml is obtained from the system wayland-protocols package.
 
-# ── Dep checks — silently skip if wayland-scanner is absent ──────────────────
+# ── Dep checks — silently skip if any required dep is absent ─────────────────
 
-wl_scanner_dep = dependency('wayland-scanner', required: false)
-xkbcommon_dep  = dependency('xkbcommon',       required: false)
+wp_dep         = dependency('wayland-protocols', required: false)
+wl_scanner_dep = dependency('wayland-scanner',   required: false)
+xkbcommon_dep  = dependency('xkbcommon',         required: false)
 
-if not (wl_scanner_dep.found() and xkbcommon_dep.found())
+if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found())
     subdir_done()
 endif
 
-# ── Locate system wayland.xml ─────────────────────────────────────────────────
+# ── Locate protocol XMLs ──────────────────────────────────────────────────────
 
 wayland_xml   = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
+xdg_shell_xml = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
 agl_shell_xml = meson.project_source_root() / 'protocols' / 'agl-shell.xml'
 
 # ── Generate C++ client headers ───────────────────────────────────────────────
@@ -31,6 +33,13 @@ wayland_client_hdr = custom_target(
     'agl-compositor-wayland-client-header',
     input:   wayland_xml,
     output:  'wayland_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+xdg_shell_client_hdr = custom_target(
+    'agl-compositor-xdg-shell-client-header',
+    input:   xdg_shell_xml,
+    output:  'xdg_shell_client.hpp',
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
 )
 
@@ -53,6 +62,7 @@ executable(
     sources: [
         'main.cpp',
         wayland_client_hdr,
+        xdg_shell_client_hdr,
         agl_shell_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
