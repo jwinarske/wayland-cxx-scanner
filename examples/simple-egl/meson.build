@@ -4,7 +4,7 @@
 # simple-egl: EGL/OpenGL ES 2 Wayland client example.
 #
 # Connects to the running compositor, creates an XDG toplevel window,
-# and renders a colour-cycling frame via EGL + OpenGL ES 2.
+# and renders a color-cycling frame via EGL + OpenGL ES 2.
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 

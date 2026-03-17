@@ -264,7 +264,7 @@ void emit_server_class(std::ostringstream& os,
       }
       os << "        auto* self = static_cast<" << cls_name
          << "*>(wl_resource_get_user_data(resource));\n";
-      os << "        if (!self) return;  // R5: guard against uninitialised "
+      os << "        if (!self) return;  // R5: guard against uninitialized "
             "resource\n";
       os << "        self->ProcessRequest(" << traits_name
          << "::Req::" << snake_to_pascal(r.name)

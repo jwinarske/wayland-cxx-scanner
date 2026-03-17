@@ -10,14 +10,19 @@
 //   2. Wait for agl_shell.bound_ok / bound_fail (v2+).
 //   3. Create wl_surface → xdg_surface → xdg_toplevel.
 //   4. Set app_id and title on the toplevel.
-//   5. Register the surface as the output background via
-//   agl_shell.set_background.
-//   6. Do an empty wl_surface.commit() to trigger xdg_surface::configure.
-//   7. Wait for configure → ack_configure (done by XdgSurfaceHandler<App>).
+//   5. Do an empty wl_surface.commit() — establishes the committed surface
+//      state (xdg role) that the compositor inspects on set_background.
+//   6. Call agl_shell.set_background(surface, output) AFTER the commit.
+//   7. Wait for xdg_surface::configure → ack_configure.
 //   8. Call agl_shell.ready() to signal the compositor.
 //   9. Allocate SHM buffers and begin frame rendering.
 //
-// The surface draws an animated colour-cycling pattern at ~60 fps.
+// IMPORTANT: set_background must come AFTER the first wl_surface.commit().
+// Calling set_background before commit crashes agl-compositor because the
+// compositor inspects the committed surface state (role) when processing
+// set_background, and an uncommitted surface has no role assigned yet.
+//
+// The surface draws an animated color-cycling pattern at ~60 fps.
 //
 // Protocol dependencies:
 //   xdg-shell.xml  (wayland-protocols, stable)
@@ -140,11 +145,11 @@ struct ShmMapping {
 // Pixel painting
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Fill @p image (XRGB8888) with an animated colour wheel.
+/// Fill the @p image (XRGB8888) with an animated color wheel.
 static void paint_pixels(void* image,
-                         int width,
-                         int height,
-                         uint32_t phase) noexcept {
+                         const int width,
+                         const int height,
+                         const uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
   auto* base = static_cast<uint32_t*>(image);
@@ -154,7 +159,7 @@ static void paint_pixels(void* image,
   const double c = std::cos(ang);
 
   const int outer_r_sq = [&] {
-    int r = (halfw < halfh ? halfw : halfh) - 16;
+    const int r = (halfw < halfh ? halfw : halfh) - 16;
     return r * r;
   }();
 
@@ -213,7 +218,7 @@ class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
 class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
  public:
   uint32_t formats = 0;
-  void OnFormat(uint32_t fmt) override {
+  void OnFormat(const uint32_t fmt) override {
     if (fmt < 32u)
       formats |= (1u << fmt);
   }
@@ -250,13 +255,13 @@ class WlCallbackHandler
 };
 
 // ── XDG shell handlers provided by <wl/xdg_shell.hpp> ────────────────────────
-//   wl::XdgWmBaseHandler        — responds to ping automatically
-//   wl::XdgSurfaceHandler<App>  — acks configure, calls
+//   wl::XdgWmBaseHandler — responds to ping automatically
+//   wl::XdgSurfaceHandler<App> — acks `configure`, calls
 //   App::OnXdgSurfaceConfigure wl::XdgToplevelHandler<App> — delegates
 //   configure/close to App
 
 // ── AglShellHandler from <wl/agl_shell.hpp> ──────────────────────────────────
-//   wl::AglShellHandler<App>    — delegates bound_ok/bound_fail/app_state to
+//   wl::AglShellHandler<App> — delegates bound_ok/bound_fail/app_state to
 //   App
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -274,7 +279,7 @@ class App {
 
   /// xdg_surface::configure received (AckConfigure already done by handler).
   void OnXdgSurfaceConfigure(uint32_t serial) noexcept;
-  /// xdg_toplevel::configure received — update dimensions if compositor
+  /// xdg_toplevel::configure received — update dimensions if the compositor
   /// specified them.
   void OnToplevelConfigure(int32_t width, int32_t height) noexcept;
   /// xdg_toplevel::close received — quit cleanly.
@@ -286,7 +291,7 @@ class App {
   /// Called by wl::AglShellHandler<App>::OnBoundFail — another shell active.
   void OnAglBoundFail() noexcept;
   /// Called by wl::AglShellHandler<App>::OnAppState — app lifecycle event.
-  void OnAglAppState(const char* app_id, uint32_t state);
+  static void OnAglAppState(const char* app_id, uint32_t state);
 
  private:
   // Declaration order = reverse destruction order.
@@ -349,7 +354,7 @@ class App {
   bool SetupShell();
   bool CreateBuffers();
   bool InitialCommit();
-  [[nodiscard]] bool MainLoop();
+  [[nodiscard]] bool MainLoop() const;
 
   void RequestFrameCallback() noexcept;
   void CommitFrame() noexcept;
@@ -378,7 +383,8 @@ void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) noexcept {
   configured_ = true;
 }
 
-void App::OnToplevelConfigure(int32_t width, int32_t height) noexcept {
+void App::OnToplevelConfigure(const int32_t width,
+                              const int32_t height) noexcept {
   // AGL compositor sends the screen dimensions via xdg_toplevel::configure.
   // Update our render target size if the compositor specified non-zero values.
   if (width > 0 && height > 0) {
@@ -405,7 +411,7 @@ void App::OnAglBoundFail() noexcept {
       "active\n");
 }
 
-void App::OnAglAppState(const char* app_id, uint32_t state) {
+void App::OnAglAppState(const char* app_id, const uint32_t state) {
   std::printf("agl-compositor: app_state app_id=%s state=%u\n", app_id, state);
 }
 
@@ -448,8 +454,8 @@ bool App::ScanGlobals() {
     return false;
   }
 
-  registry_.OnGlobal([this](wl::CRegistry& /*reg*/, uint32_t name,
-                            std::string_view iface, uint32_t ver) {
+  registry_.OnGlobal([this](wl::CRegistry& /*reg*/, const uint32_t name,
+                            const std::string_view iface, const uint32_t ver) {
     using namespace wayland::client;
     using namespace xdg_shell::client;
     using namespace agl_shell::client;
@@ -603,16 +609,17 @@ bool App::BindGlobals() {
 // ── SetupShell
 // ────────────────────────────────────────────────────────────────
 //
-// Implements the canonical xdg + agl_shell surface setup sequence documented
-// in toyota-connected/ivi-homescreen (shell/wayland/window.cc):
+// Implements the canonical xdg + agl_shell surface setup sequence from
+// toyota-connected/ivi-homescreen (shell/wayland/window.cc).
 //
-//  1. wl_surface (base surface for all rendering)
-//  2. xdg_surface → xdg_toplevel (required by AGL compositor for surface
-//     role negotiation via the XDG configure flow)
-//  3. agl_shell.set_background(surface, output) — declare the AGL role
-//  4. wl_surface.commit() — empty commit triggers xdg_surface::configure
-//  5. Dispatch until xdg_surface::configure → ack_configure
-//  6. agl_shell.ready() — signal compositor that the shell client is ready
+// Critical ordering (crash root-cause if violated):
+//  1. wl_surface + xdg_surface + xdg_toplevel creation
+//  2. wl_surface.commit() — MUST come first; establishes the committed surface
+//     state (including xdg role) that the compositor inspects on set_background
+//  3. agl_shell.set_background(surface, output) — AFTER commit so the
+//     compositor sees a valid, role-assigned surface
+//  4. Dispatch until xdg_surface::configure → ack_configure
+//  5. agl_shell.ready() — signal compositor the shell client is initialized
 
 bool App::SetupShell() {
   using namespace wayland::client;
@@ -629,8 +636,7 @@ bool App::SetupShell() {
     return false;
   }
 
-  // 2a. Wrap the wl_surface in an xdg_surface so the compositor can
-  //     participate in the XDG surface role protocol.
+  // 2a. Wrap the wl_surface in an xdg_surface.
   if (!wl::SetupHandler(xdg_surface_,
                         wl::construct<xdg_surface_traits,
                                       xdg_wm_base_traits::Op::GetXdgSurface>(
@@ -653,20 +659,22 @@ bool App::SetupShell() {
   xdg_toplevel_.Get()->SetTitle("agl-compositor-bg");
   xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.agl-compositor");
 
-  // 3. Register this surface as the background for the first output.
-  //    This is sent before the commit so the compositor knows the intended
-  //    role when it processes the configure request.
+  // 3. Empty commit — establishes the xdg_surface role in the committed state.
+  //    This MUST come before set_background; the compositor inspects the
+  //    committed surface state when it processes set_background.  Sending
+  //    set_background before commit leaves the surface with no committed
+  //    role and crashes agl-compositor.
+  surface_.Get()->Commit();
+
+  // 4. Register this surface as the background for the first output.
+  //    Called AFTER the commit, exactly as in ivi-homescreen window.cc.
   agl_shell_.Get()->SetBackground(surface_.Get()->GetProxy(),
                                   output_.Get()->GetProxy());
   std::printf("agl-compositor: background surface registered with agl_shell\n");
 
-  // 4. Empty commit — triggers xdg_surface::configure.
-  //    The compositor will reply with the desired surface dimensions.
-  surface_.Get()->Commit();
-
-  // 5. Dispatch until xdg_surface::configure arrives (and is ack'd by the
-  //    XdgSurfaceHandler, which sets configured_ = true via
-  //    OnXdgSurfaceConfigure).
+  // 5. Dispatch until xdg_surface::configure arrives (ack'd automatically by
+  //    XdgSurfaceHandler, which then calls OnXdgSurfaceConfigure → configured_
+  //    = true).
   while (!configured_) {
     if (!wl::RoundtripWithTimeout(display_.Get())) {
       std::fprintf(stderr,
@@ -675,10 +683,13 @@ bool App::SetupShell() {
       return false;
     }
   }
-  std::printf("agl-compositor: xdg_surface configured (%d×%d)\n", width_,
+  std::printf("agl-compositor: xdg_surface configured (%dx%d)\n", width_,
               height_);
 
-  // 6. Signal the compositor that the shell client is fully initialised.
+  // 6. Signal the compositor that the shell client is fully initialized.
+  //    Called after configure is acknowledged, matching the ivi-homescreen flow
+  //    where AglShellDoReady() is called after all windows finish their
+  //    `configure` wait.
   agl_shell_.Get()->Ready();
   std::printf("agl-compositor: agl_shell.ready sent\n");
 
@@ -687,7 +698,7 @@ bool App::SetupShell() {
 
 // ── CreateBuffers
 // ───────────────────────────────────────────────────────────── Called after
-// SetupShell() so that width_/height_ reflect any compositor- provided
+// SetupShell() so that width_/height_ reflect any compositor provided
 // dimensions from xdg_toplevel::configure.
 
 bool App::CreateBuffers() {
@@ -704,7 +715,7 @@ bool App::CreateBuffers() {
   // Create the pool using the raw C API (wl_shm has no event we need to
   // handle on the pool itself).
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  wl_shm* raw_shm = reinterpret_cast<wl_shm*>(shm_.Get()->GetProxy());
+  auto* raw_shm = reinterpret_cast<wl_shm*>(shm_.Get()->GetProxy());
   wl_shm_pool* raw_pool =
       wl_shm_create_pool(raw_shm, shm_mem_.fd, static_cast<int>(total));
   if (!raw_pool) {
@@ -836,7 +847,7 @@ void App::OnKey(const uint32_t key, const uint32_t state) {
 // ── MainLoop
 // ──────────────────────────────────────────────────────────────────
 
-bool App::MainLoop() {
+bool App::MainLoop() const {
   std::printf(
       "agl-compositor: running as background shell client "
       "(ESC to quit)\n");

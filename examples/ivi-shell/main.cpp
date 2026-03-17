@@ -9,7 +9,7 @@
 // registers it with an integer IVI surface ID via
 // ivi_application.surface_create.
 //
-// The surface draws an animated colour-cycling pattern and responds to
+// The surface draws an animated color-cycling pattern and responds to
 // ivi_surface.configure events (compositor-driven resize hints).
 //
 // Usage:
@@ -178,7 +178,7 @@ struct ShmMapping {
 // Pixel painting
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Fill @p image (XRGB8888) with an animated colour wheel.
+/// Fill @p image (XRGB8888) with an animated color wheel.
 static void paint_pixels(void* image,
                          int width,
                          int height,
