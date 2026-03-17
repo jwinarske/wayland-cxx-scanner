@@ -79,7 +79,7 @@ extern "C" {
 // ══════════════════════════════════════════════════════════════════════════════
 // OpenGL ES 2 triangle — shader sources and helpers
 //
-// The red subsurface renders a solid-coloured RGB triangle that rotates at
+// The red subsurface renders a solid-colored RGB triangle that rotates at
 // one radian per second (period ≈ 6.28 s) using a per-frame uniform angle.
 // ══════════════════════════════════════════════════════════════════════════════
 

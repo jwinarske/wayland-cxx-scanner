@@ -4,7 +4,7 @@
 // simple-egl — color-cycling EGL/OpenGL ES 2 Wayland client.
 //
 // Connects to the running compositor, creates an XDG toplevel window, and
-// renders a hue-shifting solid colour via OpenGL ES 2 + EGL.
+// renders a hue-shifting solid color via OpenGL ES 2 + EGL.
 //
 // Build requirements: wayland-client, wayland-egl, EGL, GLESv2.
 // Runtime requirement: a running Wayland compositor with xdg-shell support.
@@ -239,7 +239,7 @@ class App {
   /// Register a wl_surface.frame callback with the compositor.
   void RequestFrameCallback() noexcept;
 
-  /// Render one frame (GL clear + colour cycle) and swap buffers.
+  /// Render one frame (GL clear + color cycle) and swap buffers.
   void RenderFrame() noexcept;
 };
 
@@ -452,7 +452,7 @@ bool App::InitEgl() {
     std::fprintf(stderr, "simple-egl: eglInitialize failed\n");
     return false;
   }
-  std::printf("simple-egl: EGL %d.%d initialised\n", major, minor);
+  std::printf("simple-egl: EGL %d.%d initialized\n", major, minor);
 
   if (!eglBindAPI(EGL_OPENGL_ES_API)) {
     std::fprintf(stderr, "simple-egl: eglBindAPI(OPENGL_ES) failed\n");
