@@ -51,6 +51,7 @@ extern "C" {
 #include <cassert>
 #include <cerrno>
 #include <cinttypes>
+#include <climits>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
@@ -1192,8 +1193,17 @@ int main(int argc, char* argv[]) {
     else if (arg == "-p")
       mode = RunMode::LowLatPresent;
     else if (arg == "-d" && i + 1 < argc) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      const char* val_str = argv[++i];
       char* end = nullptr;
-      commit_delay_ms = static_cast<int>(std::strtol(argv[++i], &end, 10));
+      const long val = std::strtol(val_str, &end, 10);
+      if (end == val_str || *end != '\0' || val < 0 || val > INT_MAX) {
+        std::fprintf(stderr, "presentation-shm: invalid -d MSECS value '%s'\n",
+                     val_str);
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      commit_delay_ms = static_cast<int>(val);
     } else {
       print_usage(argv[0]);
       return EXIT_FAILURE;

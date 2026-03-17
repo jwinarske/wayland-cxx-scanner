@@ -386,11 +386,22 @@ void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) noexcept {
 void App::OnToplevelConfigure(const int32_t width,
                               const int32_t height) noexcept {
   // AGL compositor sends the screen dimensions via xdg_toplevel::configure.
-  // Update our render target size if the compositor specified non-zero values.
+  // Guard against compositor-supplied values that would overflow the SHM
+  // allocation arithmetic (same ceiling as ivi-shell/main.cpp).
+  // stride=w*4, per_buf=stride*h, total=per_buf*kNumBufs must all fit in a
+  // size_t without overflow.  8192×8192×4×2 = 536 MB, well within limits.
+  static constexpr int32_t kMaxDim = 8192;
   if (width > 0 && height > 0) {
+    if (width > kMaxDim || height > kMaxDim) {
+      std::fprintf(stderr,
+                   "agl-compositor: toplevel configure %dx%d exceeds maximum "
+                   "%d — ignoring\n",
+                   width, height, kMaxDim);
+      return;
+    }
     width_ = width;
     height_ = height;
-    std::printf("agl-compositor: toplevel configure %d×%d\n", width, height);
+    std::printf("agl-compositor: toplevel configure %dx%d\n", width, height);
   }
 }
 
