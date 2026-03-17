@@ -87,21 +87,33 @@ const wl_interface& wl_output_traits::wl_iface() noexcept {
 // agl_shell wl_interface definitions
 //
 // The agl_shell protocol is not part of wayland-protocols and has no
-// pre-built system wl_interface symbols, so we define them here.
+// pre-built system wl_interface symbols, so we define them here to match
+// the upstream protocol (version 4 from toyota-connected/ivi-homescreen).
+//
+// Protocol layout (version 4):
+//   Requests  (6): ready(0), set_background(1), set_panel(2), activate_app(3),
+//                  destroy(4, since v2), set_activate_region(5, since v4)
+//   Events    (3): bound_ok(0, since v2), bound_fail(1, since v2),
+//                  app_state(2, since v3)
 // ══════════════════════════════════════════════════════════════════════════════
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,
 //             cppcoreguidelines-avoid-non-const-global-variables,
 //             cppcoreguidelines-interfaces-global-init)
 static const wl_interface* agl_shell_types[] = {
-    nullptr,               // [0] scalar / null
-    &wl_surface_interface, // [1] wl_surface 'o' arg
-    &wl_output_interface,  // [2] wl_output  'o' arg
-    nullptr,               // [3] scalar: edge 'u' in set_panel
-    nullptr,               // [4] scalar: app_id 's' in activate_app
-    &wl_output_interface,  // [5] wl_output 'o' arg in activate_app
-    nullptr,               // [6] scalar: app_id 's' in app_state
-    nullptr,               // [7] scalar: state  'u' in app_state
+    nullptr,               // [0]  scalar placeholder
+    &wl_surface_interface, // [1]  set_background/set_panel: surface arg
+    &wl_output_interface,  // [2]  set_background/set_panel: output arg
+    nullptr,               // [3]  set_panel: edge (uint) arg
+    nullptr,               // [4]  activate_app: app_id (string) arg
+    &wl_output_interface,  // [5]  activate_app: output arg
+    &wl_output_interface,  // [6]  set_activate_region: output arg
+    nullptr,               // [7]  set_activate_region: x (int) arg
+    nullptr,               // [8]  set_activate_region: y (int) arg
+    nullptr,               // [9]  set_activate_region: width (int) arg
+    nullptr,               // [10] set_activate_region: height (int) arg
+    nullptr,               // [11] app_state: app_id (string) arg
+    nullptr,               // [12] app_state: state (uint) arg
 };
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays,
 //           cppcoreguidelines-avoid-non-const-global-variables,
@@ -110,22 +122,26 @@ static const wl_interface* agl_shell_types[] = {
 // clang-format off
 // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
 static constexpr wl_message agl_shell_requests[] = {
-    {"ready",          "",    nullptr},
-    {"set_background", "oo",  &agl_shell_types[1]},
-    {"set_panel",      "oou", &agl_shell_types[1]},
-    {"activate_app",   "so",  &agl_shell_types[4]},
+    {"ready",               "",       nullptr},              // 0: v1, no args
+    {"set_background",      "oo",     &agl_shell_types[1]}, // 1: v1, surface+output
+    {"set_panel",           "oou",    &agl_shell_types[1]}, // 2: v1, surface+output+edge
+    {"activate_app",        "so",     &agl_shell_types[4]}, // 3: v1, string+output
+    {"destroy",             "2",      nullptr},              // 4: v2 destructor, no args
+    {"set_activate_region", "4oiiii", &agl_shell_types[6]}, // 5: v4, output+4×int
 };
 static constexpr wl_message agl_shell_events[] = {
-    {"app_state", "su", &agl_shell_types[6]},
+    {"bound_ok",   "2",   nullptr},              // 0: v2, no args
+    {"bound_fail", "2",   nullptr},              // 1: v2, no args
+    {"app_state",  "3su", &agl_shell_types[11]}, // 2: v3, string+uint
 };
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
 // clang-format on
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static wl_interface agl_shell_iface_def = {
-    "agl_shell", 1,
-    4, std::data(agl_shell_requests),
-    1, std::data(agl_shell_events)};
+    "agl_shell", 4,
+    6, std::data(agl_shell_requests),
+    3, std::data(agl_shell_events)};
 
 namespace agl_shell::client {
 const wl_interface& agl_shell_traits::wl_iface() noexcept {
@@ -283,10 +299,17 @@ class WlCallbackHandler
 };
 
 // ── AglShellHandler ───────────────────────────────────────────────────────────
+// Handles the three agl_shell events (v2+):
+//   bound_ok  (opcode 0): compositor accepted our binding; safe to proceed.
+//   bound_fail (opcode 1): another shell client is already active; must exit.
+//   app_state (opcode 2): application lifecycle notification (informational).
 
 class AglShellHandler
     : public agl_shell::client::CAglShell<AglShellHandler> {
  public:
+  App* app_ = nullptr;
+  void OnBoundOk() override;
+  void OnBoundFail() override;
   void OnAppState(const char* app_id, uint32_t state) override {
     std::printf("agl-compositor: app_state app_id=%s state=%u\n", app_id,
                 state);
@@ -305,6 +328,10 @@ class App {
   // ── Callbacks from CRTP handlers ──────────────────────────────────────────
   void OnKey(uint32_t key, uint32_t state);
   void OnFrameDone(uint32_t time_ms) noexcept;
+  /// Called by AglShellHandler::OnBoundOk — compositor accepted our binding.
+  void OnAglBoundOk() noexcept;
+  /// Called by AglShellHandler::OnBoundFail — another shell client is active.
+  void OnAglBoundFail() noexcept;
 
  private:
   // Declaration order = reverse destruction order.
@@ -340,7 +367,10 @@ class App {
 
   // State
   bool running_ = true;
-  bool shell_ready_ = false;
+
+  // agl_shell binding state (v2+ protocol requires waiting for bound_ok/fail).
+  enum class BoundState { Waiting, Ok, Fail };
+  BoundState bound_state_ = BoundState::Waiting;
 
   // Registry recorded names/versions
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
@@ -372,12 +402,35 @@ void WlCallbackHandler::OnDone(uint32_t time_ms) {
   app_->OnFrameDone(time_ms);
 }
 
+void AglShellHandler::OnBoundOk() {
+  if (app_)
+    app_->OnAglBoundOk();
+}
+
+void AglShellHandler::OnBoundFail() {
+  if (app_)
+    app_->OnAglBoundFail();
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // App method implementations
 // ══════════════════════════════════════════════════════════════════════════════
 
 App::~App() {
   seat_.Release();
+}
+
+void App::OnAglBoundOk() noexcept {
+  bound_state_ = BoundState::Ok;
+  std::printf("agl-compositor: bound_ok — shell client accepted\n");
+}
+
+void App::OnAglBoundFail() noexcept {
+  bound_state_ = BoundState::Fail;
+  std::fprintf(
+      stderr,
+      "agl-compositor: bound_fail — another AGL shell client is already "
+      "active\n");
 }
 
 int App::Run() {
@@ -488,13 +541,15 @@ bool App::BindGlobals() {
     return false;
   }
 
-  // agl_shell
+  // agl_shell — bind and install event listener before roundtrip so that
+  // bound_ok / bound_fail (since v2) arrive during the roundtrip below.
   if (!wl::BindHandler<agl_shell_traits>(registry_, agl_shell_,
                                           agl_shell_name_,
                                           agl_shell_ver_)) {
     std::fprintf(stderr, "agl-compositor: agl_shell bind failed\n");
     return false;
   }
+  agl_shell_.Get()->app_ = this;  // needed to dispatch bound_ok/fail
 
   // wl_seat (optional; provides keyboard for ESC-to-quit)
   if (!seat_.Bind(registry_, this)) {
@@ -502,10 +557,33 @@ bool App::BindGlobals() {
     return false;
   }
 
-  // One more roundtrip so wl_shm.format and seat capabilities arrive.
+  // One more roundtrip so wl_shm.format, seat capabilities, and
+  // agl_shell.bound_ok / bound_fail (v2+) all arrive.
   if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "agl-compositor: timed out waiting for formats\n");
     return false;
+  }
+
+  // Verify agl_shell binding was accepted (required for protocol v2+).
+  // A v1 compositor sends no bound event, so Waiting is treated as Ok.
+  if (bound_state_ == BoundState::Fail) {
+    // bound_fail was received; OnAglBoundFail() already printed an error.
+    return false;
+  }
+  if (bound_state_ == BoundState::Waiting) {
+    const uint32_t bound_ver =
+        std::min(agl_shell_ver_, agl_shell_traits::version);
+    if (bound_ver >= 2u) {
+      // Compositor claims v2+ support but sent neither bound_ok nor bound_fail.
+      std::fprintf(stderr,
+                   "agl-compositor: no bound event received from v%u "
+                   "compositor (compositor bug?)\n",
+                   bound_ver);
+      return false;
+    }
+    // v1 compositor — no bound events expected; proceed.
+    std::printf("agl-compositor: v1 compositor — proceeding without bound "
+                "confirmation\n");
   }
 
   if (!(shm_.Get()->formats & (1u << WL_SHM_FORMAT_XRGB8888))) {
@@ -585,7 +663,6 @@ bool App::SetupShell() {
 
   // Signal the compositor that the shell client is ready.
   agl_shell_.Get()->Ready();
-  shell_ready_ = true;
   std::printf("agl-compositor: agl_shell.ready sent\n");
   return true;
 }
