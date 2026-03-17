@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="agl_shell">
+
+  <copyright>
+    Copyright © 2019-2022 Collabora, Ltd.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice (including the next
+    paragraph) shall be included in all copies or substantial portions of the
+    Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+  </copyright>
+
+  <interface name="agl_shell" version="1">
+    <description summary="user interfaces for automotive">
+      Privileged clients that implement a shell for Automotive Grade Linux
+      use this interface to set up background and panel surfaces, and to
+      activate running applications.
+
+      Only one client at a time may bind this global; the compositor
+      rejects additional bindings.
+    </description>
+
+    <enum name="error">
+      <entry name="invalid_argument"  value="0"
+             summary="an invalid argument was provided"/>
+      <entry name="background_exists" value="1"
+             summary="a background surface already exists on that output"/>
+      <entry name="panel_exists"      value="2"
+             summary="a panel surface already exists on that output/edge"/>
+    </enum>
+
+    <enum name="edge">
+      <entry name="top"    value="0" summary="top edge"/>
+      <entry name="bottom" value="1" summary="bottom edge"/>
+      <entry name="left"   value="2" summary="left edge"/>
+      <entry name="right"  value="3" summary="right edge"/>
+    </enum>
+
+    <request name="ready">
+      <description summary="signal the compositor that the shell is ready">
+        Signal the compositor that the shell client is fully initialised
+        and ready to manage surfaces.  The compositor may display a splash
+        screen or remain in a default state until this request is received.
+      </description>
+    </request>
+
+    <request name="set_background">
+      <description summary="set a surface as the desktop background">
+        Promote a wl_surface to a background surface on the given output.
+        The surface is scaled to cover the entire output.  Sending this
+        request a second time for the same output produces a
+        background_exists protocol error.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"
+           summary="the surface to promote to background"/>
+      <arg name="output"  type="object" interface="wl_output"
+           summary="the output on which to place the background"/>
+    </request>
+
+    <request name="set_panel">
+      <description summary="set a surface as a panel along an output edge">
+        Promote a wl_surface to a panel surface anchored at the given
+        edge of the given output.  Panel surfaces reduce the usable area
+        that the compositor allocates for regular application windows.
+        Sending this request a second time for the same output/edge
+        produces a panel_exists protocol error.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"
+           summary="the surface to promote to panel"/>
+      <arg name="output"  type="object" interface="wl_output"
+           summary="the output on which to place the panel"/>
+      <arg name="edge"    type="uint"   enum="edge"
+           summary="which edge the panel is anchored to"/>
+    </request>
+
+    <request name="activate_app">
+      <description summary="activate a running application by app-id">
+        Bring an already-running application to the foreground on the
+        given output.  The compositor finds the xdg_toplevel with a
+        matching app_id and raises it.  If no matching app_id is found
+        the request is silently ignored.
+      </description>
+      <arg name="app_id" type="string"
+           summary="XDG application identifier of the app to activate"/>
+      <arg name="output" type="object" interface="wl_output"
+           summary="the output on which to activate the application"/>
+    </request>
+
+    <event name="app_state">
+      <description summary="notification of application state change">
+        The compositor sends this event when the visible state of a
+        managed application changes (e.g. when it is activated or
+        deactivated).
+      </description>
+      <arg name="app_id" type="string"
+           summary="XDG application identifier"/>
+      <arg name="state"  type="uint"
+           summary="new application state (compositor-defined bitmask)"/>
+    </event>
+
+  </interface>
+
+</protocol>
