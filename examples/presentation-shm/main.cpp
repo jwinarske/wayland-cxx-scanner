@@ -24,6 +24,16 @@
 #include "wayland_client.hpp"            // namespace wayland::client
 #include "xdg_shell_client.hpp"          // namespace xdg_shell::client
 
+// ── Framework headers
+// ─────────────────────────────────────────────────────────
+#include <wl/client_helpers.hpp>
+#include <wl/display.hpp>
+#include <wl/raii.hpp>
+#include <wl/registry.hpp>
+#include <wl/seat.hpp>
+#include <wl/wl_ptr.hpp>
+#include <wl/xdg_shell.hpp>  // wl_interface tables + wl::XdgWmBaseHandler / XdgSurfaceHandler<App> / XdgToplevelHandler<App>
+
 // ── System Wayland C headers
 // ──────────────────────────────────────────────────
 extern "C" {
@@ -33,15 +43,6 @@ extern "C" {
 #include <unistd.h>
 #include <wayland-client-protocol.h>
 }
-
-// ── Framework headers
-// ─────────────────────────────────────────────────────────
-#include <wl/client_helpers.hpp>
-#include <wl/display.hpp>
-#include <wl/raii.hpp>
-#include <wl/registry.hpp>
-#include <wl/seat.hpp>
-#include <wl/wl_ptr.hpp>
 
 // ── Standard library
 // ──────────────────────────────────────────────────────────
@@ -64,6 +65,8 @@ extern "C" {
 //
 // wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
 // inline by <wl/seat.hpp> (already included above).
+// All xdg_shell traits wl_iface() implementations are provided inline by
+// <wl/xdg_shell.hpp> (already included above).
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wayland::client {
@@ -88,155 +91,6 @@ const wl_interface& wl_buffer_traits::wl_iface() noexcept {
 }
 
 }  // namespace wayland::client
-
-// ══════════════════════════════════════════════════════════════════════════════
-// xdg-shell wl_interface definitions (no pre-built system symbols)
-// ══════════════════════════════════════════════════════════════════════════════
-
-extern const wl_interface xdg_wm_base_iface_def;
-extern const wl_interface xdg_positioner_iface_def;
-extern const wl_interface xdg_surface_iface_def;
-extern const wl_interface xdg_toplevel_iface_def;
-extern const wl_interface xdg_popup_iface_def;
-
-// NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,
-//             cppcoreguidelines-avoid-non-const-global-variables,
-//             cppcoreguidelines-interfaces-global-init)
-static const wl_interface* xdg_shell_types[] = {
-    nullptr,                    // [0]  scalar
-    nullptr,                    // [1]
-    nullptr,                    // [2]
-    nullptr,                    // [3]
-    &xdg_positioner_iface_def,  // [4]  create_positioner
-    &xdg_surface_iface_def,     // [5]  get_xdg_surface → new_id
-    &wl_surface_interface,      // [6]  get_xdg_surface → surface
-    &xdg_toplevel_iface_def,    // [7]  get_toplevel
-    &xdg_popup_iface_def,       // [8]  get_popup → new_id
-    &xdg_surface_iface_def,     // [9]  get_popup → parent
-    &xdg_positioner_iface_def,  // [10] get_popup → positioner
-    &xdg_toplevel_iface_def,    // [11] set_parent
-    &wl_seat_interface,         // [12] show_window_menu → seat
-    nullptr,                    // [13]
-    nullptr,                    // [14]
-    nullptr,                    // [15]
-    &wl_seat_interface,         // [16] move
-    nullptr,                    // [17]
-    &wl_seat_interface,         // [18] resize
-    nullptr,                    // [19]
-    nullptr,                    // [20]
-    &wl_output_interface,       // [21] set_fullscreen
-    &wl_seat_interface,         // [22] grab
-    nullptr,                    // [23]
-    &xdg_positioner_iface_def,  // [24] reposition
-    nullptr,                    // [25]
-};
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-static constexpr const wl_interface** kScalarTypes = &xdg_shell_types[0];
-
-static constexpr wl_message xdg_wm_base_requests[] = {
-    {"destroy", "", nullptr},
-    {"create_positioner", "n", &xdg_shell_types[4]},
-    {"get_xdg_surface", "no", &xdg_shell_types[5]},
-    {"pong", "u", kScalarTypes},
-};
-static constexpr wl_message xdg_wm_base_events[] = {
-    {"ping", "u", kScalarTypes}};
-
-static constexpr wl_message xdg_positioner_requests[] = {
-    {"destroy", "", nullptr},
-    {"set_size", "ii", kScalarTypes},
-    {"set_anchor_rect", "iiii", kScalarTypes},
-    {"set_anchor", "u", kScalarTypes},
-    {"set_gravity", "u", kScalarTypes},
-    {"set_constraint_adjustment", "u", kScalarTypes},
-    {"set_offset", "ii", kScalarTypes},
-    {"set_reactive", "3", nullptr},
-    {"set_parent_size", "3ii", kScalarTypes},
-    {"set_parent_configure", "3u", kScalarTypes},
-};
-
-static constexpr wl_message xdg_surface_requests[] = {
-    {"destroy", "", nullptr},
-    {"get_toplevel", "n", &xdg_shell_types[7]},
-    {"get_popup", "n?oo", &xdg_shell_types[8]},
-    {"set_window_geometry", "iiii", kScalarTypes},
-    {"ack_configure", "u", kScalarTypes},
-};
-static constexpr wl_message xdg_surface_events[] = {
-    {"configure", "u", kScalarTypes}};
-
-static constexpr wl_message xdg_toplevel_requests[] = {
-    {"destroy", "", nullptr},
-    {"set_parent", "?o", &xdg_shell_types[11]},
-    {"set_title", "s", kScalarTypes},
-    {"set_app_id", "s", kScalarTypes},
-    {"show_window_menu", "ouii", &xdg_shell_types[12]},
-    {"move", "ou", &xdg_shell_types[16]},
-    {"resize", "ouu", &xdg_shell_types[18]},
-    {"set_max_size", "ii", kScalarTypes},
-    {"set_min_size", "ii", kScalarTypes},
-    {"set_maximized", "", nullptr},
-    {"unset_maximized", "", nullptr},
-    {"set_fullscreen", "?o", &xdg_shell_types[21]},
-    {"unset_fullscreen", "", nullptr},
-    {"set_minimized", "", nullptr},
-};
-static constexpr wl_message xdg_toplevel_events[] = {
-    {"configure", "iia", kScalarTypes},
-    {"close", "", nullptr},
-    {"configure_bounds", "4ii", kScalarTypes},
-    {"wm_capabilities", "5a", kScalarTypes},
-};
-
-static constexpr wl_message xdg_popup_requests[] = {
-    {"destroy", "", nullptr},
-    {"grab", "ou", &xdg_shell_types[22]},
-    {"reposition", "3ou", &xdg_shell_types[24]},
-};
-static constexpr wl_message xdg_popup_events[] = {
-    {"configure", "iiii", kScalarTypes},
-    {"popup_done", "", nullptr},
-    {"repositioned", "3u", kScalarTypes},
-};
-// NOLINTEND(cppcoreguidelines-avoid-c-arrays,
-//           cppcoreguidelines-avoid-non-const-global-variables,
-//           cppcoreguidelines-interfaces-global-init)
-
-// clang-format off
-const wl_interface xdg_wm_base_iface_def = {
-    "xdg_wm_base",    7,
-    4,  std::data(xdg_wm_base_requests),    1, std::data(xdg_wm_base_events)};
-const wl_interface xdg_positioner_iface_def = {
-    "xdg_positioner", 7,
-    10, std::data(xdg_positioner_requests), 0, nullptr};
-const wl_interface xdg_surface_iface_def = {
-    "xdg_surface",    7,
-    5,  std::data(xdg_surface_requests),    1, std::data(xdg_surface_events)};
-const wl_interface xdg_toplevel_iface_def = {
-    "xdg_toplevel",   7,
-    14, std::data(xdg_toplevel_requests),   4, std::data(xdg_toplevel_events)};
-const wl_interface xdg_popup_iface_def = {
-    "xdg_popup",      7,
-    3,  std::data(xdg_popup_requests),      3, std::data(xdg_popup_events)};
-// clang-format on
-
-namespace xdg_shell::client {
-const wl_interface& xdg_wm_base_traits::wl_iface() noexcept {
-  return xdg_wm_base_iface_def;
-}
-const wl_interface& xdg_positioner_traits::wl_iface() noexcept {
-  return xdg_positioner_iface_def;
-}
-const wl_interface& xdg_surface_traits::wl_iface() noexcept {
-  return xdg_surface_iface_def;
-}
-const wl_interface& xdg_toplevel_traits::wl_iface() noexcept {
-  return xdg_toplevel_iface_def;
-}
-const wl_interface& xdg_popup_traits::wl_iface() noexcept {
-  return xdg_popup_iface_def;
-}
-}  // namespace xdg_shell::client
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wp_presentation / wp_presentation_feedback wl_interface definitions
@@ -484,39 +338,10 @@ class WlCallbackHandler
   void OnDone(uint32_t time_ms) override;
 };
 
-// ── XdgWmBaseHandler
-// ──────────────────────────────────────────────────────────
-
-class XdgWmBaseHandler
-    : public xdg_shell::client::CXdgWmBase<XdgWmBaseHandler> {
- public:
-  void OnPing(uint32_t serial) override { Pong(serial); }
-};
-
-// ── XdgSurfaceHandler
-// ─────────────────────────────────────────────────────────
-
-class XdgSurfaceHandler
-    : public xdg_shell::client::CXdgSurface<XdgSurfaceHandler> {
- public:
-  App* app_ = nullptr;
-  void OnConfigure(uint32_t serial) override;
-};
-
-// ── XdgToplevelHandler
-// ────────────────────────────────────────────────────────
-
-class XdgToplevelHandler
-    : public xdg_shell::client::CXdgToplevel<XdgToplevelHandler> {
- public:
-  App* app_ = nullptr;
-  void OnConfigure(int32_t /*w*/,
-                   int32_t /*h*/,
-                   wl_array* /*states*/) override {}
-  void OnClose() override;
-  void OnConfigureBounds(int32_t /*w*/, int32_t /*h*/) override {}
-  void OnWmCapabilities(wl_array* /*caps*/) override {}
-};
+// ── XDG shell handlers provided by <wl/xdg_shell.hpp> ────────────────────────
+//   wl::XdgWmBaseHandler        — responds to ping automatically
+//   wl::XdgSurfaceHandler<App>  — acks configure, calls App::OnXdgSurfaceConfigure
+//   wl::XdgToplevelHandler<App> — delegates configure/close to App
 
 // ── WpPresentationHandler
 // ─────────────────────────────────────────────────────
@@ -672,6 +497,7 @@ class App {
 
   // ── Callbacks from CRTP handlers ────────────────────────────────────────
   void OnXdgSurfaceConfigure(uint32_t serial);
+  void OnToplevelConfigure(int32_t /*width*/, int32_t /*height*/) noexcept {}  // fixed size
   void OnToplevelClose();
   void OnKey(uint32_t key, uint32_t state);
   void OnFrameDone(uint32_t stamp_ms) noexcept;
@@ -707,14 +533,14 @@ class App {
   wl::WlPtr<WlCompositorHandler> compositor_;
   wl::WlPtr<WlShmHandler> shm_;
   wl::WlPtr<WpPresentationHandler> presentation_;
-  wl::WlPtr<XdgWmBaseHandler> xdg_wm_base_;
+  wl::WlPtr<wl::XdgWmBaseHandler> xdg_wm_base_;
 
   // ── Input: seat + keyboard (optional; ESC quits) ─────────────────────────
   wl::SeatManager<App> seat_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
-  wl::WlPtr<XdgSurfaceHandler> xdg_surface_;
-  wl::WlPtr<XdgToplevelHandler> xdg_toplevel_;
+  wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
+  wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
   // Frame-pacing callback (feedback + feedback-idle modes).
   wl::WlPtr<WlCallbackHandler> frame_cb_;
@@ -778,15 +604,6 @@ class App {
 
 void WlCallbackHandler::OnDone(uint32_t time_ms) {
   app_->OnFrameDone(time_ms);
-}
-
-void XdgSurfaceHandler::OnConfigure(uint32_t serial) {
-  AckConfigure(serial);
-  app_->OnXdgSurfaceConfigure(serial);
-}
-
-void XdgToplevelHandler::OnClose() {
-  app_->OnToplevelClose();
 }
 
 void WpPresentationFeedbackHandler::OnPresented(uint32_t tv_sec_hi,
