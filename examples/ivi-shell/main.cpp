@@ -31,7 +31,8 @@ extern "C" {
 #include <wayland-client-protocol.h>
 }
 
-// ── Framework headers ─────────────────────────────────────────────────────────
+// ── Framework headers
+// ─────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
 #include <wl/display.hpp>
 #include <wl/raii.hpp>
@@ -39,7 +40,8 @@ extern "C" {
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 
-// ── Standard library ──────────────────────────────────────────────────────────
+// ── Standard library
+// ──────────────────────────────────────────────────────────
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -92,9 +94,9 @@ extern const wl_interface ivi_surface_iface_def;
 //             cppcoreguidelines-avoid-non-const-global-variables,
 //             cppcoreguidelines-interfaces-global-init)
 static const wl_interface* ivi_application_types[] = {
-    nullptr,               // [0] scalar ('i' args in configure; 'u' in surface_create)
-    &wl_surface_interface, // [1] 'o' wl_surface in surface_create
-    &ivi_surface_iface_def,// [2] 'n' ivi_surface in surface_create
+    nullptr,  // [0] scalar ('i' args in configure; 'u' in surface_create)
+    &wl_surface_interface,   // [1] 'o' wl_surface in surface_create
+    &ivi_surface_iface_def,  // [2] 'n' ivi_surface in surface_create
 };
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays,
 //           cppcoreguidelines-avoid-non-const-global-variables,
@@ -185,8 +187,7 @@ static void paint_pixels(void* image,
   const int halfw = width / 2;
   auto* base = static_cast<uint32_t*>(image);
 
-  const double ang =
-      M_PI * 2.0 / 1'000'000.0 * static_cast<double>(phase);
+  const double ang = M_PI * 2.0 / 1'000'000.0 * static_cast<double>(phase);
   const double s = std::sin(ang);
   const double c = std::cos(ang);
 
@@ -227,7 +228,8 @@ static void paint_pixels(void* image,
 
 class App;
 
-// ── WlCompositorHandler ───────────────────────────────────────────────────────
+// ── WlCompositorHandler
+// ───────────────────────────────────────────────────────
 
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {
@@ -235,14 +237,16 @@ class WlCompositorHandler
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── WlShmPoolHandler ──────────────────────────────────────────────────────────
+// ── WlShmPoolHandler
+// ──────────────────────────────────────────────────────────
 
 class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
  public:
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── WlShmHandler ──────────────────────────────────────────────────────────────
+// ── WlShmHandler
+// ──────────────────────────────────────────────────────────────
 
 class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
  public:
@@ -253,7 +257,8 @@ class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
   }
 };
 
-// ── WlBufferHandler ───────────────────────────────────────────────────────────
+// ── WlBufferHandler
+// ───────────────────────────────────────────────────────────
 
 class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
  public:
@@ -266,7 +271,8 @@ class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
-// ── WlCallbackHandler ─────────────────────────────────────────────────────────
+// ── WlCallbackHandler
+// ─────────────────────────────────────────────────────────
 
 class WlCallbackHandler
     : public wayland::client::CWlCallback<WlCallbackHandler> {
@@ -284,7 +290,8 @@ class IviApplicationHandler
   bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
-// ── IviSurfaceHandler ─────────────────────────────────────────────────────────
+// ── IviSurfaceHandler
+// ─────────────────────────────────────────────────────────
 
 class IviSurfaceHandler
     : public ivi_application::client::CIviSurface<IviSurfaceHandler> {
@@ -318,12 +325,12 @@ class App {
 
   // Core Wayland objects
   wl::WlPtr<WlCompositorHandler> compositor_;
-  wl::WlPtr<WlShmHandler>        shm_;
-  wl::WlPtr<WlSurfaceHandler>    surface_;
+  wl::WlPtr<WlShmHandler> shm_;
+  wl::WlPtr<WlSurfaceHandler> surface_;
 
   // IVI-application objects
   wl::WlPtr<IviApplicationHandler> ivi_app_;
-  wl::WlPtr<IviSurfaceHandler>     ivi_surface_;
+  wl::WlPtr<IviSurfaceHandler> ivi_surface_;
 
   // Seat/keyboard (optional; ESC to quit)
   wl::SeatManager<App> seat_;
@@ -332,11 +339,11 @@ class App {
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
   // SHM backing store — double-buffered
-  static constexpr int kInitWidth  = 800;
+  static constexpr int kInitWidth = 800;
   static constexpr int kInitHeight = 600;
-  static constexpr int kNumBufs    = 2;
+  static constexpr int kNumBufs = 2;
 
-  int width_  = kInitWidth;
+  int width_ = kInitWidth;
   int height_ = kInitHeight;
 
   ShmMapping shm_mem_;
@@ -345,13 +352,13 @@ class App {
   uint32_t phase_ = 0;
 
   // State
-  bool running_    = true;
+  bool running_ = true;
   bool configured_ = false;
 
   // Registry recorded names/versions
-  uint32_t compositor_name_  = 0, compositor_ver_  = 0;
-  uint32_t shm_name_         = 0, shm_ver_         = 0;
-  uint32_t ivi_app_name_     = 0, ivi_app_ver_     = 0;
+  uint32_t compositor_name_ = 0, compositor_ver_ = 0;
+  uint32_t shm_name_ = 0, shm_ver_ = 0;
+  uint32_t ivi_app_name_ = 0, ivi_app_ver_ = 0;
 
   static constexpr int kRoundtripTimeoutMs = 5000;
 
@@ -389,16 +396,23 @@ App::~App() {
 }
 
 int App::Run() {
-  if (!ConnectDisplay())   return EXIT_FAILURE;
-  if (!ScanGlobals())      return EXIT_FAILURE;
-  if (!BindGlobals())      return EXIT_FAILURE;
-  if (!CreateBuffers())    return EXIT_FAILURE;
-  if (!CreateIviSurface()) return EXIT_FAILURE;
-  if (!InitialCommit())    return EXIT_FAILURE;
+  if (!ConnectDisplay())
+    return EXIT_FAILURE;
+  if (!ScanGlobals())
+    return EXIT_FAILURE;
+  if (!BindGlobals())
+    return EXIT_FAILURE;
+  if (!CreateBuffers())
+    return EXIT_FAILURE;
+  if (!CreateIviSurface())
+    return EXIT_FAILURE;
+  if (!InitialCommit())
+    return EXIT_FAILURE;
   return MainLoop() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-// ── ConnectDisplay ────────────────────────────────────────────────────────────
+// ── ConnectDisplay
+// ────────────────────────────────────────────────────────────
 
 bool App::ConnectDisplay() {
   if (!display_.Connect()) {
@@ -409,7 +423,8 @@ bool App::ConnectDisplay() {
   return true;
 }
 
-// ── ScanGlobals ───────────────────────────────────────────────────────────────
+// ── ScanGlobals
+// ───────────────────────────────────────────────────────────────
 
 bool App::ScanGlobals() {
   if (!registry_.Create(display_.Get())) {
@@ -418,16 +433,19 @@ bool App::ScanGlobals() {
   }
 
   registry_.OnGlobal([this](wl::CRegistry& /*reg*/, uint32_t name,
-                             std::string_view iface, uint32_t ver) {
+                            std::string_view iface, uint32_t ver) {
     using namespace wayland::client;
     using namespace ivi_application::client;
 
     if (iface == wl_compositor_traits::interface_name) {
-      compositor_name_ = name; compositor_ver_ = ver;
+      compositor_name_ = name;
+      compositor_ver_ = ver;
     } else if (iface == wl_shm_traits::interface_name) {
-      shm_name_ = name; shm_ver_ = ver;
+      shm_name_ = name;
+      shm_ver_ = ver;
     } else if (iface == ivi_application_traits::interface_name) {
-      ivi_app_name_ = name; ivi_app_ver_ = ver;
+      ivi_app_name_ = name;
+      ivi_app_ver_ = ver;
     } else if (iface == wl_seat_traits::interface_name) {
       seat_.Record(name, ver);
     }
@@ -455,7 +473,8 @@ bool App::ScanGlobals() {
   return true;
 }
 
-// ── BindGlobals ───────────────────────────────────────────────────────────────
+// ── BindGlobals
+// ───────────────────────────────────────────────────────────────
 
 bool App::BindGlobals() {
   using namespace wayland::client;
@@ -472,8 +491,7 @@ bool App::BindGlobals() {
   }
 
   // wl_shm
-  if (!wl::BindHandler<wl_shm_traits>(registry_, shm_, shm_name_,
-                                       shm_ver_)) {
+  if (!wl::BindHandler<wl_shm_traits>(registry_, shm_, shm_name_, shm_ver_)) {
     std::fprintf(stderr, "ivi-shell: wl_shm bind failed\n");
     return false;
   }
@@ -501,19 +519,19 @@ bool App::BindGlobals() {
   }
 
   if (!(shm_.Get()->formats & (1u << WL_SHM_FORMAT_XRGB8888))) {
-    std::fprintf(stderr,
-                 "ivi-shell: XRGB8888 not supported by compositor\n");
+    std::fprintf(stderr, "ivi-shell: XRGB8888 not supported by compositor\n");
     return false;
   }
   return true;
 }
 
-// ── CreateBuffers ─────────────────────────────────────────────────────────────
+// ── CreateBuffers
+// ─────────────────────────────────────────────────────────────
 
 bool App::CreateBuffers() {
-  const std::size_t stride  = static_cast<std::size_t>(width_) * 4u;
+  const std::size_t stride = static_cast<std::size_t>(width_) * 4u;
   const std::size_t per_buf = stride * static_cast<std::size_t>(height_);
-  const std::size_t total   = per_buf * static_cast<std::size_t>(kNumBufs);
+  const std::size_t total = per_buf * static_cast<std::size_t>(kNumBufs);
 
   if (!shm_mem_.Create(total)) {
     std::fprintf(stderr, "ivi-shell: SHM allocation failed: %s\n",
@@ -523,8 +541,8 @@ bool App::CreateBuffers() {
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   wl_shm* raw_shm = reinterpret_cast<wl_shm*>(shm_.Get()->GetProxy());
-  wl_shm_pool* raw_pool = wl_shm_create_pool(raw_shm, shm_mem_.fd,
-                                              static_cast<int>(total));
+  wl_shm_pool* raw_pool =
+      wl_shm_create_pool(raw_shm, shm_mem_.fd, static_cast<int>(total));
   if (!raw_pool) {
     std::fprintf(stderr, "ivi-shell: wl_shm_create_pool failed\n");
     return false;
@@ -536,15 +554,15 @@ bool App::CreateBuffers() {
   for (int i = 0; i < kNumBufs; ++i) {
     const auto offset =
         static_cast<int32_t>(static_cast<std::size_t>(i) * per_buf);
-    using wl_buf  = wayland::client::wl_buffer_traits;
+    using wl_buf = wayland::client::wl_buffer_traits;
     using wl_pool = wayland::client::wl_shm_pool_traits;
     if (wl_proxy* raw = wl::construct<wl_buf, wl_pool::Op::CreateBuffer>(
-            *pool.Get(), offset, width_, height_,
-            static_cast<int32_t>(stride), WL_SHM_FORMAT_XRGB8888)) {
+            *pool.Get(), offset, width_, height_, static_cast<int32_t>(stride),
+            WL_SHM_FORMAT_XRGB8888)) {
       bufs_.at(static_cast<std::size_t>(i)).Get()->_SetProxy(raw);
     } else {
-      std::fprintf(stderr,
-                   "ivi-shell: wl_shm_pool.create_buffer[%d] failed\n", i);
+      std::fprintf(stderr, "ivi-shell: wl_shm_pool.create_buffer[%d] failed\n",
+                   i);
       return false;
     }
   }
@@ -552,7 +570,8 @@ bool App::CreateBuffers() {
   return true;
 }
 
-// ── CreateIviSurface ──────────────────────────────────────────────────────────
+// ── CreateIviSurface
+// ──────────────────────────────────────────────────────────
 
 bool App::CreateIviSurface() {
   using namespace wayland::client;
@@ -578,9 +597,9 @@ bool App::CreateIviSurface() {
   wl_proxy* ivi_surf_raw = ivi_app_.Get()->_MarshalNew(
       ivi_application_traits::Op::SurfaceCreate,
       &ivi_surface_traits::wl_iface(),
-      ivi_id_,                      // uint32_t ivi_id
-      surface_.Get()->GetProxy(),   // wl_proxy* wl_surface
-      nullptr                       // new_id placeholder
+      ivi_id_,                     // uint32_t ivi_id
+      surface_.Get()->GetProxy(),  // wl_proxy* wl_surface
+      nullptr                      // new_id placeholder
   );
   if (!ivi_surf_raw) {
     std::fprintf(stderr,
@@ -603,7 +622,8 @@ bool App::CreateIviSurface() {
   return true;
 }
 
-// ── Buffer helpers ────────────────────────────────────────────────────────────
+// ── Buffer helpers
+// ────────────────────────────────────────────────────────────
 
 int App::NextFreeBuf() noexcept {
   for (int attempt = 0; attempt < kNumBufs; ++attempt) {
@@ -616,7 +636,8 @@ int App::NextFreeBuf() noexcept {
   return -1;
 }
 
-// ── InitialCommit ─────────────────────────────────────────────────────────────
+// ── InitialCommit
+// ─────────────────────────────────────────────────────────────
 
 bool App::InitialCommit() {
   const int idx = NextFreeBuf();
@@ -625,7 +646,7 @@ bool App::InitialCommit() {
     return false;
   }
 
-  const std::size_t stride  = static_cast<std::size_t>(width_) * 4u;
+  const std::size_t stride = static_cast<std::size_t>(width_) * 4u;
   const std::size_t per_buf = stride * static_cast<std::size_t>(height_);
   void* pixels =
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -656,14 +677,15 @@ void App::RequestFrameCallback() noexcept {
   }
 }
 
-// ── CommitFrame ───────────────────────────────────────────────────────────────
+// ── CommitFrame
+// ───────────────────────────────────────────────────────────────
 
 void App::CommitFrame() noexcept {
   const int idx = NextFreeBuf();
   if (idx < 0)
     return;  // all buffers busy; skip frame
 
-  const std::size_t stride  = static_cast<std::size_t>(width_) * 4u;
+  const std::size_t stride = static_cast<std::size_t>(width_) * 4u;
   const std::size_t per_buf = stride * static_cast<std::size_t>(height_);
   void* pixels =
       // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -682,7 +704,8 @@ void App::CommitFrame() noexcept {
   surface_.Get()->Commit();
 }
 
-// ── App callbacks ─────────────────────────────────────────────────────────────
+// ── App callbacks
+// ─────────────────────────────────────────────────────────────
 
 void App::OnFrameDone(uint32_t /*time_ms*/) noexcept {
   wl_proxy* const spent_cb = frame_callback_.Detach();
@@ -714,7 +737,7 @@ void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
     return;
 
   // Resize: recreate SHM buffers at the new dimensions.
-  width_  = width;
+  width_ = width;
   height_ = height;
 
   // Destroy the buffer proxies (sends wl_buffer.destroy for each).  Then do a
@@ -728,9 +751,9 @@ void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
   shm_mem_.Reset();
   next_buf_ = 0;
 
-  const std::size_t stride  = static_cast<std::size_t>(width_) * 4u;
+  const std::size_t stride = static_cast<std::size_t>(width_) * 4u;
   const std::size_t per_buf = stride * static_cast<std::size_t>(height_);
-  const std::size_t total   = per_buf * static_cast<std::size_t>(kNumBufs);
+  const std::size_t total = per_buf * static_cast<std::size_t>(kNumBufs);
 
   if (!shm_mem_.Create(total)) {
     std::fprintf(stderr, "ivi-shell: SHM resize failed: %s\n",
@@ -741,8 +764,8 @@ void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
 
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
   wl_shm* raw_shm = reinterpret_cast<wl_shm*>(shm_.Get()->GetProxy());
-  wl_shm_pool* raw_pool = wl_shm_create_pool(raw_shm, shm_mem_.fd,
-                                              static_cast<int>(total));
+  wl_shm_pool* raw_pool =
+      wl_shm_create_pool(raw_shm, shm_mem_.fd, static_cast<int>(total));
   if (!raw_pool) {
     std::fprintf(stderr, "ivi-shell: wl_shm_create_pool (resize) failed\n");
     running_ = false;
@@ -755,16 +778,17 @@ void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
   for (int i = 0; i < kNumBufs; ++i) {
     const auto offset =
         static_cast<int32_t>(static_cast<std::size_t>(i) * per_buf);
-    using wl_buf  = wayland::client::wl_buffer_traits;
+    using wl_buf = wayland::client::wl_buffer_traits;
     using wl_pool = wayland::client::wl_shm_pool_traits;
     if (wl_proxy* raw = wl::construct<wl_buf, wl_pool::Op::CreateBuffer>(
-            *pool.Get(), offset, width_, height_,
-            static_cast<int32_t>(stride), WL_SHM_FORMAT_XRGB8888)) {
+            *pool.Get(), offset, width_, height_, static_cast<int32_t>(stride),
+            WL_SHM_FORMAT_XRGB8888)) {
       bufs_.at(static_cast<std::size_t>(i)).Get()->_SetProxy(raw);
     } else {
       std::fprintf(stderr,
                    "ivi-shell: wl_shm_pool.create_buffer[%d] (resize) "
-                   "failed\n", i);
+                   "failed\n",
+                   i);
       running_ = false;
       return;
     }
@@ -778,15 +802,14 @@ void App::OnKey(const uint32_t key, const uint32_t state) {
     running_ = false;
 }
 
-// ── MainLoop ──────────────────────────────────────────────────────────────────
+// ── MainLoop
+// ──────────────────────────────────────────────────────────────────
 
 bool App::MainLoop() {
-  std::printf(
-      "ivi-shell: running with IVI surface ID %u (ESC to quit)\n",
-      ivi_id_);
-  const bool ok =
-      wl::RunEventLoop(display_.Get(), [this] { return !running_; },
-                       "ivi-shell");
+  std::printf("ivi-shell: running with IVI surface ID %u (ESC to quit)\n",
+              ivi_id_);
+  const bool ok = wl::RunEventLoop(
+      display_.Get(), [this] { return !running_; }, "ivi-shell");
   if (ok)
     std::printf("ivi-shell: exiting cleanly\n");
   return ok;

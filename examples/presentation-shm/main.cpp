@@ -340,8 +340,9 @@ class WlCallbackHandler
 
 // ── XDG shell handlers provided by <wl/xdg_shell.hpp> ────────────────────────
 //   wl::XdgWmBaseHandler        — responds to ping automatically
-//   wl::XdgSurfaceHandler<App>  — acks configure, calls App::OnXdgSurfaceConfigure
-//   wl::XdgToplevelHandler<App> — delegates configure/close to App
+//   wl::XdgSurfaceHandler<App>  — acks configure, calls
+//   App::OnXdgSurfaceConfigure wl::XdgToplevelHandler<App> — delegates
+//   configure/close to App
 
 // ── WpPresentationHandler
 // ─────────────────────────────────────────────────────
@@ -497,7 +498,8 @@ class App {
 
   // ── Callbacks from CRTP handlers ────────────────────────────────────────
   void OnXdgSurfaceConfigure(uint32_t serial);
-  void OnToplevelConfigure(int32_t /*width*/, int32_t /*height*/) noexcept {}  // fixed size
+  void OnToplevelConfigure(int32_t /*width*/, int32_t /*height*/) noexcept {
+  }  // fixed size
   void OnToplevelClose();
   void OnKey(uint32_t key, uint32_t state);
   void OnFrameDone(uint32_t stamp_ms) noexcept;

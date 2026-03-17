@@ -4,13 +4,15 @@
 // agl-shell — header-only wl_interface tables and generic CRTP handler
 // template for the AGL shell protocol (agl-shell.xml, version 4).
 //
-// ── Include order ─────────────────────────────────────────────────────────────
-// This header must be included AFTER the generated agl_shell_client.hpp:
+// ── Include order
+// ───────────────────────────────────────────────────────────── This header
+// must be included AFTER the generated agl_shell_client.hpp:
 //
 //   #include "agl_shell_client.hpp"  // defines CAglShell, agl_shell_traits
 //   #include <wl/agl_shell.hpp>      // tables + wl_iface() impl + handler
 //
-// ── Provided utilities ────────────────────────────────────────────────────────
+// ── Provided utilities
+// ────────────────────────────────────────────────────────
 //
 // Interface tables (namespace wl::agl, version 4):
 //   Inline wl_interface object for agl_shell plus the supporting wl_message
@@ -63,7 +65,8 @@ extern "C" {
 
 namespace wl::agl {
 
-// ── Shared pointer array ──────────────────────────────────────────────────────
+// ── Shared pointer array
+// ──────────────────────────────────────────────────────
 //
 // • avoid-non-const-global-variables: element type must be non-const pointer
 //   (const wl_interface*) because wl_message::types is const wl_interface**;
@@ -76,25 +79,26 @@ namespace wl::agl {
 //             cppcoreguidelines-avoid-non-const-global-variables,
 //             cppcoreguidelines-interfaces-global-init)
 inline const wl_interface* types[] = {
-    nullptr,               // [0]  scalar placeholder
-    &wl_surface_interface, // [1]  set_background/set_panel: surface arg
-    &wl_output_interface,  // [2]  set_background/set_panel: output arg
-    nullptr,               // [3]  set_panel: edge (uint)
-    nullptr,               // [4]  activate_app: app_id (string)
-    &wl_output_interface,  // [5]  activate_app: output arg
-    &wl_output_interface,  // [6]  set_activate_region: output arg
-    nullptr,               // [7]  set_activate_region: x (int)
-    nullptr,               // [8]  set_activate_region: y (int)
-    nullptr,               // [9]  set_activate_region: width (int)
-    nullptr,               // [10] set_activate_region: height (int)
-    nullptr,               // [11] app_state: app_id (string)
-    nullptr,               // [12] app_state: state (uint)
+    nullptr,                // [0]  scalar placeholder
+    &wl_surface_interface,  // [1]  set_background/set_panel: surface arg
+    &wl_output_interface,   // [2]  set_background/set_panel: output arg
+    nullptr,                // [3]  set_panel: edge (uint)
+    nullptr,                // [4]  activate_app: app_id (string)
+    &wl_output_interface,   // [5]  activate_app: output arg
+    &wl_output_interface,   // [6]  set_activate_region: output arg
+    nullptr,                // [7]  set_activate_region: x (int)
+    nullptr,                // [8]  set_activate_region: y (int)
+    nullptr,                // [9]  set_activate_region: width (int)
+    nullptr,                // [10] set_activate_region: height (int)
+    nullptr,                // [11] app_state: app_id (string)
+    nullptr,                // [12] app_state: state (uint)
 };
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays,
 //           cppcoreguidelines-avoid-non-const-global-variables,
 //           cppcoreguidelines-interfaces-global-init)
 
-// ── Message tables ────────────────────────────────────────────────────────────
+// ── Message tables
+// ────────────────────────────────────────────────────────────
 // clang-format off
 // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
 inline constexpr wl_message requests[] = {
@@ -113,7 +117,8 @@ inline constexpr wl_message events[] = {
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
 // clang-format on
 
-// ── Interface object ──────────────────────────────────────────────────────────
+// ── Interface object
+// ──────────────────────────────────────────────────────────
 
 // clang-format off
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
