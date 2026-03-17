@@ -696,6 +696,19 @@ void App::OnFrameDone(uint32_t /*time_ms*/) noexcept {
 void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
   if (width <= 0 || height <= 0)
     return;
+
+  // Guard against dimensions that would overflow int32_t in pool/buffer sizes.
+  // stride=w*4, per_buf=stride*h, total=per_buf*2 must all fit in int32_t.
+  // At 16384×16384: total = 16384*4*16384*2 = 2 GB exactly — on the edge.
+  // Use 8192 as a safe ceiling: total ≤ 8192*4*8192*2 = 536 MB < INT32_MAX.
+  static constexpr int32_t kMaxDim = 8192;
+  if (width > kMaxDim || height > kMaxDim) {
+    std::fprintf(stderr,
+                 "ivi-shell: configure %d×%d exceeds maximum %d — ignoring\n",
+                 width, height, kMaxDim);
+    return;
+  }
+
   std::printf("ivi-shell: configure %d×%d\n", width, height);
   if (width == width_ && height == height_)
     return;
@@ -704,9 +717,14 @@ void App::OnIviConfigure(int32_t width, int32_t height) noexcept {
   width_  = width;
   height_ = height;
 
-  // Reset existing buffers.
+  // Destroy the buffer proxies (sends wl_buffer.destroy for each).  Then do a
+  // roundtrip so the compositor can process the destroys and flush any pending
+  // wl_buffer.release events before we munmap the underlying SHM region.
   for (auto& b : bufs_)
     b.Reset();
+  // Critical: ensures the compositor has finished reading the SHM region
+  // (signalled by wl_buffer.release) before munmap in shm_mem_.Reset() below.
+  wl_display_roundtrip(display_.Get());
   shm_mem_.Reset();
   next_buf_ = 0;
 
@@ -783,9 +801,18 @@ int main(int argc, char* argv[]) {
 
   uint32_t ivi_id = 9000u;  // default IVI surface ID
   if (argc >= 2) {
-    const long val = std::strtol(argv[1], nullptr, 10);
-    if (val > 0)
+    char* end = nullptr;
+    const long val = std::strtol(argv[1], &end, 10);
+    // Reject partial parses, overflow, and 0 (IVI ID 0 is reserved/invalid
+    // on all known IVI compositors; strtol also returns 0 for non-numeric
+    // input, so this check catches both cases).
+    if (end != argv[1] && *end == '\0' && val > 0 &&
+        val <= static_cast<long>(UINT32_MAX))
       ivi_id = static_cast<uint32_t>(val);
+    else
+      std::fprintf(stderr,
+                   "ivi-shell: invalid IVI ID '%s' — using default %u\n",
+                   argv[1], ivi_id);
   }
 
   std::printf("ivi-shell: using IVI surface ID %u\n", ivi_id);

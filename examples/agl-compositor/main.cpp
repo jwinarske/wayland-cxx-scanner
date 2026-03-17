@@ -22,9 +22,6 @@
 #include "agl_shell_client.hpp"   // namespace agl_shell::client
 #include "wayland_client.hpp"     // namespace wayland::client
 
-// ── Framework headers ─────────────────────────────────────────────────────────
-#include <wl/agl_shell.hpp>       // wl_interface tables + wl::AglShellHandler<App>
-
 // ── System Wayland / Linux C headers ─────────────────────────────────────────
 extern "C" {
 #include <linux/input-event-codes.h>
@@ -34,6 +31,7 @@ extern "C" {
 }
 
 // ── Framework headers ─────────────────────────────────────────────────────────
+#include <wl/agl_shell.hpp>       // wl_interface tables + wl::AglShellHandler<App>
 #include <wl/client_helpers.hpp>
 #include <wl/display.hpp>
 #include <wl/raii.hpp>
