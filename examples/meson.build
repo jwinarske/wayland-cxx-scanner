@@ -16,7 +16,8 @@ subdir('agl-presentation-shm')
 subdir('ivi-presentation-shm')
 # key-input uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.
 subdir('key-input')
-
+# xdg-csd uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.
+subdir('xdg-csd')
 # xdg-simple-dmabuf-vulkan uses subdir_done() internally if
 # vulkan/libdrm/wayland-protocols/xkbcommon deps are absent.
 subdir('xdg-simple-dmabuf-vulkan')
