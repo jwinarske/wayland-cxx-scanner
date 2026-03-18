@@ -684,8 +684,8 @@ bool App::InitVulkan() {
   vk::ImageCreateInfo img_ci;
   img_ci.imageType = vk::ImageType::e2D;
   img_ci.format = vk::Format::eB8G8R8A8Unorm;
-  img_ci.extent = {static_cast<uint32_t>(width_),
-                   static_cast<uint32_t>(height_), 1};
+  img_ci.extent = vk::Extent3D{static_cast<uint32_t>(width_),
+                               static_cast<uint32_t>(height_), 1};
   img_ci.mipLevels = 1;
   img_ci.arrayLayers = 1;
   img_ci.samples = vk::SampleCountFlagBits::e1;
@@ -947,7 +947,10 @@ void App::RenderFrame() noexcept {
     running_ = false;
     return;
   }
-  vk_.device->resetFences(*vk_.fence);
+  if (!VkOk(vk_.device->resetFences(*vk_.fence), "vkResetFences")) {
+    running_ = false;
+    return;
+  }
 
   // ── Present via Wayland ───────────────────────────────────────────────────
   // Mark the buffer as "in use" so OnRelease() can track compositor ownership.
