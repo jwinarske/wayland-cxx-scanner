@@ -31,6 +31,7 @@ install_headers(
     'include/wl/client_helpers.hpp',
     'include/wl/display.hpp',
     'include/wl/fd_handle.hpp',
+    'include/wl/linux_dmabuf.hpp',
     'include/wl/raii.hpp',
     'include/wl/event_map.hpp',
     'include/wl/proxy.hpp',
