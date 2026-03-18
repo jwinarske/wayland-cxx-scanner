@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Tests for wl::CProxy<Traits>, wl::WlPtr<T>, and wl::CRegistry.
+// Tests for wl::CProxy<Traits>, wl::WlPtr<T>, wl::CRegistry, and
+// wl::CGlobal<Traits>.
 // These tests do NOT require a live Wayland compositor: they exercise the
 // handle-management and callback-storage logic with fake/mock pointers.
 #include <wl/proxy.hpp>
@@ -128,4 +129,36 @@ TEST(CRegistry, RemoveStored) {
   bool called = false;
   r.OnRemove([&](wl::CRegistry&, uint32_t) { called = true; });
   EXPECT_FALSE(called);
+}
+TEST(CRegistry, BoolConversionFalseWhenNull) {
+  wl::CRegistry r;
+  EXPECT_FALSE(static_cast<bool>(r));
+}
+TEST(CRegistry, ResetOnNullIsSafe) {
+  // Reset() on a null registry must not crash.
+  wl::CRegistry r;
+  r.Reset();
+  EXPECT_TRUE(r.IsNull());
+}
+
+// ── CGlobal basic tests (no compositor required)
+// ──────────────────────────────
+
+struct FakeServerTraits {
+  static constexpr std::string_view interface_name = "wl_fake_server";
+  static constexpr uint32_t version = 1;
+  static const wl_interface& wl_iface() noexcept {
+    static wl_interface s{};
+    return s;
+  }
+};
+static_assert(wl::WlProxyTraits<FakeServerTraits>);
+
+TEST(CGlobal, DefaultIsNull) {
+  wl::CGlobal<FakeServerTraits> g;
+  EXPECT_TRUE(g.IsNull());
+}
+TEST(CGlobal, GetReturnsNullWhenNotCreated) {
+  wl::CGlobal<FakeServerTraits> g;
+  EXPECT_EQ(g.Get(), nullptr);
 }
