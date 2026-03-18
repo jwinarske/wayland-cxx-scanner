@@ -236,8 +236,8 @@ class KeyboardHandler
       // Only arm repeat for keys the keymap marks as repeatable, and only
       // when a non-zero rate was received via OnRepeatInfo.
       if (xkb_keymap_ && xkb_code != 0 &&
-          xkb_keymap_key_repeats(xkb_keymap_, xkb_code) &&
-          repeat_.rate > 0 && !repeat_.setup_failed) {
+          xkb_keymap_key_repeats(xkb_keymap_, xkb_code) && repeat_.rate > 0 &&
+          !repeat_.setup_failed) {
         repeat_.notify.key = key;
         repeat_.notify.sym = sym;
         ArmRepeat();
@@ -291,7 +291,7 @@ class KeyboardHandler
     // instance per process should call OnRepeatInfo; a second live instance
     // would overwrite this registration.  In practice a Wayland client has
     // exactly one wl_keyboard, so this is not a real limitation.
-    struct sigaction sa {};
+    struct sigaction sa{};
     sa.sa_flags = SA_SIGINFO;
     sa.sa_sigaction = &KeyboardHandler::RepeatSignalHandler;
     sigemptyset(&sa.sa_mask);
@@ -376,7 +376,8 @@ class KeyboardHandler
   ///
   /// it_value is the initial delay; it_interval is the repeat period derived
   /// from the repeat rate (characters per second → nanoseconds per character).
-  /// Both timespec fields are normalised so tv_nsec is always in [0, 999999999].
+  /// Both timespec fields are normalised so tv_nsec is always in [0,
+  /// 999999999].
   void ArmRepeat() noexcept {
     if (!repeat_.timer_valid || repeat_.rate <= 0)
       return;
@@ -411,8 +412,7 @@ class KeyboardHandler
                                   void* /*uc*/) noexcept {
     if (!si || !si->si_value.sival_ptr)
       return;
-    auto* self =
-        static_cast<KeyboardHandler*>(si->si_value.sival_ptr);
+    auto* self = static_cast<KeyboardHandler*>(si->si_value.sival_ptr);
 
     self->repeat_.pending.store(true, std::memory_order_relaxed);
 

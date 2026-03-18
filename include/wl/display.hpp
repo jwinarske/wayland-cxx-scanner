@@ -256,12 +256,11 @@ template <typename StopFn>
 /// @returns true on a clean exit (should_stop() became true); false on I/O
 ///          or protocol error.
 template <typename StopFn, typename RepeatFdFn, typename RepeatFn>
-[[nodiscard]] inline bool RunEventLoop(
-    wl_display* display,
-    StopFn&& should_stop,
-    std::string_view prefix,
-    RepeatFdFn&& get_repeat_fd,
-    RepeatFn&& on_repeat) noexcept {
+[[nodiscard]] inline bool RunEventLoop(wl_display* display,
+                                       StopFn&& should_stop,
+                                       std::string_view prefix,
+                                       RepeatFdFn&& get_repeat_fd,
+                                       RepeatFn&& on_repeat) noexcept {
   const int wl_fd = wl_display_get_fd(display);
 
   while (!should_stop()) {
