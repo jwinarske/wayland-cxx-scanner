@@ -763,8 +763,8 @@ HitZone App::HitTest(int x, int y) const noexcept {
   if (!use_csd_ || !csd_plugin_)
     return HitZone::Content;
 
-  return csd_plugin_->HitTest(x, y, SurfaceWidth(), SurfaceHeight(),
-                              content_w_, content_h_);
+  return csd_plugin_->HitTest(x, y, SurfaceWidth(), SurfaceHeight(), content_w_,
+                              content_h_);
 }
 
 // ── Callback implementations ────────────────────────────────────────────────
@@ -780,8 +780,8 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) {
     // In CSD mode, subtract decoration space to get the content area.
     if (use_csd_ && csd_plugin_) {
       content_w_ = width - 2 * csd_plugin_->BorderWidth();
-      content_h_ = height - csd_plugin_->TitleBarHeight() -
-                   csd_plugin_->BorderWidth();
+      content_h_ =
+          height - csd_plugin_->TitleBarHeight() - csd_plugin_->BorderWidth();
     } else {
       content_w_ = width;
       content_h_ = height;

@@ -92,12 +92,13 @@ inline void CairoSetRgba32(cairo_t* cr, uint32_t argb) noexcept {
 
   // Predicate: true if pixel is within margin of any edge.
   auto near_edge = [&](int col, int row) noexcept {
-    return col < margin || col >= w - margin ||
-           row < margin || row >= h - margin;
+    return col < margin || col >= w - margin || row < margin ||
+           row >= h - margin;
   };
 
   // ── Temporary buffer ────────────────────────────────────────────────────
-  const auto buf_bytes = static_cast<std::size_t>(stride) * static_cast<std::size_t>(h);
+  const auto buf_bytes =
+      static_cast<std::size_t>(stride) * static_cast<std::size_t>(h);
   std::vector<uint8_t> tmp(buf_bytes);
   std::memcpy(tmp.data(), data, buf_bytes);
 
@@ -193,30 +194,29 @@ inline void RenderShadow(cairo_t* cr,
 
   // Helper: paint a (possibly stretched) region of the tile as both
   // source and mask so the alpha channel composites correctly.
-  auto paint_region =
-      [&](double dst_x, double dst_y, double dst_w, double dst_h,
-          double src_x, double src_y, double src_w, double src_h) {
-        if (dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0)
-          return;
+  auto paint_region = [&](double dst_x, double dst_y, double dst_w,
+                          double dst_h, double src_x, double src_y,
+                          double src_w, double src_h) {
+    if (dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0)
+      return;
 
-        cairo_save(cr);
-        cairo_rectangle(cr, dst_x, dst_y, dst_w, dst_h);
-        cairo_clip(cr);
+    cairo_save(cr);
+    cairo_rectangle(cr, dst_x, dst_y, dst_w, dst_h);
+    cairo_clip(cr);
 
-        cairo_pattern_t* pat = cairo_pattern_create_for_surface(shadow_tile);
-        cairo_matrix_t mat;
-        const double sx = src_w / dst_w;
-        const double sy = src_h / dst_h;
-        cairo_matrix_init(&mat, sx, 0, 0, sy,
-                          src_x - sx * dst_x,
-                          src_y - sy * dst_y);
-        cairo_pattern_set_matrix(pat, &mat);
+    cairo_pattern_t* pat = cairo_pattern_create_for_surface(shadow_tile);
+    cairo_matrix_t mat;
+    const double sx = src_w / dst_w;
+    const double sy = src_h / dst_h;
+    cairo_matrix_init(&mat, sx, 0, 0, sy, src_x - sx * dst_x,
+                      src_y - sy * dst_y);
+    cairo_pattern_set_matrix(pat, &mat);
 
-        cairo_set_source(cr, pat);
-        cairo_mask(cr, pat);
-        cairo_pattern_destroy(pat);
-        cairo_restore(cr);
-      };
+    cairo_set_source(cr, pat);
+    cairo_mask(cr, pat);
+    cairo_pattern_destroy(pat);
+    cairo_restore(cr);
+  };
 
   const auto dx = static_cast<double>(x);
   const auto dy = static_cast<double>(y);
@@ -230,24 +230,16 @@ inline void RenderShadow(cairo_t* cr,
   const auto dih = static_cast<double>(inner_h);
 
   // ── Four corners (1 : 1 mapping) ──────────────────────────────────────
-  paint_region(dx - dm, dy - dtm, dm, dtm,
-               0, 0, dm, dtm);
-  paint_region(dx + dw, dy - dtm, dm, dtm,
-               dtw - dm, 0, dm, dtm);
-  paint_region(dx - dm, dy + dh, dm, dm,
-               0, dth - dm, dm, dm);
-  paint_region(dx + dw, dy + dh, dm, dm,
-               dtw - dm, dth - dm, dm, dm);
+  paint_region(dx - dm, dy - dtm, dm, dtm, 0, 0, dm, dtm);
+  paint_region(dx + dw, dy - dtm, dm, dtm, dtw - dm, 0, dm, dtm);
+  paint_region(dx - dm, dy + dh, dm, dm, 0, dth - dm, dm, dm);
+  paint_region(dx + dw, dy + dh, dm, dm, dtw - dm, dth - dm, dm, dm);
 
   // ── Edges (stretched) ─────────────────────────────────────────────────
-  paint_region(dx, dy - dtm, dw, dtm,
-               dm, 0, diw, dtm);
-  paint_region(dx, dy + dh, dw, dm,
-               dm, dth - dm, diw, dm);
-  paint_region(dx - dm, dy, dm, dh,
-               0, dtm, dm, dih);
-  paint_region(dx + dw, dy, dm, dh,
-               dtw - dm, dtm, dm, dih);
+  paint_region(dx, dy - dtm, dw, dtm, dm, 0, diw, dtm);
+  paint_region(dx, dy + dh, dw, dm, dm, dth - dm, diw, dm);
+  paint_region(dx - dm, dy, dm, dh, 0, dtm, dm, dih);
+  paint_region(dx + dw, dy, dm, dh, dtw - dm, dtm, dm, dih);
 }
 
 }  // namespace wl::csd::common

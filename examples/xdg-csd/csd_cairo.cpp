@@ -242,8 +242,8 @@ static void DrawTitleText(uint32_t* buf,
 
   // Blit the ARGB32 surface into the XRGB8888 buffer.
   cairo_surface_flush(surface);
-  const auto* src = reinterpret_cast<const uint32_t*>(
-      cairo_image_surface_get_data(surface));
+  const auto* src =
+      reinterpret_cast<const uint32_t*>(cairo_image_surface_get_data(surface));
   const int src_stride = cairo_image_surface_get_stride(surface) / 4;
 
   for (int row = 0; row < max_h; ++row) {
@@ -253,14 +253,12 @@ static void DrawTitleText(uint32_t* buf,
       if (alpha > 0) {
         const uint32_t dst = buf[(y + row) * buf_w + (x + col)];
         const uint32_t inv_alpha = 255u - alpha;
-        const uint32_t out_r =
-            (((pixel >> 16u) & 0xFFu) * alpha +
-             ((dst >> 16u) & 0xFFu) * inv_alpha) /
-            255u;
-        const uint32_t out_g =
-            (((pixel >> 8u) & 0xFFu) * alpha +
-             ((dst >> 8u) & 0xFFu) * inv_alpha) /
-            255u;
+        const uint32_t out_r = (((pixel >> 16u) & 0xFFu) * alpha +
+                                ((dst >> 16u) & 0xFFu) * inv_alpha) /
+                               255u;
+        const uint32_t out_g = (((pixel >> 8u) & 0xFFu) * alpha +
+                                ((dst >> 8u) & 0xFFu) * inv_alpha) /
+                               255u;
         const uint32_t out_b =
             ((pixel & 0xFFu) * alpha + (dst & 0xFFu) * inv_alpha) / 255u;
         buf[(y + row) * buf_w + (x + col)] =
@@ -301,37 +299,29 @@ void CairoCsdPlugin::RenderFrame(uint32_t* buffer,
            kColButtonClose);
 
   int max_x = close_x - kButtonWidth;
-  FillRect(buffer, surface_w, max_x, btn_y, kButtonWidth, btn_h,
-           kColButtonMax);
+  FillRect(buffer, surface_w, max_x, btn_y, kButtonWidth, btn_h, kColButtonMax);
 
   int min_x = max_x - kButtonWidth;
-  FillRect(buffer, surface_w, min_x, btn_y, kButtonWidth, btn_h,
-           kColButtonMin);
+  FillRect(buffer, surface_w, min_x, btn_y, kButtonWidth, btn_h, kColButtonMin);
 
   // ── Button symbols (Cairo line art) ────────────────────────────────────
   {
     cairo_surface_t* surf = cairo_image_surface_create_for_data(
-        reinterpret_cast<unsigned char*>(buffer), CAIRO_FORMAT_RGB24,
-        surface_w, surface_h, surface_w * 4);
+        reinterpret_cast<unsigned char*>(buffer), CAIRO_FORMAT_RGB24, surface_w,
+        surface_h, surface_w * 4);
     cairo_t* cr = cairo_create(surf);
 
-    const uint32_t sym_col =
-        impl_->focused ? kColSym : kColSymInact;
+    const uint32_t sym_col = impl_->focused ? kColSym : kColSymInact;
     const int sym_ox = (kButtonWidth - kSymDim) / 2;
     const int sym_oy = (btn_h - kSymDim) / 2;
 
-    DrawCloseSymbol(cr,
-                    static_cast<double>(close_x + sym_ox),
-                    static_cast<double>(btn_y + sym_oy),
-                    kSymDim, sym_col);
-    DrawMaximizeSymbol(cr,
-                       static_cast<double>(max_x + sym_ox),
-                       static_cast<double>(btn_y + sym_oy),
-                       kSymDim, sym_col, impl_->maximized);
-    DrawMinimizeSymbol(cr,
-                       static_cast<double>(min_x + sym_ox),
-                       static_cast<double>(btn_y + sym_oy),
-                       kSymDim, sym_col);
+    DrawCloseSymbol(cr, static_cast<double>(close_x + sym_ox),
+                    static_cast<double>(btn_y + sym_oy), kSymDim, sym_col);
+    DrawMaximizeSymbol(cr, static_cast<double>(max_x + sym_ox),
+                       static_cast<double>(btn_y + sym_oy), kSymDim, sym_col,
+                       impl_->maximized);
+    DrawMinimizeSymbol(cr, static_cast<double>(min_x + sym_ox),
+                       static_cast<double>(btn_y + sym_oy), kSymDim, sym_col);
 
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
@@ -349,8 +339,7 @@ void CairoCsdPlugin::RenderFrame(uint32_t* buffer,
   }
 
   // ── Content area — animated ring pattern ───────────────────────────────
-  uint32_t* content_start =
-      buffer + kTitleHeight * surface_w + bw;
+  uint32_t* content_start = buffer + kTitleHeight * surface_w + bw;
   PaintContent(content_start, content_w, content_h, surface_w, time);
 }
 

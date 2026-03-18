@@ -23,8 +23,8 @@
 // ─────────────────────────────────────────────────────────
 //   dependency('gtk+-3.0')    →  provides GtkStyleContext, Cairo, Pango
 //
-// The implementation lives in a separate .cpp file (examples/xdg-csd/csd_gtk.cpp)
-// because it links against GTK3.
+// The implementation lives in a separate .cpp file
+// (examples/xdg-csd/csd_gtk.cpp) because it links against GTK3.
 #pragma once
 
 #include <wl/csd_plugin.hpp>

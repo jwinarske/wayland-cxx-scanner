@@ -101,7 +101,8 @@ class FallbackCsdPlugin final : public CsdPlugin {
              kColorMinBtn);
 
     // Content area — animated ring pattern.
-    uint32_t* content_start = buffer + kTitleBarHeight * surface_w + kBorderWidth;
+    uint32_t* content_start =
+        buffer + kTitleBarHeight * surface_w + kBorderWidth;
     PaintContent(content_start, content_w, content_h, surface_w, time);
   }
 

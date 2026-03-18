@@ -280,8 +280,8 @@ static void RenderTitle(uint32_t* buf,
 
   // Blit the ARGB32 Cairo surface into our XRGB8888 buffer.
   cairo_surface_flush(surface);
-  const auto* src = reinterpret_cast<const uint32_t*>(
-      cairo_image_surface_get_data(surface));
+  const auto* src =
+      reinterpret_cast<const uint32_t*>(cairo_image_surface_get_data(surface));
   const int src_stride = cairo_image_surface_get_stride(surface) / 4;
 
   for (int row = 0; row < max_h; ++row) {
@@ -292,14 +292,12 @@ static void RenderTitle(uint32_t* buf,
         // Simple alpha-over compositing onto the existing background.
         const uint32_t dst = buf[(y + row) * buf_w + (x + col)];
         const uint32_t inv_alpha = 255u - alpha;
-        const uint32_t out_r =
-            (((pixel >> 16u) & 0xFFu) * alpha +
-             ((dst >> 16u) & 0xFFu) * inv_alpha) /
-            255u;
-        const uint32_t out_g =
-            (((pixel >> 8u) & 0xFFu) * alpha +
-             ((dst >> 8u) & 0xFFu) * inv_alpha) /
-            255u;
+        const uint32_t out_r = (((pixel >> 16u) & 0xFFu) * alpha +
+                                ((dst >> 16u) & 0xFFu) * inv_alpha) /
+                               255u;
+        const uint32_t out_g = (((pixel >> 8u) & 0xFFu) * alpha +
+                                ((dst >> 8u) & 0xFFu) * inv_alpha) /
+                               255u;
         const uint32_t out_b =
             ((pixel & 0xFFu) * alpha + (dst & 0xFFu) * inv_alpha) / 255u;
         buf[(y + row) * buf_w + (x + col)] =
@@ -341,8 +339,7 @@ void GtkCsdPlugin::RenderFrame(uint32_t* buffer,
                                int content_h,
                                uint32_t time) {
   // Fill entire surface with border colour.
-  FillRect(buffer, surface_w, 0, 0, surface_w, surface_h,
-           impl_->border_color);
+  FillRect(buffer, surface_w, 0, 0, surface_w, surface_h, impl_->border_color);
 
   // Title bar background.
   const uint32_t tb_color = impl_->focused ? impl_->title_bar_color
@@ -351,8 +348,7 @@ void GtkCsdPlugin::RenderFrame(uint32_t* buffer,
            kTitleBarHeight - kBorderWidth, tb_color);
 
   // Window control buttons (circular, like GNOME/Adwaita).
-  const int btn_cy =
-      kBorderWidth + (kTitleBarHeight - kBorderWidth) / 2;
+  const int btn_cy = kBorderWidth + (kTitleBarHeight - kBorderWidth) / 2;
   const int btn_radius = kButtonSize / 2;
 
   // Close button (rightmost).
@@ -373,8 +369,8 @@ void GtkCsdPlugin::RenderFrame(uint32_t* buffer,
   // Title text (rendered via Pango + Cairo).
   const int text_x = kBorderWidth + kButtonPadding;
   const int text_y = kBorderWidth;
-  const int text_max_w = content_w - 3 * (kButtonSize + kButtonPadding) -
-                         2 * kButtonPadding;
+  const int text_max_w =
+      content_w - 3 * (kButtonSize + kButtonPadding) - 2 * kButtonPadding;
   const int text_max_h = kTitleBarHeight - kBorderWidth;
   if (text_max_w > 0) {
     RenderTitle(buffer, surface_w, text_x, text_y, text_max_w, text_max_h,
@@ -382,19 +378,18 @@ void GtkCsdPlugin::RenderFrame(uint32_t* buffer,
   }
 
   // Content area — animated ring pattern.
-  uint32_t* content_start =
-      buffer + kTitleBarHeight * surface_w + kBorderWidth;
+  uint32_t* content_start = buffer + kTitleBarHeight * surface_w + kBorderWidth;
   PaintContent(content_start, content_w, content_h, surface_w, time);
 }
 
 // ── HitTest ─────────────────────────────────────────────────────────────────
 
 HitZone GtkCsdPlugin::HitTest(int x,
-                               int y,
-                               int surface_w,
-                               int surface_h,
-                               int content_w,
-                               int /*content_h*/) const noexcept {
+                              int y,
+                              int surface_w,
+                              int surface_h,
+                              int content_w,
+                              int /*content_h*/) const noexcept {
   if (x < 0 || y < 0 || x >= surface_w || y >= surface_h)
     return HitZone::None;
 
@@ -420,8 +415,7 @@ HitZone GtkCsdPlugin::HitTest(int x,
 
   // Title bar region.
   if (y < kTitleBarHeight) {
-    const int btn_cy =
-        kBorderWidth + (kTitleBarHeight - kBorderWidth) / 2;
+    const int btn_cy = kBorderWidth + (kTitleBarHeight - kBorderWidth) / 2;
     const int btn_radius = kButtonSize / 2;
 
     // Close button.
