@@ -750,9 +750,16 @@ bool App::InitVulkan() {
   // getMemoryFdKHR returns a fresh O_RDWR file descriptor.  We keep it for
   // the lifetime of the application; the compositor receives a dup via the
   // Wayland fd-passing mechanism when we call zwp_linux_buffer_params_v1::add.
+  //
+  // vkGetMemoryFdKHR is a device-level extension entry point; it is NOT in
+  // the static dispatch table.  Load function pointers for this device via a
+  // local DispatchLoaderDynamic so vulkan.hpp resolves the symbol at runtime
+  // through vkGetDeviceProcAddr rather than requiring a link-time symbol.
+  const vk::DispatchLoaderDynamic dld(*vk_.instance, vkGetInstanceProcAddr,
+                                      *vk_.device);
   const vk::MemoryGetFdInfoKHR fd_info{
       *vk_.memory, vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
-  auto fd_rv = vk_.device->getMemoryFdKHR(fd_info);
+  auto fd_rv = vk_.device->getMemoryFdKHR(fd_info, dld);
   if (!VkOk(fd_rv.result, "vkGetMemoryFdKHR"))
     return false;
   vk_.dma_fd = fd_rv.value;
