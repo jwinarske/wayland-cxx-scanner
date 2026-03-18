@@ -14,3 +14,5 @@ subdir('presentation-shm')
 subdir('agl-presentation-shm')
 # ivi-shell uses subdir_done() internally if wayland-scanner/xkbcommon absent.
 subdir('ivi-presentation-shm')
+# key-input uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.
+subdir('key-input')
