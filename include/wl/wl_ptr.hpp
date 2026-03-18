@@ -63,7 +63,9 @@ class WlPtr {
   }
 
   [[nodiscard]] T* operator->() noexcept { return &m_obj; }
+  [[nodiscard]] const T* operator->() const noexcept { return &m_obj; }
   [[nodiscard]] T* Get() noexcept { return &m_obj; }
+  [[nodiscard]] const T* Get() const noexcept { return &m_obj; }
   [[nodiscard]] bool IsNull() const noexcept { return m_obj.IsNull(); }
   explicit operator bool() const noexcept { return !IsNull(); }
 

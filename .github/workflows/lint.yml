@@ -30,11 +30,7 @@ jobs:
           sudo apt-get install -y clang-format-19
 
       - name: Check C++ formatting
-        run: |
-          find include src tests examples \
-            \( -name '*.cpp' -o -name '*.hpp' \) \
-            -print0 \
-          | xargs -0 -r clang-format-19 --dry-run -Werror
+        run: scripts/format.sh --check
 
   clang-tidy:
     name: clang-tidy-19
