@@ -76,9 +76,9 @@ extern const wl_interface decoration_iface;
 //             cppcoreguidelines-avoid-non-const-global-variables,
 //             cppcoreguidelines-interfaces-global-init)
 inline const wl_interface* types[] = {
-    nullptr,                       // [0]  scalar / no-type slots
-    &decoration_iface,             // [1]  get_toplevel_decoration → new_id
-    &wl::xdg::toplevel_iface,     // [2]  get_toplevel_decoration → toplevel
+    nullptr,                   // [0]  scalar / no-type slots
+    &decoration_iface,         // [1]  get_toplevel_decoration → new_id
+    &wl::xdg::toplevel_iface,  // [2]  get_toplevel_decoration → toplevel
 };
 
 inline constexpr const wl_interface** kScalars = &types[0];

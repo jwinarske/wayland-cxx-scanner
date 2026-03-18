@@ -28,9 +28,9 @@
 //             cppcoreguidelines-pro-type-reinterpret-cast)
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
-#include "wayland_client.hpp"                        // namespace wayland::client
-#include "xdg_decoration_unstable_v1_client.hpp"     // namespace xdg_decoration_unstable_v1::client
-#include "xdg_shell_client.hpp"                      // namespace xdg_shell::client
+#include "wayland_client.hpp"                     // namespace wayland::client
+#include "xdg_decoration_unstable_v1_client.hpp"  // namespace xdg_decoration_unstable_v1::client
+#include "xdg_shell_client.hpp"                   // namespace xdg_shell::client
 
 // ── Framework headers ────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
@@ -255,15 +255,18 @@ class WlCallbackHandler
 
 // ── WlPointerHandler ────────────────────────────────────────────────────────
 
-class WlPointerHandler
-    : public wayland::client::CWlPointer<WlPointerHandler> {
+class WlPointerHandler : public wayland::client::CWlPointer<WlPointerHandler> {
  public:
   App* app_ = nullptr;
-  void OnEnter(uint32_t serial, wl_proxy* surface, wl_fixed_t sx,
+  void OnEnter(uint32_t serial,
+               wl_proxy* surface,
+               wl_fixed_t sx,
                wl_fixed_t sy) override;
   void OnLeave(uint32_t serial, wl_proxy* surface) override;
   void OnMotion(uint32_t time, wl_fixed_t sx, wl_fixed_t sy) override;
-  void OnButton(uint32_t serial, uint32_t time, uint32_t button,
+  void OnButton(uint32_t serial,
+                uint32_t time,
+                uint32_t button,
                 uint32_t state) override;
   void OnAxis(uint32_t, uint32_t, wl_fixed_t) override {}
   void OnFrame() override {}
@@ -351,9 +354,8 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
 
   wl::WlPtr<WlShmPoolHandler> pool;
   {
-    wl_shm_pool* raw_pool =
-        wl_shm_create_pool(reinterpret_cast<wl_shm*>(shm_raw), mem.fd,
-                           static_cast<int>(total));
+    wl_shm_pool* raw_pool = wl_shm_create_pool(
+        reinterpret_cast<wl_shm*>(shm_raw), mem.fd, static_cast<int>(total));
     if (!raw_pool) {
       std::fprintf(stderr, "xdg-csd: wl_shm_create_pool failed\n");
       return false;
@@ -447,13 +449,15 @@ static void paint_csd_frame(uint32_t* buf,
   fill_rect(buf, surf_w, 0, 0, surf_w, surf_h, kColorBorder);
 
   // Title bar.
-  fill_rect(buf, surf_w, kBorderWidth, kBorderWidth,
-            content_w, kTitleBarHeight - kBorderWidth, kColorTitleBar);
+  fill_rect(buf, surf_w, kBorderWidth, kBorderWidth, content_w,
+            kTitleBarHeight - kBorderWidth, kColorTitleBar);
 
   // Close button (top-right of title bar).
-  const int btn_y = kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
+  const int btn_y =
+      kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
   int btn_x = kBorderWidth + content_w - kButtonPadding - kButtonSize;
-  fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize, kColorCloseBtn);
+  fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize,
+            kColorCloseBtn);
 
   // Maximize button.
   btn_x -= (kButtonSize + kButtonPadding);
@@ -464,8 +468,7 @@ static void paint_csd_frame(uint32_t* buf,
   fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize, kColorMinBtn);
 
   // Content area — animated ring pattern.
-  uint32_t* content_start =
-      buf + kTitleBarHeight * surf_w + kBorderWidth;
+  uint32_t* content_start = buf + kTitleBarHeight * surf_w + kBorderWidth;
   paint_content(content_start, content_w, content_h, surf_w, time);
 }
 
@@ -501,7 +504,8 @@ class App {
   void OnPointerEnter(uint32_t serial, wl_fixed_t sx, wl_fixed_t sy) noexcept;
   void OnPointerLeave() noexcept;
   void OnPointerMotion(wl_fixed_t sx, wl_fixed_t sy) noexcept;
-  void OnPointerButton(uint32_t serial, uint32_t button,
+  void OnPointerButton(uint32_t serial,
+                       uint32_t button,
                        uint32_t state) noexcept;
 
   // ── Seat capability callback ──────────────────────────────────────────────
@@ -514,7 +518,7 @@ class App {
   const char* title_;
 
   // ── Decoration state ──────────────────────────────────────────────────────
-  bool use_csd_ = true;   // default to CSD if no decoration manager
+  bool use_csd_ = true;  // default to CSD if no decoration manager
   bool maximized_ = false;
 
   // ── Computed surface dimensions ───────────────────────────────────────────
@@ -591,8 +595,10 @@ void WlCallbackHandler::OnDone(uint32_t time_ms) {
   app_->OnFrameDone(time_ms);
 }
 
-void WlPointerHandler::OnEnter(uint32_t serial, wl_proxy* /*surface*/,
-                               wl_fixed_t sx, wl_fixed_t sy) {
+void WlPointerHandler::OnEnter(uint32_t serial,
+                               wl_proxy* /*surface*/,
+                               wl_fixed_t sx,
+                               wl_fixed_t sy) {
   app_->OnPointerEnter(serial, sx, sy);
 }
 
@@ -600,13 +606,16 @@ void WlPointerHandler::OnLeave(uint32_t /*serial*/, wl_proxy* /*surface*/) {
   app_->OnPointerLeave();
 }
 
-void WlPointerHandler::OnMotion(uint32_t /*time*/, wl_fixed_t sx,
+void WlPointerHandler::OnMotion(uint32_t /*time*/,
+                                wl_fixed_t sx,
                                 wl_fixed_t sy) {
   app_->OnPointerMotion(sx, sy);
 }
 
-void WlPointerHandler::OnButton(uint32_t serial, uint32_t /*time*/,
-                                uint32_t button, uint32_t state) {
+void WlPointerHandler::OnButton(uint32_t serial,
+                                uint32_t /*time*/,
+                                uint32_t button,
+                                uint32_t state) {
   app_->OnPointerButton(serial, button, state);
 }
 
@@ -745,8 +754,7 @@ bool App::BindGlobals() {
   if (seat_name_) {
     const uint32_t ver =
         std::min(seat_ver_, wayland::client::wl_seat_traits::version);
-    if (wl_proxy* raw =
-            registry_.Bind<wl_seat_traits>(seat_name_, ver)) {
+    if (wl_proxy* raw = registry_.Bind<wl_seat_traits>(seat_name_, ver)) {
       if (wl::SetupHandler(seat_handler_, raw)) {
         seat_handler_.Get()->app_ = this;
       }
@@ -761,8 +769,7 @@ bool App::BindGlobals() {
 
   constexpr uint32_t kXrgb8888 = 1u;
   if (!(shm_.Get()->formats & (1u << kXrgb8888))) {
-    std::fprintf(stderr,
-                 "xdg-csd: WL_SHM_FORMAT_XRGB8888 not supported\n");
+    std::fprintf(stderr, "xdg-csd: WL_SHM_FORMAT_XRGB8888 not supported\n");
     return false;
   }
   return true;
@@ -790,8 +797,7 @@ bool App::CreateWindow() {
                         wl::construct<xdg_surface_traits,
                                       xdg_wm_base_traits::Op::GetXdgSurface>(
                             *xdg_wm_base_.Get(), surface_.Get()->GetProxy()))) {
-    std::fprintf(stderr,
-                 "xdg-csd: xdg_wm_base.get_xdg_surface failed\n");
+    std::fprintf(stderr, "xdg-csd: xdg_wm_base.get_xdg_surface failed\n");
     return false;
   }
   xdg_surface_.Get()->app_ = this;
@@ -810,17 +816,15 @@ bool App::CreateWindow() {
 
   // Negotiate decoration mode via zxdg_decoration_manager_v1.
   if (!decoration_mgr_.IsNull()) {
-    if (wl_proxy* raw =
-            wl::construct<zxdg_toplevel_decoration_v1_traits,
-                          zxdg_decoration_manager_v1_traits::Op::
-                              GetToplevelDecoration>(
-                *decoration_mgr_.Get(),
-                xdg_toplevel_.Get()->GetProxy())) {
+    if (wl_proxy* raw = wl::construct<
+            zxdg_toplevel_decoration_v1_traits,
+            zxdg_decoration_manager_v1_traits::Op::GetToplevelDecoration>(
+            *decoration_mgr_.Get(), xdg_toplevel_.Get()->GetProxy())) {
       if (wl::SetupHandler(decoration_, raw)) {
         decoration_.Get()->app_ = this;
         // Request client-side decorations.
-        decoration_.Get()->SetMode(static_cast<uint32_t>(
-            ZxdgToplevelDecorationV1Mode::ClientSide));
+        decoration_.Get()->SetMode(
+            static_cast<uint32_t>(ZxdgToplevelDecorationV1Mode::ClientSide));
       }
     }
   }
@@ -838,8 +842,7 @@ bool App::CreateWindow() {
 // ── CreateBuffers ───────────────────────────────────────────────────────────
 
 bool App::CreateBuffers() {
-  return pool_.Create(SurfaceWidth(), SurfaceHeight(),
-                      shm_.Get()->GetProxy());
+  return pool_.Create(SurfaceWidth(), SurfaceHeight(), shm_.Get()->GetProxy());
 }
 
 // ── Hit testing ─────────────────────────────────────────────────────────────
@@ -878,7 +881,8 @@ HitZone App::HitTest(int x, int y) const noexcept {
   // Title bar region.
   if (y < kTitleBarHeight) {
     // Check buttons (right-aligned in title bar).
-    const int btn_y = kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
+    const int btn_y =
+        kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
     if (y >= btn_y && y < btn_y + kButtonSize) {
       int btn_x = kBorderWidth + content_w_ - kButtonPadding - kButtonSize;
       if (x >= btn_x && x < btn_x + kButtonSize)
@@ -928,10 +932,9 @@ void App::OnToplevelClose() {
 
 void App::OnDecorationConfigure(uint32_t mode) {
   const bool was_csd = use_csd_;
-  use_csd_ =
-      (mode == static_cast<uint32_t>(
-                   xdg_decoration_unstable_v1::client::
-                       ZxdgToplevelDecorationV1Mode::ClientSide));
+  use_csd_ = (mode == static_cast<uint32_t>(
+                          xdg_decoration_unstable_v1::client::
+                              ZxdgToplevelDecorationV1Mode::ClientSide));
   if (was_csd != use_csd_) {
     need_redraw_ = true;
     std::fprintf(stderr, "xdg-csd: decoration mode → %s\n",
@@ -958,7 +961,8 @@ void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
 
 // ── Pointer event implementations ───────────────────────────────────────────
 
-void App::OnPointerEnter(uint32_t serial, wl_fixed_t sx,
+void App::OnPointerEnter(uint32_t serial,
+                         wl_fixed_t sx,
                          wl_fixed_t sy) noexcept {
   pointer_serial_ = serial;
   pointer_x_ = wl_fixed_to_int(sx);
@@ -975,7 +979,8 @@ void App::OnPointerMotion(wl_fixed_t sx, wl_fixed_t sy) noexcept {
   pointer_y_ = wl_fixed_to_int(sy);
 }
 
-void App::OnPointerButton(uint32_t serial, uint32_t button,
+void App::OnPointerButton(uint32_t serial,
+                          uint32_t button,
                           uint32_t state) noexcept {
   if (state != WL_POINTER_BUTTON_STATE_PRESSED)
     return;
@@ -1111,8 +1116,7 @@ bool App::MainLoop() {
   CommitFrame(0);
 
   const bool ok = wl::RunEventLoop(
-      display_.Get(), [this] { return !running_ || !g_running; },
-      "xdg-csd",
+      display_.Get(), [this] { return !running_ || !g_running; }, "xdg-csd",
       [this] { return seat_.GetRepeatFd(); },
       [this] { seat_.DispatchRepeat(); });
 
@@ -1140,7 +1144,7 @@ static void print_usage(const char* prog) {
 int main(int argc, char* argv[]) {
   std::signal(SIGPIPE, SIG_IGN);
 
-  struct sigaction sa {};
+  struct sigaction sa{};
   sa.sa_handler = signal_handler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESETHAND;
