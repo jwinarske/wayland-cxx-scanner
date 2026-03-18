@@ -289,17 +289,19 @@ static void RenderTitle(uint32_t* buf,
       const uint32_t pixel = src[row * src_stride + col];
       const uint32_t alpha = (pixel >> 24u) & 0xFFu;
       if (alpha > 0) {
-        // Simple alpha-over compositing onto the existing background.
+        // Alpha-over compositing — Cairo ARGB32 uses premultiplied alpha,
+        // so the source RGB channels are already multiplied by alpha.
         const uint32_t dst = buf[(y + row) * buf_w + (x + col)];
         const uint32_t inv_alpha = 255u - alpha;
-        const uint32_t out_r = (((pixel >> 16u) & 0xFFu) * alpha +
-                                ((dst >> 16u) & 0xFFu) * inv_alpha) /
-                               255u;
-        const uint32_t out_g = (((pixel >> 8u) & 0xFFu) * alpha +
-                                ((dst >> 8u) & 0xFFu) * inv_alpha) /
-                               255u;
-        const uint32_t out_b =
-            ((pixel & 0xFFu) * alpha + (dst & 0xFFu) * inv_alpha) / 255u;
+        const uint32_t out_r = std::min(
+            255u, ((pixel >> 16u) & 0xFFu) +
+                      ((dst >> 16u) & 0xFFu) * inv_alpha / 255u);
+        const uint32_t out_g = std::min(
+            255u, ((pixel >> 8u) & 0xFFu) +
+                      ((dst >> 8u) & 0xFFu) * inv_alpha / 255u);
+        const uint32_t out_b = std::min(
+            255u,
+            (pixel & 0xFFu) + (dst & 0xFFu) * inv_alpha / 255u);
         buf[(y + row) * buf_w + (x + col)] =
             0xFF000000u | (out_r << 16u) | (out_g << 8u) | out_b;
       }
