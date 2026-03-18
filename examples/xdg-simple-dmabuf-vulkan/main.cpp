@@ -751,18 +751,31 @@ bool App::InitVulkan() {
   // the lifetime of the application; the compositor receives a dup via the
   // Wayland fd-passing mechanism when we call zwp_linux_buffer_params_v1::add.
   //
-  // vkGetMemoryFdKHR is a device-level extension entry point; it is NOT in
-  // the static dispatch table.  Load function pointers for this device via a
-  // local DispatchLoaderDynamic so vulkan.hpp resolves the symbol at runtime
-  // through vkGetDeviceProcAddr rather than requiring a link-time symbol.
-  const vk::DispatchLoaderDynamic dld(*vk_.instance, vkGetInstanceProcAddr,
-                                      *vk_.device);
-  const vk::MemoryGetFdInfoKHR fd_info{
-      *vk_.memory, vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
-  auto fd_rv = vk_.device->getMemoryFdKHR(fd_info, dld);
-  if (!VkOk(fd_rv.result, "vkGetMemoryFdKHR"))
-    return false;
-  vk_.dma_fd = fd_rv.value;
+  // vkGetMemoryFdKHR is a VK_KHR_external_memory_fd device-level extension
+  // entry point.  libvulkan.so only exports core loader symbols at link time,
+  // so the function must be resolved at runtime via vkGetDeviceProcAddr.
+  // We call the C API directly to avoid needing VULKAN_HPP_DISPATCH_LOADER_DYNAMIC.
+  {
+    const auto fn = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+        vkGetDeviceProcAddr(*vk_.device, "vkGetMemoryFdKHR"));
+    if (!fn) {
+      std::fprintf(
+          stderr,
+          "xdg-simple-dmabuf-vulkan: vkGetDeviceProcAddr(vkGetMemoryFdKHR) "
+          "returned null\n");
+      return false;
+    }
+    const VkMemoryGetFdInfoKHR fd_info_c{
+        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+        nullptr,
+        *vk_.memory,
+        VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+    int raw_fd = -1;
+    if (!VkOk(static_cast<vk::Result>(fn(*vk_.device, &fd_info_c, &raw_fd)),
+              "vkGetMemoryFdKHR"))
+      return false;
+    vk_.dma_fd = raw_fd;
+  }
 
   // ── Command buffer ─────────────────────────────────────────────────────────
   const vk::CommandBufferAllocateInfo cb_ai{
