@@ -31,7 +31,8 @@ struct FakeHandler : wl::CProxyImpl<FakeHandler, FakeHelperTraits> {
 };
 const void* FakeHandler::s_listener_table_[] = {nullptr};
 
-// ── SetupHandler tests ────────────────────────────────────────────────────────
+// ── SetupHandler tests
+// ────────────────────────────────────────────────────────
 
 TEST(SetupHandler, NullRawReturnsFalse) {
   wl::WlPtr<FakeHandler> ptr;
@@ -45,7 +46,8 @@ TEST(SetupHandler, PtrRemainsNullWhenRawIsNull) {
   EXPECT_TRUE(ptr.IsNull());
 }
 
-// ── BindHandler tests ─────────────────────────────────────────────────────────
+// ── BindHandler tests
+// ─────────────────────────────────────────────────────────
 
 TEST(BindHandler, NullRegistryReturnsFalse) {
   // A null CRegistry returns nullptr from Bind<>, which causes SetupHandler

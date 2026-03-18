@@ -9,13 +9,15 @@
 // compositor.  All request methods (_Marshal) are no-ops when the proxy
 // is null.
 #include "agl_shell_client.hpp"  // generated — must come before agl_shell.hpp
+
 #include <wl/agl_shell.hpp>
 
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <string_view>
 
-// ── Minimal App stub ──────────────────────────────────────────────────────────
+// ── Minimal App stub
+// ──────────────────────────────────────────────────────────
 
 struct FakeAglApp {
   bool bound_ok = false;
@@ -31,7 +33,8 @@ struct FakeAglApp {
   }
 };
 
-// ── AglShellHandler tests ─────────────────────────────────────────────────────
+// ── AglShellHandler tests
+// ─────────────────────────────────────────────────────
 
 TEST(AglShellHandler, DefaultIsNull) {
   wl::AglShellHandler<FakeAglApp> h;

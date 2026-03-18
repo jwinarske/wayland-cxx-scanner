@@ -8,7 +8,8 @@
 // These tests exercise handler logic without a live Wayland compositor.
 // All request methods (_Marshal) are no-ops when the proxy is null.
 #include "wayland_client.hpp"  // generated — must come before seat.hpp
-#include <wl/seat.hpp>         // also pulls in keyboard.hpp
+
+#include <wl/seat.hpp>  // also pulls in keyboard.hpp
 
 #include <fcntl.h>   // F_GETFD, fcntl
 #include <unistd.h>  // pipe, close
@@ -17,7 +18,8 @@
 #include <cerrno>
 #include <cstdint>
 
-// ── Minimal App stubs ─────────────────────────────────────────────────────────
+// ── Minimal App stubs
+// ─────────────────────────────────────────────────────────
 
 // App without OnKeySym — exercises the SFINAE fallback.
 struct FakeSeatApp {
@@ -45,7 +47,8 @@ struct FakeSeatAppWithKeySym {
   }
 };
 
-// ── KeyboardHandler tests ─────────────────────────────────────────────────────
+// ── KeyboardHandler tests
+// ─────────────────────────────────────────────────────
 
 TEST(KeyboardHandler, ConstructionCreatesXkbContext) {
   // Constructor must not crash; it calls xkb_context_new internally.
@@ -79,7 +82,8 @@ TEST(KeyboardHandler, OnKeyWithAppWithKeySymAndNullXkbStateCallsApp) {
   kbd.OnKey(0u, 0u, 30u, 1u);
   EXPECT_EQ(app.last_key, 30u);
   EXPECT_EQ(app.last_state, 1u);
-  EXPECT_EQ(app.last_sym, xkb_keysym_t{XKB_KEY_NoSymbol});  // not set — no xkb_state
+  EXPECT_EQ(app.last_sym,
+            xkb_keysym_t{XKB_KEY_NoSymbol});  // not set — no xkb_state
 }
 
 TEST(KeyboardHandler, OnModifiersWithNullXkbStateIsNoOp) {
@@ -118,7 +122,8 @@ TEST(KeyboardHandler, OnKeymapNonXkbV1ClosesFd) {
   EXPECT_EQ(errno, EBADF);
 }
 
-// ── SeatManager tests ─────────────────────────────────────────────────────────
+// ── SeatManager tests
+// ─────────────────────────────────────────────────────────
 
 TEST(SeatManager, DefaultState) {
   wl::SeatManager<FakeSeatApp> sm;

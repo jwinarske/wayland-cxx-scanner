@@ -7,7 +7,8 @@
 #include <cstdint>
 #include <string_view>
 
-// ── Minimal fake traits ───────────────────────────────────────────────────────
+// ── Minimal fake traits
+// ───────────────────────────────────────────────────────
 
 struct FakeClientTraits {
   static constexpr std::string_view interface_name = "wl_fake_client";
@@ -29,7 +30,8 @@ struct FakeChildTraits {
 };
 static_assert(wl::WlProxyTraits<FakeChildTraits>);
 
-// ── Concrete CProxyImpl-derived class ─────────────────────────────────────────
+// ── Concrete CProxyImpl-derived class
+// ─────────────────────────────────────────
 
 struct FakeClient : wl::CProxyImpl<FakeClient, FakeClientTraits> {
   // Required by _SetProxy: wl_proxy_add_listener reads s_listener_table_.
@@ -43,7 +45,8 @@ struct FakeClient : wl::CProxyImpl<FakeClient, FakeClientTraits> {
 };
 const void* FakeClient::s_listener_table_[] = {nullptr};
 
-// ── CProxyImpl tests ──────────────────────────────────────────────────────────
+// ── CProxyImpl tests
+// ──────────────────────────────────────────────────────────
 
 TEST(CProxyImpl, DefaultIsNull) {
   FakeClient c;
@@ -69,13 +72,15 @@ TEST(CProxyImpl, MarshalNullProxyIsNoOp) {
 }
 
 TEST(CProxyImpl, MarshalNewNullProxyReturnsNullptr) {
-  // _MarshalNew on a null proxy must return nullptr (guarded by internal check).
+  // _MarshalNew on a null proxy must return nullptr (guarded by internal
+  // check).
   FakeClient c;
   wl_proxy* result = c._MarshalNew(0u, nullptr);
   EXPECT_EQ(result, nullptr);
 }
 
-// ── wl::construct<> tests ─────────────────────────────────────────────────────
+// ── wl::construct<> tests
+// ─────────────────────────────────────────────────────
 
 TEST(Construct, NullParentReturnsNullptr) {
   // construct<> delegates to _MarshalNew; null parent must return nullptr.

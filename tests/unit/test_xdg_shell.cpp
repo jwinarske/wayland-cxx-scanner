@@ -9,12 +9,14 @@
 // These tests exercise handler logic without a live Wayland compositor.
 // All request methods (_Marshal) are no-ops when the proxy is null.
 #include "xdg_shell_client.hpp"  // generated — must come before xdg_shell.hpp
+
 #include <wl/xdg_shell.hpp>
 
 #include <gtest/gtest.h>
 #include <cstdint>
 
-// ── Minimal App stubs ─────────────────────────────────────────────────────────
+// ── Minimal App stubs
+// ─────────────────────────────────────────────────────────
 
 struct FakeXdgApp {
   uint32_t last_surface_serial = 0;
@@ -30,7 +32,8 @@ struct FakeXdgApp {
   void OnToplevelClose() { closed = true; }
 };
 
-// ── XdgWmBaseHandler tests ────────────────────────────────────────────────────
+// ── XdgWmBaseHandler tests
+// ────────────────────────────────────────────────────
 
 TEST(XdgWmBaseHandler, DefaultIsNull) {
   wl::XdgWmBaseHandler h;
@@ -43,7 +46,8 @@ TEST(XdgWmBaseHandler, OnPingDoesNotCrashWithNullProxy) {
   h.OnPing(42u);  // must not crash
 }
 
-// ── XdgSurfaceHandler tests ───────────────────────────────────────────────────
+// ── XdgSurfaceHandler tests
+// ───────────────────────────────────────────────────
 
 TEST(XdgSurfaceHandler, DefaultIsNull) {
   wl::XdgSurfaceHandler<FakeXdgApp> h;
@@ -61,7 +65,8 @@ TEST(XdgSurfaceHandler, OnConfigureCallsAppAndAcks) {
   EXPECT_EQ(app.last_surface_serial, 99u);
 }
 
-// ── XdgToplevelHandler tests ──────────────────────────────────────────────────
+// ── XdgToplevelHandler tests
+// ──────────────────────────────────────────────────
 
 TEST(XdgToplevelHandler, DefaultIsNull) {
   wl::XdgToplevelHandler<FakeXdgApp> h;

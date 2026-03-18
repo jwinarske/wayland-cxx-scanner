@@ -141,7 +141,8 @@ TEST(CRegistry, ResetOnNullIsSafe) {
   EXPECT_TRUE(r.IsNull());
 }
 
-// ── CGlobal basic tests (no compositor required) ──────────────────────────────
+// ── CGlobal basic tests (no compositor required)
+// ──────────────────────────────
 
 struct FakeServerTraits {
   static constexpr std::string_view interface_name = "wl_fake_server";

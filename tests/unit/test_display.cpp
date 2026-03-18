@@ -5,7 +5,8 @@
 
 #include <gtest/gtest.h>
 
-// ── DisplayHandle tests ───────────────────────────────────────────────────────
+// ── DisplayHandle tests
+// ───────────────────────────────────────────────────────
 
 TEST(DisplayHandle, DefaultIsNull) {
   wl::DisplayHandle dh;
