@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// xdg-csd — Client-Side Decoration example
+// xdg-csd — Client-Side Decoration example with plugin architecture
 //
 // Demonstrates the zxdg_decoration_manager_v1 protocol for negotiating
 // CSD vs SSD with the compositor, and renders client-side decorations
 // (title bar with close/maximize/minimize buttons, resize borders)
-// using wl_shm when the compositor selects client-side mode.
+// using a pluggable CSD rendering backend.
+//
+// Following the plugin pattern from libdecor
+// (https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/gtk):
+//   • GtkCsdPlugin      — GTK-themed decorations via Cairo/Pango (optional)
+//   • FallbackCsdPlugin  — flat-colour SHM decorations (always available)
+//
+// The build system selects the GTK plugin when gtk+-3.0 is available,
+// otherwise falls back to the regular plugin.
 //
 // This example provides equivalent functionality to libdecor's core
 // decoration features:
@@ -34,6 +42,12 @@
 
 // ── Framework headers ────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
+#include <wl/csd_plugin.hpp>
+#ifdef USE_GTK_CSD
+#include <wl/csd_gtk.hpp>
+#else
+#include <wl/csd_fallback.hpp>
+#endif
 #include <wl/display.hpp>
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
@@ -98,66 +112,11 @@ const wl_interface& wl_pointer_traits::wl_iface() noexcept {
 }  // namespace wayland::client
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CSD layout constants
+// CSD types — provided by the plugin interface in <wl/csd_plugin.hpp>
 // ══════════════════════════════════════════════════════════════════════════════
 
-static constexpr int kBorderWidth = 4;
-static constexpr int kTitleBarHeight = 30;
-static constexpr int kButtonSize = 18;
-static constexpr int kButtonPadding = 6;
-
-// Button colors (ARGB8888).
-static constexpr uint32_t kColorTitleBar = 0xFF3C3C3C;
-static constexpr uint32_t kColorBorder = 0xFF505050;
-static constexpr uint32_t kColorCloseBtn = 0xFFE04040;
-static constexpr uint32_t kColorMaxBtn = 0xFF40A040;
-static constexpr uint32_t kColorMinBtn = 0xFFD0A020;
-
-// ══════════════════════════════════════════════════════════════════════════════
-// CSD hit-test zones
-// ══════════════════════════════════════════════════════════════════════════════
-
-enum class HitZone {
-  None,
-  TitleBar,
-  CloseButton,
-  MaximizeButton,
-  MinimizeButton,
-  ResizeTop,
-  ResizeBottom,
-  ResizeLeft,
-  ResizeRight,
-  ResizeTopLeft,
-  ResizeTopRight,
-  ResizeBottomLeft,
-  ResizeBottomRight,
-  Content,
-};
-
-/// Map a HitZone to the xdg_toplevel resize_edge value (0 means not a resize).
-static uint32_t hit_zone_to_resize_edge(HitZone zone) noexcept {
-  // Values from xdg_toplevel_resize_edge enum.
-  switch (zone) {
-    case HitZone::ResizeTop:
-      return 1;
-    case HitZone::ResizeBottom:
-      return 2;
-    case HitZone::ResizeLeft:
-      return 4;
-    case HitZone::ResizeRight:
-      return 8;
-    case HitZone::ResizeTopLeft:
-      return 5;
-    case HitZone::ResizeTopRight:
-      return 9;
-    case HitZone::ResizeBottomLeft:
-      return 6;
-    case HitZone::ResizeBottomRight:
-      return 10;
-    default:
-      return 0;
-  }
-}
+using wl::csd::CsdPlugin;
+using wl::csd::HitZone;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Shared-memory helper
@@ -386,19 +345,11 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
 // Pixel painting
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Paint an animated ring pattern into a content region (XRGB8888).
-/// @param pixels  Pointer to the first pixel of the content area.
-/// @param width   Content width in pixels.
-/// @param height  Content height in pixels.
-/// @param stride  Row stride of the target buffer in pixels (may be larger
-///                than @p width when painting into a sub-region of a bigger
-///                surface buffer).
-/// @param time    Animation time in milliseconds.
-static void paint_content(uint32_t* pixels,
-                          int width,
-                          int height,
-                          int stride,
-                          uint32_t time) noexcept {
+/// Paint the content area only (no decorations — SSD mode).
+static void paint_ssd_frame(uint32_t* buf,
+                            int width,
+                            int height,
+                            uint32_t time) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
   int outer_r = (halfw < halfh ? halfw : halfh) - 8;
@@ -420,64 +371,9 @@ static void paint_content(uint32_t* pixels,
       v &= 0x00FFFFFFu;
       if (std::abs(x - y) > 6 && std::abs(x + y - height) > 6)
         v |= 0xFF000000u;
-      pixels[y * stride + x] = v;
+      buf[y * width + x] = v;
     }
   }
-}
-
-/// Fill a rectangular region of the buffer with a solid color.
-static void fill_rect(uint32_t* buf,
-                      int buf_w,
-                      int x,
-                      int y,
-                      int w,
-                      int h,
-                      uint32_t color) noexcept {
-  for (int row = y; row < y + h; ++row)
-    for (int col = x; col < x + w; ++col)
-      buf[row * buf_w + col] = color;
-}
-
-/// Render full CSD frame: borders, title bar with buttons, and content area.
-static void paint_csd_frame(uint32_t* buf,
-                            int surf_w,
-                            int surf_h,
-                            int content_w,
-                            int content_h,
-                            uint32_t time) noexcept {
-  // Fill entire surface with border color.
-  fill_rect(buf, surf_w, 0, 0, surf_w, surf_h, kColorBorder);
-
-  // Title bar.
-  fill_rect(buf, surf_w, kBorderWidth, kBorderWidth, content_w,
-            kTitleBarHeight - kBorderWidth, kColorTitleBar);
-
-  // Close button (top-right of title bar).
-  const int btn_y =
-      kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
-  int btn_x = kBorderWidth + content_w - kButtonPadding - kButtonSize;
-  fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize,
-            kColorCloseBtn);
-
-  // Maximize button.
-  btn_x -= (kButtonSize + kButtonPadding);
-  fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize, kColorMaxBtn);
-
-  // Minimize button.
-  btn_x -= (kButtonSize + kButtonPadding);
-  fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize, kColorMinBtn);
-
-  // Content area — animated ring pattern.
-  uint32_t* content_start = buf + kTitleBarHeight * surf_w + kBorderWidth;
-  paint_content(content_start, content_w, content_h, surf_w, time);
-}
-
-/// Paint the content area only (no decorations — SSD mode).
-static void paint_ssd_frame(uint32_t* buf,
-                            int width,
-                            int height,
-                            uint32_t time) noexcept {
-  paint_content(buf, width, height, width, time);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -486,8 +382,17 @@ static void paint_ssd_frame(uint32_t* buf,
 
 class App {
  public:
-  App(int content_w, int content_h, const char* title)
-      : content_w_(content_w), content_h_(content_h), title_(title) {}
+  App(int content_w,
+      int content_h,
+      const char* title,
+      std::unique_ptr<CsdPlugin> plugin)
+      : content_w_(content_w),
+        content_h_(content_h),
+        title_(title),
+        csd_plugin_(std::move(plugin)) {
+    if (csd_plugin_)
+      csd_plugin_->SetTitle(title);
+  }
   ~App();
 
   int Run();
@@ -521,12 +426,17 @@ class App {
   bool use_csd_ = true;  // default to CSD if no decoration manager
   bool maximized_ = false;
 
+  // ── CSD plugin (fallback or GTK-themed) ───────────────────────────────
+  std::unique_ptr<CsdPlugin> csd_plugin_;
+
   // ── Computed surface dimensions ───────────────────────────────────────────
   [[nodiscard]] int SurfaceWidth() const noexcept {
-    return use_csd_ ? content_w_ + 2 * kBorderWidth : content_w_;
+    return use_csd_ && csd_plugin_ ? csd_plugin_->SurfaceWidth(content_w_)
+                                   : content_w_;
   }
   [[nodiscard]] int SurfaceHeight() const noexcept {
-    return use_csd_ ? content_h_ + kTitleBarHeight + kBorderWidth : content_h_;
+    return use_csd_ && csd_plugin_ ? csd_plugin_->SurfaceHeight(content_h_)
+                                   : content_h_;
   }
 
   // ── Hit testing ───────────────────────────────────────────────────────────
@@ -848,56 +758,11 @@ bool App::CreateBuffers() {
 // ── Hit testing ─────────────────────────────────────────────────────────────
 
 HitZone App::HitTest(int x, int y) const noexcept {
-  if (!use_csd_)
+  if (!use_csd_ || !csd_plugin_)
     return HitZone::Content;
 
-  const int sw = SurfaceWidth();
-  const int sh = SurfaceHeight();
-
-  // Outside surface bounds.
-  if (x < 0 || y < 0 || x >= sw || y >= sh)
-    return HitZone::None;
-
-  // Corner resize zones (border × border squares at corners).
-  if (x < kBorderWidth && y < kBorderWidth)
-    return HitZone::ResizeTopLeft;
-  if (x >= sw - kBorderWidth && y < kBorderWidth)
-    return HitZone::ResizeTopRight;
-  if (x < kBorderWidth && y >= sh - kBorderWidth)
-    return HitZone::ResizeBottomLeft;
-  if (x >= sw - kBorderWidth && y >= sh - kBorderWidth)
-    return HitZone::ResizeBottomRight;
-
-  // Edge resize zones.
-  if (y < kBorderWidth)
-    return HitZone::ResizeTop;
-  if (y >= sh - kBorderWidth)
-    return HitZone::ResizeBottom;
-  if (x < kBorderWidth)
-    return HitZone::ResizeLeft;
-  if (x >= sw - kBorderWidth)
-    return HitZone::ResizeRight;
-
-  // Title bar region.
-  if (y < kTitleBarHeight) {
-    // Check buttons (right-aligned in title bar).
-    const int btn_y =
-        kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
-    if (y >= btn_y && y < btn_y + kButtonSize) {
-      int btn_x = kBorderWidth + content_w_ - kButtonPadding - kButtonSize;
-      if (x >= btn_x && x < btn_x + kButtonSize)
-        return HitZone::CloseButton;
-      btn_x -= (kButtonSize + kButtonPadding);
-      if (x >= btn_x && x < btn_x + kButtonSize)
-        return HitZone::MaximizeButton;
-      btn_x -= (kButtonSize + kButtonPadding);
-      if (x >= btn_x && x < btn_x + kButtonSize)
-        return HitZone::MinimizeButton;
-    }
-    return HitZone::TitleBar;
-  }
-
-  return HitZone::Content;
+  return csd_plugin_->HitTest(x, y, SurfaceWidth(), SurfaceHeight(),
+                              content_w_, content_h_);
 }
 
 // ── Callback implementations ────────────────────────────────────────────────
@@ -911,9 +776,10 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) {
   if (width > 0 && height > 0) {
     // The compositor provides the total window size.
     // In CSD mode, subtract decoration space to get the content area.
-    if (use_csd_) {
-      content_w_ = width - 2 * kBorderWidth;
-      content_h_ = height - kTitleBarHeight - kBorderWidth;
+    if (use_csd_ && csd_plugin_) {
+      content_w_ = width - 2 * csd_plugin_->BorderWidth();
+      content_h_ = height - csd_plugin_->TitleBarHeight() -
+                   csd_plugin_->BorderWidth();
     } else {
       content_w_ = width;
       content_h_ = height;
@@ -1017,7 +883,7 @@ void App::OnPointerButton(uint32_t serial,
 
     default: {
       // Resize zones.
-      const uint32_t edge = hit_zone_to_resize_edge(zone);
+      const uint32_t edge = wl::csd::HitZoneToResizeEdge(zone);
       if (edge != 0 && !seat_handler_.IsNull()) {
         xdg_toplevel_.Get()->Resize(seat_handler_.Get()->GetProxy(), serial,
                                     edge);
@@ -1073,15 +939,16 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
 
   auto* pixels = static_cast<uint32_t*>(pool_.PixelData(idx));
 
-  if (use_csd_) {
-    paint_csd_frame(pixels, sw, sh, content_w_, content_h_, time_ms);
+  if (use_csd_ && csd_plugin_) {
+    csd_plugin_->RenderFrame(pixels, sw, sh, content_w_, content_h_, time_ms);
   } else {
     paint_ssd_frame(pixels, sw, sh, time_ms);
   }
 
   // Set window geometry to exclude decoration area.
-  if (use_csd_) {
-    xdg_surface_.Get()->SetWindowGeometry(kBorderWidth, kTitleBarHeight,
+  if (use_csd_ && csd_plugin_) {
+    xdg_surface_.Get()->SetWindowGeometry(csd_plugin_->BorderWidth(),
+                                          csd_plugin_->TitleBarHeight(),
                                           content_w_, content_h_);
   }
 
@@ -1173,7 +1040,19 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
-  App app{content_w, content_h, title};
+  // Create CSD plugin — GTK-themed if built with GTK support, fallback
+  // otherwise.  Follows the libdecor plugin selection pattern: prefer
+  // the richer plugin when available, degrade gracefully otherwise.
+  std::unique_ptr<CsdPlugin> plugin;
+#ifdef USE_GTK_CSD
+  plugin = std::make_unique<wl::csd::GtkCsdPlugin>();
+  std::fprintf(stderr, "xdg-csd: using GTK CSD plugin\n");
+#else
+  plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
+  std::fprintf(stderr, "xdg-csd: using fallback CSD plugin\n");
+#endif
+
+  App app{content_w, content_h, title, std::move(plugin)};
   return app.Run();
 }
 

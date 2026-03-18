@@ -5,8 +5,11 @@
 #
 # Demonstrates the zxdg_decoration_manager_v1 protocol for negotiating
 # CSD vs SSD with the compositor, and renders client-side decorations
-# (title bar with window buttons, resize borders) using wl_shm when the
-# compositor selects client-side mode.
+# (title bar with window buttons, resize borders) using a CSD plugin.
+#
+# Plugin selection follows the libdecor pattern:
+#   • If GTK 3 is found → GTK-themed CSD plugin (Cairo + Pango rendering)
+#   • Otherwise         → fallback flat-colour CSD plugin
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 
@@ -17,6 +20,10 @@ xkbcommon_dep  = dependency('xkbcommon',         required: false)
 if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found())
     subdir_done()
 endif
+
+# ── Optional GTK 3 detection ─────────────────────────────────────────────────
+
+gtk_dep = dependency('gtk+-3.0', required: false)
 
 # ── Locate system protocol XMLs ───────────────────────────────────────────────
 
@@ -52,17 +59,33 @@ xdg_decoration_client_hdr = custom_target(
 framework_inc = include_directories('../../include')
 generated_inc = include_directories('.')
 
+# ── Build sources and flags ───────────────────────────────────────────────────
+
+xdg_csd_sources = [
+    'main.cpp',
+    wayland_client_hdr,
+    xdg_shell_client_hdr,
+    xdg_decoration_client_hdr,
+]
+
+xdg_csd_deps = [wayland_client_dep, xkbcommon_dep]
+xdg_csd_args = ['-Wno-unused-parameter']
+
+if gtk_dep.found()
+    xdg_csd_sources += 'csd_gtk.cpp'
+    xdg_csd_deps    += gtk_dep
+    xdg_csd_args    += '-DUSE_GTK_CSD'
+    message('xdg-csd: GTK 3 found → building with GTK CSD plugin')
+else
+    message('xdg-csd: GTK 3 not found → building with fallback CSD plugin')
+endif
+
 # ── Executable ────────────────────────────────────────────────────────────────
 
 executable(
     'xdg_csd',
-    sources: [
-        'main.cpp',
-        wayland_client_hdr,
-        xdg_shell_client_hdr,
-        xdg_decoration_client_hdr,
-    ],
+    sources:            xdg_csd_sources,
     include_directories: [framework_inc, generated_inc],
-    dependencies: [wayland_client_dep, xkbcommon_dep],
-    cpp_args: ['-Wno-unused-parameter'],
+    dependencies:       xdg_csd_deps,
+    cpp_args:           xdg_csd_args,
 )
