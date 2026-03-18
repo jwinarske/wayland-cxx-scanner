@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
-option('tests',    type: 'boolean', value: false, description: 'Build and run unit/integration tests')
-option('examples', type: 'boolean', value: false, description: 'Build example applications')
-option('docs',     type: 'boolean', value: false, description: 'Generate Doxygen HTML documentation')
+option('tests',           type: 'boolean', value: false, description: 'Build and run unit/integration tests')
+option('examples',        type: 'boolean', value: false, description: 'Build example applications')
+option('vulkan_examples', type: 'boolean', value: false, description: 'Build Vulkan-based examples (requires vulkan, wayland-protocols with linux-dmabuf, libdrm)')
+option('docs',            type: 'boolean', value: false, description: 'Generate Doxygen HTML documentation')
