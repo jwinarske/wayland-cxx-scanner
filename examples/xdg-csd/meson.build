@@ -7,9 +7,10 @@
 # CSD vs SSD with the compositor, and renders client-side decorations
 # (title bar with window buttons, resize borders) using a CSD plugin.
 #
-# Plugin selection follows the libdecor pattern:
-#   • If GTK 3 is found → GTK-themed CSD plugin (Cairo + Pango rendering)
-#   • Otherwise         → fallback flat-colour CSD plugin
+# Plugin selection follows the libdecor pattern (highest-fidelity wins):
+#   • If GTK 3 is found  → GTK-themed CSD plugin (GTK + Cairo + Pango)
+#   • Elif Cairo is found → Cairo CSD plugin (Cairo + Pango, libdecor style)
+#   • Otherwise           → fallback flat-colour CSD plugin (no deps)
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 
@@ -21,9 +22,11 @@ if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found())
     subdir_done()
 endif
 
-# ── Optional GTK 3 detection ─────────────────────────────────────────────────
+# ── Optional plugin dependency detection ─────────────────────────────────────
 
-gtk_dep = dependency('gtk+-3.0', required: false)
+gtk_dep       = dependency('gtk+-3.0',   required: false)
+cairo_dep     = dependency('cairo',      required: false)
+pangocairo_dep = dependency('pangocairo', required: false)
 
 # ── Locate system protocol XMLs ───────────────────────────────────────────────
 
@@ -76,8 +79,13 @@ if gtk_dep.found()
     xdg_csd_deps    += gtk_dep
     xdg_csd_args    += '-DUSE_GTK_CSD'
     message('xdg-csd: GTK 3 found → building with GTK CSD plugin')
+elif cairo_dep.found() and pangocairo_dep.found()
+    xdg_csd_sources += 'csd_cairo.cpp'
+    xdg_csd_deps    += [cairo_dep, pangocairo_dep]
+    xdg_csd_args    += '-DUSE_CAIRO_CSD'
+    message('xdg-csd: Cairo + Pango found → building with Cairo CSD plugin')
 else
-    message('xdg-csd: GTK 3 not found → building with fallback CSD plugin')
+    message('xdg-csd: no Cairo/GTK → building with fallback CSD plugin')
 endif
 
 # ── Executable ────────────────────────────────────────────────────────────────

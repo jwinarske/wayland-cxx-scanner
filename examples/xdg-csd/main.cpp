@@ -45,6 +45,8 @@
 #include <wl/csd_plugin.hpp>
 #ifdef USE_GTK_CSD
 #include <wl/csd_gtk.hpp>
+#elif defined(USE_CAIRO_CSD)
+#include <wl/csd_cairo.hpp>
 #else
 #include <wl/csd_fallback.hpp>
 #endif
@@ -1040,13 +1042,17 @@ int main(int argc, char* argv[]) {
     return EXIT_FAILURE;
   }
 
-  // Create CSD plugin — GTK-themed if built with GTK support, fallback
-  // otherwise.  Follows the libdecor plugin selection pattern: prefer
-  // the richer plugin when available, degrade gracefully otherwise.
+  // Create CSD plugin — highest-fidelity available at build time.
+  // Follows the libdecor plugin selection pattern: prefer the richer
+  // plugin when available, degrade gracefully otherwise.
+  //   GTK > Cairo > Fallback
   std::unique_ptr<CsdPlugin> plugin;
 #ifdef USE_GTK_CSD
   plugin = std::make_unique<wl::csd::GtkCsdPlugin>();
   std::fprintf(stderr, "xdg-csd: using GTK CSD plugin\n");
+#elif defined(USE_CAIRO_CSD)
+  plugin = std::make_unique<wl::csd::CairoCsdPlugin>();
+  std::fprintf(stderr, "xdg-csd: using Cairo CSD plugin\n");
 #else
   plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
   std::fprintf(stderr, "xdg-csd: using fallback CSD plugin\n");

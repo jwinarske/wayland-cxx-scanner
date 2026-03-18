@@ -29,6 +29,8 @@ pugixml_dep        = dependency('pugixml',
 
 install_headers(
     'include/wl/client_helpers.hpp',
+    'include/wl/csd_cairo.hpp',
+    'include/wl/csd_common.hpp',
     'include/wl/csd_fallback.hpp',
     'include/wl/csd_gtk.hpp',
     'include/wl/csd_plugin.hpp',
