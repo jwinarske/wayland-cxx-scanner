@@ -385,9 +385,17 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Paint an animated ring pattern into a content region (XRGB8888).
+/// @param pixels  Pointer to the first pixel of the content area.
+/// @param width   Content width in pixels.
+/// @param height  Content height in pixels.
+/// @param stride  Row stride of the target buffer in pixels (may be larger
+///                than @p width when painting into a sub-region of a bigger
+///                surface buffer).
+/// @param time    Animation time in milliseconds.
 static void paint_content(uint32_t* pixels,
                           int width,
                           int height,
+                          int stride,
                           uint32_t time) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
@@ -410,7 +418,7 @@ static void paint_content(uint32_t* pixels,
       v &= 0x00FFFFFFu;
       if (std::abs(x - y) > 6 && std::abs(x + y - height) > 6)
         v |= 0xFF000000u;
-      pixels[y * width + x] = v;
+      pixels[y * stride + x] = v;
     }
   }
 }
@@ -458,32 +466,7 @@ static void paint_csd_frame(uint32_t* buf,
   // Content area — animated ring pattern.
   uint32_t* content_start =
       buf + kTitleBarHeight * surf_w + kBorderWidth;
-  // Paint row-by-row into the content sub-rectangle of the buffer.
-  // We use a temporary contiguous buffer then copy rows, or paint directly.
-  for (int y = 0; y < content_h; ++y) {
-    uint32_t* row = content_start + y * surf_w;
-    const int halfh = content_h / 2;
-    const int halfw = content_w / 2;
-    int outer_r = (halfw < halfh ? halfw : halfh) - 8;
-    const int inner_r = outer_r - 32;
-    outer_r *= outer_r;
-    const int inner_r2 = inner_r * inner_r;
-    const int y2 = (y - halfh) * (y - halfh);
-    for (int x = 0; x < content_w; ++x) {
-      uint32_t v;
-      const int r2 = (x - halfw) * (x - halfw) + y2;
-      if (r2 < inner_r2)
-        v = (static_cast<uint32_t>(r2 / 32) + time / 64) * 0x0080401u;
-      else if (r2 < outer_r)
-        v = (static_cast<uint32_t>(y) + time / 32) * 0x0080401u;
-      else
-        v = (static_cast<uint32_t>(x) + time / 16) * 0x0080401u;
-      v &= 0x00FFFFFFu;
-      if (std::abs(x - y) > 6 && std::abs(x + y - content_h) > 6)
-        v |= 0xFF000000u;
-      row[x] = v;
-    }
-  }
+  paint_content(content_start, content_w, content_h, surf_w, time);
 }
 
 /// Paint the content area only (no decorations — SSD mode).
@@ -491,7 +474,7 @@ static void paint_ssd_frame(uint32_t* buf,
                             int width,
                             int height,
                             uint32_t time) noexcept {
-  paint_content(buf, width, height, time);
+  paint_content(buf, width, height, width, time);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
