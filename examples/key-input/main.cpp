@@ -380,7 +380,6 @@ class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
 struct ShmBuffer {
   wl::WlPtr<WlBufferHandler> buf;
   uint8_t* pixels = nullptr;
-  bool busy = false;
 };
 
 struct ShmState {
@@ -400,8 +399,6 @@ struct ShmState {
     bufs[1].buf.Reset();
     bufs[0].pixels = nullptr;
     bufs[1].pixels = nullptr;
-    bufs[0].busy = false;
-    bufs[1].busy = false;
     if (data != MAP_FAILED) {
       munmap(data, total);
       data = MAP_FAILED;
@@ -415,9 +412,9 @@ struct ShmState {
 
   /// Returns index of a non-busy buffer, or -1 when both are in use.
   [[nodiscard]] int NextFree() const noexcept {
-    if (!bufs[0].busy)
+    if (!bufs[0].buf.IsNull() && !bufs[0].buf.Get()->busy)
       return 0;
-    if (!bufs[1].busy)
+    if (!bufs[1].buf.IsNull() && !bufs[1].buf.Get()->busy)
       return 1;
     return -1;
   }
@@ -1016,7 +1013,7 @@ void App::Redraw() noexcept {
   surface_.Get()->Attach(shm_state_.bufs[idx].buf.Get()->GetProxy(), 0, 0);
   surface_.Get()->Damage(0, 0, width_, height_);
   surface_.Get()->Commit();
-  shm_state_.bufs[idx].busy = true;
+  shm_state_.bufs[idx].buf.Get()->busy = true;
 }
 
 // ── App callbacks
