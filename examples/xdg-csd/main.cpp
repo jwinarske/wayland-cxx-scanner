@@ -1,0 +1,1197 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 wayland-cxx-scanner contributors
+//
+// xdg-csd — Client-Side Decoration example
+//
+// Demonstrates the zxdg_decoration_manager_v1 protocol for negotiating
+// CSD vs SSD with the compositor, and renders client-side decorations
+// (title bar with close/maximize/minimize buttons, resize borders)
+// using wl_shm when the compositor selects client-side mode.
+//
+// This example provides equivalent functionality to libdecor's core
+// decoration features:
+//   • Decoration mode negotiation via xdg-decoration-unstable-v1
+//   • Title bar rendering with window control buttons
+//   • Resize borders around the window
+//   • Interactive move (click title bar), resize (click border),
+//     and close (click close button) via pointer events
+//   • Proper xdg_surface.set_window_geometry to exclude decorations
+//
+// Usage:
+//   xdg_csd [-w WIDTH] [-h HEIGHT] [-t TITLE]
+
+// clang-tidy: suppress diagnostics common to Wayland C-API boundary code.
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables,
+//             cppcoreguidelines-pro-bounds-pointer-arithmetic,
+//             cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+//             cppcoreguidelines-pro-bounds-constant-array-index,
+//             cppcoreguidelines-pro-type-reinterpret-cast)
+
+// ── Generated C++ protocol headers ───────────────────────────────────────────
+#include "wayland_client.hpp"                        // namespace wayland::client
+#include "xdg_decoration_unstable_v1_client.hpp"     // namespace xdg_decoration_unstable_v1::client
+#include "xdg_shell_client.hpp"                      // namespace xdg_shell::client
+
+// ── Framework headers ────────────────────────────────────────────────────────
+#include <wl/client_helpers.hpp>
+#include <wl/display.hpp>
+#include <wl/raii.hpp>
+#include <wl/registry.hpp>
+#include <wl/seat.hpp>
+#include <wl/wl_ptr.hpp>
+#include <wl/xdg_decoration.hpp>
+#include <wl/xdg_shell.hpp>
+
+// ── System Wayland C headers ─────────────────────────────────────────────────
+extern "C" {
+#include <linux/input-event-codes.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <wayland-client-protocol.h>
+#include <wayland-util.h>
+}
+
+// ── Standard library ─────────────────────────────────────────────────────────
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cmath>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string_view>
+
+// ══════════════════════════════════════════════════════════════════════════════
+// wl_iface() — core Wayland interfaces
+//
+// wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
+// inline by <wl/seat.hpp>.
+// All xdg_shell traits are provided inline by <wl/xdg_shell.hpp>.
+// All xdg_decoration traits are provided inline by <wl/xdg_decoration.hpp>.
+// ══════════════════════════════════════════════════════════════════════════════
+
+namespace wayland::client {
+
+const wl_interface& wl_callback_traits::wl_iface() noexcept {
+  return wl_callback_interface;
+}
+const wl_interface& wl_compositor_traits::wl_iface() noexcept {
+  return wl_compositor_interface;
+}
+const wl_interface& wl_surface_traits::wl_iface() noexcept {
+  return wl_surface_interface;
+}
+const wl_interface& wl_shm_pool_traits::wl_iface() noexcept {
+  return wl_shm_pool_interface;
+}
+const wl_interface& wl_shm_traits::wl_iface() noexcept {
+  return wl_shm_interface;
+}
+const wl_interface& wl_buffer_traits::wl_iface() noexcept {
+  return wl_buffer_interface;
+}
+const wl_interface& wl_pointer_traits::wl_iface() noexcept {
+  return wl_pointer_interface;
+}
+
+}  // namespace wayland::client
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CSD layout constants
+// ══════════════════════════════════════════════════════════════════════════════
+
+static constexpr int kBorderWidth = 4;
+static constexpr int kTitleBarHeight = 30;
+static constexpr int kButtonSize = 18;
+static constexpr int kButtonPadding = 6;
+
+// Button colors (ARGB8888).
+static constexpr uint32_t kColorTitleBar = 0xFF3C3C3C;
+static constexpr uint32_t kColorBorder = 0xFF505050;
+static constexpr uint32_t kColorCloseBtn = 0xFFE04040;
+static constexpr uint32_t kColorMaxBtn = 0xFF40A040;
+static constexpr uint32_t kColorMinBtn = 0xFFD0A020;
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CSD hit-test zones
+// ══════════════════════════════════════════════════════════════════════════════
+
+enum class HitZone {
+  None,
+  TitleBar,
+  CloseButton,
+  MaximizeButton,
+  MinimizeButton,
+  ResizeTop,
+  ResizeBottom,
+  ResizeLeft,
+  ResizeRight,
+  ResizeTopLeft,
+  ResizeTopRight,
+  ResizeBottomLeft,
+  ResizeBottomRight,
+  Content,
+};
+
+/// Map a HitZone to the xdg_toplevel resize_edge value (0 means not a resize).
+static uint32_t hit_zone_to_resize_edge(HitZone zone) noexcept {
+  // Values from xdg_toplevel_resize_edge enum.
+  switch (zone) {
+    case HitZone::ResizeTop:
+      return 1;
+    case HitZone::ResizeBottom:
+      return 2;
+    case HitZone::ResizeLeft:
+      return 4;
+    case HitZone::ResizeRight:
+      return 8;
+    case HitZone::ResizeTopLeft:
+      return 5;
+    case HitZone::ResizeTopRight:
+      return 9;
+    case HitZone::ResizeBottomLeft:
+      return 6;
+    case HitZone::ResizeBottomRight:
+      return 10;
+    default:
+      return 0;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Shared-memory helper
+// ══════════════════════════════════════════════════════════════════════════════
+
+struct ShmMapping {
+  int fd = -1;
+  void* data = MAP_FAILED;
+  std::size_t size = 0;
+
+  ShmMapping() = default;
+  ~ShmMapping() noexcept { Reset(); }
+  ShmMapping(const ShmMapping&) = delete;
+  ShmMapping& operator=(const ShmMapping&) = delete;
+
+  [[nodiscard]] bool Create(std::size_t n) noexcept {
+    fd = memfd_create("xdg-csd", 0);
+    if (fd < 0)
+      return false;
+    if (ftruncate(fd, static_cast<off_t>(n)) < 0)
+      return false;
+    data = mmap(nullptr, n, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (data == MAP_FAILED)
+      return false;
+    size = n;
+    return true;
+  }
+
+  void Reset() noexcept {
+    if (data != MAP_FAILED) {
+      munmap(data, size);
+      data = MAP_FAILED;
+    }
+    if (fd >= 0) {
+      close(fd);
+      fd = -1;
+    }
+    size = 0;
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CRTP handler classes
+// ══════════════════════════════════════════════════════════════════════════════
+
+class App;
+
+// ── WlCompositorHandler ─────────────────────────────────────────────────────
+
+class WlCompositorHandler
+    : public wayland::client::CWlCompositor<WlCompositorHandler> {
+ public:
+  bool ProcessEvent(uint32_t, void**) override { return false; }
+};
+
+// ── WlShmPoolHandler ────────────────────────────────────────────────────────
+
+class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
+ public:
+  bool ProcessEvent(uint32_t, void**) override { return false; }
+};
+
+// ── WlShmHandler ────────────────────────────────────────────────────────────
+
+class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {
+ public:
+  uint32_t formats = 0;
+  void OnFormat(uint32_t fmt) override {
+    if (fmt < 32u)
+      formats |= (1u << fmt);
+  }
+};
+
+// ── WlBufferHandler ─────────────────────────────────────────────────────────
+
+class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
+ public:
+  bool busy = false;
+  void OnRelease() override { busy = false; }
+};
+
+// ── WlSurfaceHandler ────────────────────────────────────────────────────────
+
+class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
+};
+
+// ── WlCallbackHandler ───────────────────────────────────────────────────────
+
+class WlCallbackHandler
+    : public wayland::client::CWlCallback<WlCallbackHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnDone(uint32_t time_ms) override;
+};
+
+// ── WlPointerHandler ────────────────────────────────────────────────────────
+
+class WlPointerHandler
+    : public wayland::client::CWlPointer<WlPointerHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnEnter(uint32_t serial, wl_proxy* surface, wl_fixed_t sx,
+               wl_fixed_t sy) override;
+  void OnLeave(uint32_t serial, wl_proxy* surface) override;
+  void OnMotion(uint32_t time, wl_fixed_t sx, wl_fixed_t sy) override;
+  void OnButton(uint32_t serial, uint32_t time, uint32_t button,
+                uint32_t state) override;
+  void OnAxis(uint32_t, uint32_t, wl_fixed_t) override {}
+  void OnFrame() override {}
+  void OnAxisSource(uint32_t) override {}
+  void OnAxisStop(uint32_t, uint32_t) override {}
+  void OnAxisDiscrete(uint32_t, int32_t) override {}
+  void OnAxisValue120(uint32_t, int32_t) override {}
+  void OnAxisRelativeDirection(uint32_t, uint32_t) override {}
+};
+
+// ── XDG shell handlers provided by <wl/xdg_shell.hpp> ──────────────────────
+//   wl::XdgWmBaseHandler        — responds to ping automatically
+//   wl::XdgSurfaceHandler<App>  — acks configure, calls OnXdgSurfaceConfigure
+//   wl::XdgToplevelHandler<App> — delegates configure/close to App
+
+// ── XDG decoration handlers provided by <wl/xdg_decoration.hpp> ─────────────
+//   wl::XdgDecorationManagerHandler — event-less ProcessEvent stub
+//   wl::XdgDecorationHandler<App>   — delegates configure to App
+
+// ── Seat handler (custom — manages both keyboard and pointer) ───────────────
+
+class SeatHandler : public wayland::client::CWlSeat<SeatHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnCapabilities(uint32_t caps) override;
+  void OnName(const char*) override {}
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Buffer pool — pre-allocates 2 double-buffered wl_shm buffers
+// ══════════════════════════════════════════════════════════════════════════════
+
+static constexpr int kNumBuffers = 2;
+
+struct BufferPool {
+  ShmMapping mem;
+  std::array<wl::WlPtr<WlBufferHandler>, static_cast<std::size_t>(kNumBuffers)>
+      bufs;
+  int next = 0;
+  int width = 0;
+  int height = 0;
+
+  [[nodiscard]] bool Create(int w, int h, wl_proxy* shm_raw) noexcept;
+
+  void Recreate(int w, int h, wl_proxy* shm_raw) noexcept {
+    for (auto& b : bufs)
+      b.Reset();
+    mem.Reset();
+    next = 0;
+    static_cast<void>(Create(w, h, shm_raw));
+  }
+
+  [[nodiscard]] void* PixelData(int i) const noexcept {
+    const std::size_t stride = static_cast<std::size_t>(width) * 4u;
+    return static_cast<uint8_t*>(mem.data) +
+           static_cast<std::size_t>(i) * stride *
+               static_cast<std::size_t>(height);
+  }
+
+  [[nodiscard]] int NextFree() noexcept {
+    for (int attempt = 0; attempt < kNumBuffers; ++attempt) {
+      const int idx = (next + attempt) % kNumBuffers;
+      if (!bufs.at(static_cast<std::size_t>(idx)).Get()->busy) {
+        next = (idx + 1) % kNumBuffers;
+        return idx;
+      }
+    }
+    return -1;
+  }
+};
+
+bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
+  using namespace wayland::client;
+  width = w;
+  height = h;
+
+  const std::size_t stride = static_cast<std::size_t>(w) * 4u;
+  const std::size_t per_buf = stride * static_cast<std::size_t>(h);
+  const std::size_t total = per_buf * static_cast<std::size_t>(kNumBuffers);
+
+  if (!mem.Create(total)) {
+    std::fprintf(stderr, "xdg-csd: SHM allocation failed\n");
+    return false;
+  }
+
+  wl::WlPtr<WlShmPoolHandler> pool;
+  {
+    wl_shm_pool* raw_pool =
+        wl_shm_create_pool(reinterpret_cast<wl_shm*>(shm_raw), mem.fd,
+                           static_cast<int>(total));
+    if (!raw_pool) {
+      std::fprintf(stderr, "xdg-csd: wl_shm_create_pool failed\n");
+      return false;
+    }
+    pool.Attach(reinterpret_cast<wl_proxy*>(raw_pool));
+  }
+
+  for (int i = 0; i < kNumBuffers; ++i) {
+    const auto offset =
+        static_cast<int32_t>(static_cast<std::size_t>(i) * per_buf);
+    if (wl_proxy* raw = wl::construct<wl_buffer_traits,
+                                      wl_shm_pool_traits::Op::CreateBuffer>(
+            *pool.Get(), offset, w, h, static_cast<int32_t>(stride),
+            WL_SHM_FORMAT_XRGB8888)) {
+      bufs.at(static_cast<std::size_t>(i)).Get()->_SetProxy(raw);
+    } else {
+      std::fprintf(stderr, "xdg-csd: wl_shm_pool.create_buffer [%d] failed\n",
+                   i);
+      return false;
+    }
+  }
+
+  pool.Reset();
+  return true;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Pixel painting
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Paint an animated ring pattern into a content region (XRGB8888).
+static void paint_content(uint32_t* pixels,
+                          int width,
+                          int height,
+                          uint32_t time) noexcept {
+  const int halfh = height / 2;
+  const int halfw = width / 2;
+  int outer_r = (halfw < halfh ? halfw : halfh) - 8;
+  const int inner_r = outer_r - 32;
+  outer_r *= outer_r;
+  const int inner_r2 = inner_r * inner_r;
+
+  for (int y = 0; y < height; ++y) {
+    const int y2 = (y - halfh) * (y - halfh);
+    for (int x = 0; x < width; ++x) {
+      uint32_t v;
+      const int r2 = (x - halfw) * (x - halfw) + y2;
+      if (r2 < inner_r2)
+        v = (static_cast<uint32_t>(r2 / 32) + time / 64) * 0x0080401u;
+      else if (r2 < outer_r)
+        v = (static_cast<uint32_t>(y) + time / 32) * 0x0080401u;
+      else
+        v = (static_cast<uint32_t>(x) + time / 16) * 0x0080401u;
+      v &= 0x00FFFFFFu;
+      if (std::abs(x - y) > 6 && std::abs(x + y - height) > 6)
+        v |= 0xFF000000u;
+      pixels[y * width + x] = v;
+    }
+  }
+}
+
+/// Fill a rectangular region of the buffer with a solid color.
+static void fill_rect(uint32_t* buf,
+                      int buf_w,
+                      int x,
+                      int y,
+                      int w,
+                      int h,
+                      uint32_t color) noexcept {
+  for (int row = y; row < y + h; ++row)
+    for (int col = x; col < x + w; ++col)
+      buf[row * buf_w + col] = color;
+}
+
+/// Render full CSD frame: borders, title bar with buttons, and content area.
+static void paint_csd_frame(uint32_t* buf,
+                            int surf_w,
+                            int surf_h,
+                            int content_w,
+                            int content_h,
+                            uint32_t time) noexcept {
+  // Fill entire surface with border color.
+  fill_rect(buf, surf_w, 0, 0, surf_w, surf_h, kColorBorder);
+
+  // Title bar.
+  fill_rect(buf, surf_w, kBorderWidth, kBorderWidth,
+            content_w, kTitleBarHeight - kBorderWidth, kColorTitleBar);
+
+  // Close button (top-right of title bar).
+  const int btn_y = kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
+  int btn_x = kBorderWidth + content_w - kButtonPadding - kButtonSize;
+  fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize, kColorCloseBtn);
+
+  // Maximize button.
+  btn_x -= (kButtonSize + kButtonPadding);
+  fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize, kColorMaxBtn);
+
+  // Minimize button.
+  btn_x -= (kButtonSize + kButtonPadding);
+  fill_rect(buf, surf_w, btn_x, btn_y, kButtonSize, kButtonSize, kColorMinBtn);
+
+  // Content area — animated ring pattern.
+  uint32_t* content_start =
+      buf + kTitleBarHeight * surf_w + kBorderWidth;
+  // Paint row-by-row into the content sub-rectangle of the buffer.
+  // We use a temporary contiguous buffer then copy rows, or paint directly.
+  for (int y = 0; y < content_h; ++y) {
+    uint32_t* row = content_start + y * surf_w;
+    const int halfh = content_h / 2;
+    const int halfw = content_w / 2;
+    int outer_r = (halfw < halfh ? halfw : halfh) - 8;
+    const int inner_r = outer_r - 32;
+    outer_r *= outer_r;
+    const int inner_r2 = inner_r * inner_r;
+    const int y2 = (y - halfh) * (y - halfh);
+    for (int x = 0; x < content_w; ++x) {
+      uint32_t v;
+      const int r2 = (x - halfw) * (x - halfw) + y2;
+      if (r2 < inner_r2)
+        v = (static_cast<uint32_t>(r2 / 32) + time / 64) * 0x0080401u;
+      else if (r2 < outer_r)
+        v = (static_cast<uint32_t>(y) + time / 32) * 0x0080401u;
+      else
+        v = (static_cast<uint32_t>(x) + time / 16) * 0x0080401u;
+      v &= 0x00FFFFFFu;
+      if (std::abs(x - y) > 6 && std::abs(x + y - content_h) > 6)
+        v |= 0xFF000000u;
+      row[x] = v;
+    }
+  }
+}
+
+/// Paint the content area only (no decorations — SSD mode).
+static void paint_ssd_frame(uint32_t* buf,
+                            int width,
+                            int height,
+                            uint32_t time) noexcept {
+  paint_content(buf, width, height, time);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// App class
+// ══════════════════════════════════════════════════════════════════════════════
+
+class App {
+ public:
+  App(int content_w, int content_h, const char* title)
+      : content_w_(content_w), content_h_(content_h), title_(title) {}
+  ~App();
+
+  int Run();
+
+  // ── Callbacks from CRTP handlers ──────────────────────────────────────────
+  void OnXdgSurfaceConfigure(uint32_t serial);
+  void OnToplevelConfigure(int32_t width, int32_t height);
+  void OnToplevelClose();
+  void OnDecorationConfigure(uint32_t mode);
+  void OnKey(uint32_t key, uint32_t state);
+  void OnFrameDone(uint32_t stamp_ms) noexcept;
+
+  // ── Pointer callbacks ─────────────────────────────────────────────────────
+  void OnPointerEnter(uint32_t serial, wl_fixed_t sx, wl_fixed_t sy) noexcept;
+  void OnPointerLeave() noexcept;
+  void OnPointerMotion(wl_fixed_t sx, wl_fixed_t sy) noexcept;
+  void OnPointerButton(uint32_t serial, uint32_t button,
+                       uint32_t state) noexcept;
+
+  // ── Seat capability callback ──────────────────────────────────────────────
+  void OnSeatCapabilities(uint32_t caps) noexcept;
+
+ private:
+  // ── Configuration ─────────────────────────────────────────────────────────
+  int content_w_;
+  int content_h_;
+  const char* title_;
+
+  // ── Decoration state ──────────────────────────────────────────────────────
+  bool use_csd_ = true;   // default to CSD if no decoration manager
+  bool maximized_ = false;
+
+  // ── Computed surface dimensions ───────────────────────────────────────────
+  [[nodiscard]] int SurfaceWidth() const noexcept {
+    return use_csd_ ? content_w_ + 2 * kBorderWidth : content_w_;
+  }
+  [[nodiscard]] int SurfaceHeight() const noexcept {
+    return use_csd_ ? content_h_ + kTitleBarHeight + kBorderWidth : content_h_;
+  }
+
+  // ── Hit testing ───────────────────────────────────────────────────────────
+  [[nodiscard]] HitZone HitTest(int x, int y) const noexcept;
+
+  // ── Wayland objects ───────────────────────────────────────────────────────
+  wl::DisplayHandle display_;
+  wl::CRegistry registry_;
+
+  wl::WlPtr<WlCompositorHandler> compositor_;
+  wl::WlPtr<WlShmHandler> shm_;
+  wl::WlPtr<wl::XdgWmBaseHandler> xdg_wm_base_;
+
+  // Optional: xdg-decoration.
+  wl::WlPtr<wl::XdgDecorationManagerHandler> decoration_mgr_;
+  wl::WlPtr<wl::XdgDecorationHandler<App>> decoration_;
+
+  // Input: seat + keyboard + pointer.
+  wl::SeatManager<App> seat_;
+  wl::WlPtr<SeatHandler> seat_handler_;
+  wl::WlPtr<WlPointerHandler> pointer_;
+  uint32_t seat_name_ = 0;
+  uint32_t seat_ver_ = 0;
+
+  wl::WlPtr<WlSurfaceHandler> surface_;
+  wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
+  wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
+
+  wl::WlPtr<WlCallbackHandler> frame_cb_;
+  BufferPool pool_;
+
+  // ── Application state ─────────────────────────────────────────────────────
+  bool running_ = true;
+  bool configured_ = false;
+  bool need_redraw_ = true;
+  uint32_t last_time_ = 0;
+
+  // ── Pointer state ─────────────────────────────────────────────────────────
+  int pointer_x_ = 0;
+  int pointer_y_ = 0;
+  uint32_t pointer_serial_ = 0;
+
+  // ── Global IDs from registry scan ─────────────────────────────────────────
+  uint32_t compositor_name_ = 0, compositor_ver_ = 0;
+  uint32_t shm_name_ = 0, shm_ver_ = 0;
+  uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
+  uint32_t decoration_mgr_name_ = 0, decoration_mgr_ver_ = 0;
+
+  // ── Pipeline ──────────────────────────────────────────────────────────────
+  bool ConnectDisplay();
+  bool ScanGlobals();
+  bool BindGlobals();
+  bool CreateWindow();
+  bool CreateBuffers();
+  bool MainLoop();
+
+  void RequestFrameCallback() noexcept;
+  void CommitFrame(uint32_t time_ms) noexcept;
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Handler implementations (need full App definition)
+// ══════════════════════════════════════════════════════════════════════════════
+
+void WlCallbackHandler::OnDone(uint32_t time_ms) {
+  app_->OnFrameDone(time_ms);
+}
+
+void WlPointerHandler::OnEnter(uint32_t serial, wl_proxy* /*surface*/,
+                               wl_fixed_t sx, wl_fixed_t sy) {
+  app_->OnPointerEnter(serial, sx, sy);
+}
+
+void WlPointerHandler::OnLeave(uint32_t /*serial*/, wl_proxy* /*surface*/) {
+  app_->OnPointerLeave();
+}
+
+void WlPointerHandler::OnMotion(uint32_t /*time*/, wl_fixed_t sx,
+                                wl_fixed_t sy) {
+  app_->OnPointerMotion(sx, sy);
+}
+
+void WlPointerHandler::OnButton(uint32_t serial, uint32_t /*time*/,
+                                uint32_t button, uint32_t state) {
+  app_->OnPointerButton(serial, button, state);
+}
+
+void SeatHandler::OnCapabilities(uint32_t caps) {
+  app_->OnSeatCapabilities(caps);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// App method implementations
+// ══════════════════════════════════════════════════════════════════════════════
+
+static volatile std::sig_atomic_t g_running = 1;
+
+int App::Run() {
+  if (!ConnectDisplay())
+    return EXIT_FAILURE;
+  if (!ScanGlobals())
+    return EXIT_FAILURE;
+  if (!BindGlobals())
+    return EXIT_FAILURE;
+  if (!CreateWindow())
+    return EXIT_FAILURE;
+  if (!CreateBuffers())
+    return EXIT_FAILURE;
+  return MainLoop() ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+// ── ConnectDisplay ──────────────────────────────────────────────────────────
+
+bool App::ConnectDisplay() {
+  if (!display_.Connect()) {
+    std::fprintf(stderr, "xdg-csd: wl_display_connect: %s\n",
+                 std::strerror(errno));
+    return false;
+  }
+  return true;
+}
+
+// ── ScanGlobals ─────────────────────────────────────────────────────────────
+
+bool App::ScanGlobals() {
+  if (!registry_.Create(display_.Get())) {
+    std::fprintf(stderr, "xdg-csd: registry creation failed\n");
+    return false;
+  }
+
+  registry_.OnGlobal([this](wl::CRegistry&, uint32_t name,
+                            std::string_view iface, uint32_t ver) {
+    using namespace wayland::client;
+    using namespace xdg_shell::client;
+    using namespace xdg_decoration_unstable_v1::client;
+
+    if (iface == wl_compositor_traits::interface_name) {
+      compositor_name_ = name;
+      compositor_ver_ = ver;
+    } else if (iface == wl_shm_traits::interface_name) {
+      shm_name_ = name;
+      shm_ver_ = ver;
+    } else if (iface == xdg_wm_base_traits::interface_name) {
+      xdg_wm_base_name_ = name;
+      xdg_wm_base_ver_ = ver;
+    } else if (iface == zxdg_decoration_manager_v1_traits::interface_name) {
+      decoration_mgr_name_ = name;
+      decoration_mgr_ver_ = ver;
+    } else if (iface == wl_seat_traits::interface_name) {
+      seat_.Record(name, ver);
+      seat_name_ = name;
+      seat_ver_ = ver;
+    }
+  });
+
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
+    std::fprintf(stderr, "xdg-csd: timed out waiting for globals\n");
+    return false;
+  }
+
+  if (!compositor_name_ || !shm_name_ || !xdg_wm_base_name_) {
+    std::fprintf(stderr, "xdg-csd: required globals not found\n");
+    return false;
+  }
+  return true;
+}
+
+// ── BindGlobals ─────────────────────────────────────────────────────────────
+
+bool App::BindGlobals() {
+  using namespace wayland::client;
+  using namespace xdg_shell::client;
+  using namespace xdg_decoration_unstable_v1::client;
+
+  // wl_compositor — no events.
+  if (wl_proxy* raw = registry_.Bind<wl_compositor_traits>(
+          compositor_name_,
+          std::min(compositor_ver_, wl_compositor_traits::version))) {
+    compositor_.Attach(raw);
+  } else {
+    std::fprintf(stderr, "xdg-csd: wl_compositor bind failed\n");
+    return false;
+  }
+
+  // wl_shm.
+  if (!wl::BindHandler<wl_shm_traits>(registry_, shm_, shm_name_, shm_ver_)) {
+    std::fprintf(stderr, "xdg-csd: wl_shm bind failed\n");
+    return false;
+  }
+
+  // xdg_wm_base.
+  if (!wl::BindHandler<xdg_wm_base_traits>(
+          registry_, xdg_wm_base_, xdg_wm_base_name_, xdg_wm_base_ver_)) {
+    std::fprintf(stderr, "xdg-csd: xdg_wm_base bind failed\n");
+    return false;
+  }
+
+  // zxdg_decoration_manager_v1 — optional.
+  if (decoration_mgr_name_) {
+    if (wl_proxy* raw = registry_.Bind<zxdg_decoration_manager_v1_traits>(
+            decoration_mgr_name_,
+            std::min(decoration_mgr_ver_,
+                     zxdg_decoration_manager_v1_traits::version))) {
+      decoration_mgr_.Attach(raw);
+    }
+  }
+  if (decoration_mgr_.IsNull()) {
+    std::fprintf(stderr,
+                 "xdg-csd: zxdg_decoration_manager_v1 not available — "
+                 "falling back to client-side decorations\n");
+  }
+
+  // wl_seat — binds keyboard via SeatManager, pointer separately.
+  if (!seat_.Bind(registry_, this)) {
+    std::fprintf(stderr, "xdg-csd: wl_seat bind failed\n");
+    return false;
+  }
+
+  // Bind seat separately for pointer management.
+  if (seat_name_) {
+    const uint32_t ver =
+        std::min(seat_ver_, wayland::client::wl_seat_traits::version);
+    if (wl_proxy* raw =
+            registry_.Bind<wl_seat_traits>(seat_name_, ver)) {
+      if (wl::SetupHandler(seat_handler_, raw)) {
+        seat_handler_.Get()->app_ = this;
+      }
+    }
+  }
+
+  // Roundtrip to receive formats and capabilities.
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
+    std::fprintf(stderr, "xdg-csd: timed out waiting for formats\n");
+    return false;
+  }
+
+  constexpr uint32_t kXrgb8888 = 1u;
+  if (!(shm_.Get()->formats & (1u << kXrgb8888))) {
+    std::fprintf(stderr,
+                 "xdg-csd: WL_SHM_FORMAT_XRGB8888 not supported\n");
+    return false;
+  }
+  return true;
+}
+
+// ── CreateWindow ────────────────────────────────────────────────────────────
+
+bool App::CreateWindow() {
+  using namespace wayland::client;
+  using namespace xdg_shell::client;
+  using namespace xdg_decoration_unstable_v1::client;
+
+  // wl_surface.
+  if (wl_proxy* raw = wl::construct<wl_surface_traits,
+                                    wl_compositor_traits::Op::CreateSurface>(
+          *compositor_.Get())) {
+    surface_.Get()->_SetProxy(raw);
+  } else {
+    std::fprintf(stderr, "xdg-csd: wl_compositor.create_surface failed\n");
+    return false;
+  }
+
+  // xdg_surface.
+  if (!wl::SetupHandler(xdg_surface_,
+                        wl::construct<xdg_surface_traits,
+                                      xdg_wm_base_traits::Op::GetXdgSurface>(
+                            *xdg_wm_base_.Get(), surface_.Get()->GetProxy()))) {
+    std::fprintf(stderr,
+                 "xdg-csd: xdg_wm_base.get_xdg_surface failed\n");
+    return false;
+  }
+  xdg_surface_.Get()->app_ = this;
+
+  // xdg_toplevel.
+  if (!wl::SetupHandler(xdg_toplevel_,
+                        wl::construct<xdg_toplevel_traits,
+                                      xdg_surface_traits::Op::GetToplevel>(
+                            *xdg_surface_.Get()))) {
+    std::fprintf(stderr, "xdg-csd: xdg_surface.get_toplevel failed\n");
+    return false;
+  }
+  xdg_toplevel_.Get()->app_ = this;
+  xdg_toplevel_.Get()->SetTitle(title_);
+  xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.xdg-csd");
+
+  // Negotiate decoration mode via zxdg_decoration_manager_v1.
+  if (!decoration_mgr_.IsNull()) {
+    if (wl_proxy* raw =
+            wl::construct<zxdg_toplevel_decoration_v1_traits,
+                          zxdg_decoration_manager_v1_traits::Op::
+                              GetToplevelDecoration>(
+                *decoration_mgr_.Get(),
+                xdg_toplevel_.Get()->GetProxy())) {
+      if (wl::SetupHandler(decoration_, raw)) {
+        decoration_.Get()->app_ = this;
+        // Request client-side decorations.
+        decoration_.Get()->SetMode(static_cast<uint32_t>(
+            ZxdgToplevelDecorationV1Mode::ClientSide));
+      }
+    }
+  }
+
+  // Commit to trigger the configure sequence.
+  surface_.Get()->Commit();
+  if (!wl::RoundtripWithTimeout(display_.Get())) {
+    std::fprintf(stderr, "xdg-csd: timed out waiting for configure\n");
+    return false;
+  }
+
+  return true;
+}
+
+// ── CreateBuffers ───────────────────────────────────────────────────────────
+
+bool App::CreateBuffers() {
+  return pool_.Create(SurfaceWidth(), SurfaceHeight(),
+                      shm_.Get()->GetProxy());
+}
+
+// ── Hit testing ─────────────────────────────────────────────────────────────
+
+HitZone App::HitTest(int x, int y) const noexcept {
+  if (!use_csd_)
+    return HitZone::Content;
+
+  const int sw = SurfaceWidth();
+  const int sh = SurfaceHeight();
+
+  // Outside surface bounds.
+  if (x < 0 || y < 0 || x >= sw || y >= sh)
+    return HitZone::None;
+
+  // Corner resize zones (border × border squares at corners).
+  if (x < kBorderWidth && y < kBorderWidth)
+    return HitZone::ResizeTopLeft;
+  if (x >= sw - kBorderWidth && y < kBorderWidth)
+    return HitZone::ResizeTopRight;
+  if (x < kBorderWidth && y >= sh - kBorderWidth)
+    return HitZone::ResizeBottomLeft;
+  if (x >= sw - kBorderWidth && y >= sh - kBorderWidth)
+    return HitZone::ResizeBottomRight;
+
+  // Edge resize zones.
+  if (y < kBorderWidth)
+    return HitZone::ResizeTop;
+  if (y >= sh - kBorderWidth)
+    return HitZone::ResizeBottom;
+  if (x < kBorderWidth)
+    return HitZone::ResizeLeft;
+  if (x >= sw - kBorderWidth)
+    return HitZone::ResizeRight;
+
+  // Title bar region.
+  if (y < kTitleBarHeight) {
+    // Check buttons (right-aligned in title bar).
+    const int btn_y = kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
+    if (y >= btn_y && y < btn_y + kButtonSize) {
+      int btn_x = kBorderWidth + content_w_ - kButtonPadding - kButtonSize;
+      if (x >= btn_x && x < btn_x + kButtonSize)
+        return HitZone::CloseButton;
+      btn_x -= (kButtonSize + kButtonPadding);
+      if (x >= btn_x && x < btn_x + kButtonSize)
+        return HitZone::MaximizeButton;
+      btn_x -= (kButtonSize + kButtonPadding);
+      if (x >= btn_x && x < btn_x + kButtonSize)
+        return HitZone::MinimizeButton;
+    }
+    return HitZone::TitleBar;
+  }
+
+  return HitZone::Content;
+}
+
+// ── Callback implementations ────────────────────────────────────────────────
+
+void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
+  configured_ = true;
+  need_redraw_ = true;
+}
+
+void App::OnToplevelConfigure(int32_t width, int32_t height) {
+  if (width > 0 && height > 0) {
+    // The compositor provides the total window size.
+    // In CSD mode, subtract decoration space to get the content area.
+    if (use_csd_) {
+      content_w_ = width - 2 * kBorderWidth;
+      content_h_ = height - kTitleBarHeight - kBorderWidth;
+    } else {
+      content_w_ = width;
+      content_h_ = height;
+    }
+    if (content_w_ < 1)
+      content_w_ = 1;
+    if (content_h_ < 1)
+      content_h_ = 1;
+    need_redraw_ = true;
+  }
+}
+
+void App::OnToplevelClose() {
+  running_ = false;
+}
+
+void App::OnDecorationConfigure(uint32_t mode) {
+  const bool was_csd = use_csd_;
+  use_csd_ =
+      (mode == static_cast<uint32_t>(
+                   xdg_decoration_unstable_v1::client::
+                       ZxdgToplevelDecorationV1Mode::ClientSide));
+  if (was_csd != use_csd_) {
+    need_redraw_ = true;
+    std::fprintf(stderr, "xdg-csd: decoration mode → %s\n",
+                 use_csd_ ? "client-side" : "server-side");
+  }
+}
+
+void App::OnKey(const uint32_t key, const uint32_t state) {
+  if (key == KEY_ESC && state == WL_KEYBOARD_KEY_STATE_PRESSED)
+    running_ = false;
+}
+
+void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
+  wl_proxy* const spent = frame_cb_.Detach();
+  const auto guard = wl::ScopeExit{[spent] {
+    if (spent)
+      wl_proxy_destroy(spent);
+  }};
+
+  last_time_ = stamp_ms;
+  RequestFrameCallback();
+  CommitFrame(stamp_ms);
+}
+
+// ── Pointer event implementations ───────────────────────────────────────────
+
+void App::OnPointerEnter(uint32_t serial, wl_fixed_t sx,
+                         wl_fixed_t sy) noexcept {
+  pointer_serial_ = serial;
+  pointer_x_ = wl_fixed_to_int(sx);
+  pointer_y_ = wl_fixed_to_int(sy);
+}
+
+void App::OnPointerLeave() noexcept {
+  pointer_x_ = -1;
+  pointer_y_ = -1;
+}
+
+void App::OnPointerMotion(wl_fixed_t sx, wl_fixed_t sy) noexcept {
+  pointer_x_ = wl_fixed_to_int(sx);
+  pointer_y_ = wl_fixed_to_int(sy);
+}
+
+void App::OnPointerButton(uint32_t serial, uint32_t button,
+                          uint32_t state) noexcept {
+  if (state != WL_POINTER_BUTTON_STATE_PRESSED)
+    return;
+  if (button != BTN_LEFT)
+    return;
+
+  const HitZone zone = HitTest(pointer_x_, pointer_y_);
+
+  switch (zone) {
+    case HitZone::TitleBar:
+      // Interactive move.
+      if (!seat_handler_.IsNull()) {
+        xdg_toplevel_.Get()->Move(seat_handler_.Get()->GetProxy(), serial);
+      }
+      break;
+
+    case HitZone::CloseButton:
+      running_ = false;
+      break;
+
+    case HitZone::MaximizeButton:
+      if (maximized_) {
+        xdg_toplevel_.Get()->UnsetMaximized();
+        maximized_ = false;
+      } else {
+        xdg_toplevel_.Get()->SetMaximized();
+        maximized_ = true;
+      }
+      break;
+
+    case HitZone::MinimizeButton:
+      xdg_toplevel_.Get()->SetMinimized();
+      break;
+
+    default: {
+      // Resize zones.
+      const uint32_t edge = hit_zone_to_resize_edge(zone);
+      if (edge != 0 && !seat_handler_.IsNull()) {
+        xdg_toplevel_.Get()->Resize(seat_handler_.Get()->GetProxy(), serial,
+                                    edge);
+      }
+    } break;
+  }
+}
+
+// ── Seat capability handling ────────────────────────────────────────────────
+
+void App::OnSeatCapabilities(uint32_t caps) noexcept {
+  using namespace wayland::client;
+  const bool has_pointer = (caps & WL_SEAT_CAPABILITY_POINTER) != 0u;
+
+  if (has_pointer && pointer_.IsNull()) {
+    if (wl_proxy* raw =
+            wl::construct<wl_pointer_traits, wl_seat_traits::Op::GetPointer>(
+                *seat_handler_.Get())) {
+      if (wl::SetupHandler(pointer_, raw)) {
+        pointer_.Get()->app_ = this;
+      }
+    }
+  } else if (!has_pointer && !pointer_.IsNull()) {
+    pointer_.Reset();
+  }
+}
+
+// ── Frame commit ────────────────────────────────────────────────────────────
+
+void App::RequestFrameCallback() noexcept {
+  using wl_s = wayland::client::wl_surface_traits;
+  using wl_c = wayland::client::wl_callback_traits;
+  if (wl_proxy* raw = wl::construct<wl_c, wl_s::Op::Frame>(*surface_.Get())) {
+    frame_cb_.Get()->app_ = this;
+    frame_cb_.Get()->_SetProxy(raw);
+  }
+}
+
+void App::CommitFrame(uint32_t time_ms) noexcept {
+  const int sw = SurfaceWidth();
+  const int sh = SurfaceHeight();
+
+  // Recreate buffers if size changed.
+  if (pool_.width != sw || pool_.height != sh) {
+    pool_.Recreate(sw, sh, shm_.Get()->GetProxy());
+  }
+
+  const int idx = pool_.NextFree();
+  if (idx < 0) {
+    std::fprintf(stderr, "xdg-csd: all buffers busy — skipping frame\n");
+    return;
+  }
+
+  auto* pixels = static_cast<uint32_t*>(pool_.PixelData(idx));
+
+  if (use_csd_) {
+    paint_csd_frame(pixels, sw, sh, content_w_, content_h_, time_ms);
+  } else {
+    paint_ssd_frame(pixels, sw, sh, time_ms);
+  }
+
+  // Set window geometry to exclude decoration area.
+  if (use_csd_) {
+    xdg_surface_.Get()->SetWindowGeometry(kBorderWidth, kTitleBarHeight,
+                                          content_w_, content_h_);
+  }
+
+  surface_.Get()->Attach(
+      pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
+  surface_.Get()->Damage(0, 0, sw, sh);
+  surface_.Get()->Commit();
+  pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->busy = true;
+}
+
+// ── MainLoop ────────────────────────────────────────────────────────────────
+
+App::~App() {
+  // Release keyboard before members are destroyed.
+  seat_.Release();
+  // Release pointer.
+  if (!pointer_.IsNull()) {
+    pointer_.Reset();
+  }
+  // Destroy decoration before toplevel (protocol requirement).
+  decoration_.Reset();
+}
+
+bool App::MainLoop() {
+  std::fprintf(stderr,
+               "xdg-csd: %dx%d content, decorations=%s "
+               "(press ESC or click ✕ to quit)\n",
+               content_w_, content_h_, use_csd_ ? "CSD" : "SSD");
+
+  // Kickstart: request the first frame callback, then commit.
+  RequestFrameCallback();
+  CommitFrame(0);
+
+  const bool ok = wl::RunEventLoop(
+      display_.Get(), [this] { return !running_ || !g_running; },
+      "xdg-csd",
+      [this] { return seat_.GetRepeatFd(); },
+      [this] { seat_.DispatchRepeat(); });
+
+  std::fprintf(stderr, "xdg-csd exiting\n");
+  return ok;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Entry point
+// ══════════════════════════════════════════════════════════════════════════════
+
+static void signal_handler(int /*sig*/) noexcept {
+  g_running = 0;
+}
+
+static void print_usage(const char* prog) {
+  std::fprintf(stderr,
+               "Usage: %s [options]\n"
+               "  -w WIDTH   Content width (default: 400)\n"
+               "  -h HEIGHT  Content height (default: 300)\n"
+               "  -t TITLE   Window title (default: xdg-csd demo)\n",
+               prog);
+}
+
+int main(int argc, char* argv[]) {
+  std::signal(SIGPIPE, SIG_IGN);
+
+  struct sigaction sa {};
+  sa.sa_handler = signal_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESETHAND;
+  sigaction(SIGINT, &sa, nullptr);
+
+  int content_w = 400;
+  int content_h = 300;
+  const char* title = "xdg-csd demo";
+
+  for (int i = 1; i < argc; ++i) {
+    const std::string_view arg{argv[i]};
+    if (arg == "-w" && i + 1 < argc) {
+      content_w = std::atoi(argv[++i]);
+    } else if (arg == "-h" && i + 1 < argc) {
+      content_h = std::atoi(argv[++i]);
+    } else if (arg == "-t" && i + 1 < argc) {
+      title = argv[++i];
+    } else {
+      print_usage(argv[0]);
+      return EXIT_FAILURE;
+    }
+  }
+
+  if (content_w <= 0 || content_h <= 0) {
+    std::fprintf(stderr, "xdg-csd: invalid dimensions\n");
+    return EXIT_FAILURE;
+  }
+
+  App app{content_w, content_h, title};
+  return app.Run();
+}
+
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables,
+//           cppcoreguidelines-pro-bounds-pointer-arithmetic,
+//           cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+//           cppcoreguidelines-pro-bounds-constant-array-index,
+//           cppcoreguidelines-pro-type-reinterpret-cast)
