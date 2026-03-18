@@ -4,9 +4,9 @@
 # xdg-simple-dmabuf-vulkan: Vulkan DMA-BUF Wayland client example.
 #
 # Connects to the running compositor, creates an XDG toplevel window, and
-# renders a hue-shifting solid colour into a DMA-BUF-backed Vulkan image
-# exported directly to the compositor via the linux-dmabuf-unstable-v1
-# protocol.
+# renders a red/green/blue triangle (matching Weston's simple-dmabuf-vulkan.c)
+# into a DMA-BUF-backed Vulkan image exported to the compositor via the
+# linux-dmabuf-unstable-v1 protocol.
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 
