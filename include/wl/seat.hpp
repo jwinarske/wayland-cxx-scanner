@@ -160,6 +160,27 @@ class SeatManager {
     ReleaseSeat();
   }
 
+  /// Returns the read end of the self-pipe used for key-repeat signalling.
+  ///
+  /// Returns -1 when no keyboard is bound or when repeat setup failed.
+  /// Pass this fd to RunEventLoop (or your own poll loop) alongside the
+  /// Wayland display fd; call DispatchRepeat() each time it is readable.
+  [[nodiscard]] int GetRepeatFd() const noexcept {
+    if (keyboard_.IsNull())
+      return -1;
+    return keyboard_.Get()->GetRepeatFd();
+  }
+
+  /// Fire one key-repeat event.
+  ///
+  /// Must be called from the main event-loop thread.  Drains the self-pipe
+  /// and calls OnKeySym / OnKey on the App for the currently repeating key.
+  /// No-op when no keyboard is bound.
+  void DispatchRepeat() noexcept {
+    if (!keyboard_.IsNull())
+      keyboard_.Get()->DispatchRepeat();
+  }
+
   /// Internal capability handler — called by the seat proxy on capabilities
   /// change.  Creates the keyboard when keyboard capability is gained; releases
   /// it when lost.

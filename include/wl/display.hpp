@@ -214,4 +214,109 @@ template <typename StopFn>
   return true;
 }
 
+/// Run the Wayland client event loop with keyboard-repeat support.
+///
+/// Identical to the two-argument RunEventLoop overload, but additionally
+/// polls the fd returned by @p get_repeat_fd() alongside the Wayland display
+/// fd on every iteration.  Because the fd is re-evaluated each time through
+/// the loop, polling of the keyboard repeat pipe is automatically enabled
+/// the moment a keyboard is bound (after wl_seat::capabilities fires) and
+/// disabled again if the keyboard is released — with no GLib or other
+/// framework dependency.
+///
+/// When @p get_repeat_fd() returns -1 (no keyboard bound yet, or repeat
+/// setup failed) the iteration behaves exactly like the basic overload:
+/// only the Wayland fd is polled.
+///
+/// Whenever the repeat fd is readable (POLLIN), @p on_repeat() is called on
+/// the main thread before the next Wayland dispatch.
+///
+/// Typical usage:
+/// @code
+///   wl::RunEventLoop(display_.Get(), [this] { return !running_; },
+///                    "my-app",
+///                    [this] { return seat_.GetRepeatFd(); },
+///                    [this] { seat_.DispatchRepeat(); });
+/// @endcode
+///
+/// @tparam StopFn      Callable returning bool.  Must not throw.
+/// @tparam RepeatFdFn  Callable returning int (the repeat pipe fd, or -1).
+///                     Invoked once per loop iteration.  Must not throw.
+/// @tparam RepeatFn    Callable taking no arguments.  Called on the main
+///                     thread each time the repeat fd is readable.  Must not
+///                     throw.
+/// @param display      A connected wl_display.  Must not be null.
+/// @param should_stop  Called once per iteration; return true to exit cleanly.
+/// @param prefix       Application name for error log messages.
+/// @param get_repeat_fd  Returns the current repeat fd each iteration; e.g.
+///                     [&seat]{ return seat.GetRepeatFd(); }.
+/// @param on_repeat    Called when the repeat fd is readable; should call
+///                     wl::SeatManager::DispatchRepeat() or
+///                     wl::KeyboardHandler::DispatchRepeat().
+/// @returns true on a clean exit (should_stop() became true); false on I/O
+///          or protocol error.
+template <typename StopFn, typename RepeatFdFn, typename RepeatFn>
+[[nodiscard]] inline bool RunEventLoop(
+    wl_display* display,
+    StopFn&& should_stop,
+    std::string_view prefix,
+    RepeatFdFn&& get_repeat_fd,
+    RepeatFn&& on_repeat) noexcept {
+  const int wl_fd = wl_display_get_fd(display);
+
+  while (!should_stop()) {
+    // ── Write phase ────────────────────────────────────────────────────────
+    while (wl_display_flush(display) < 0) {
+      if (errno != EAGAIN) {
+        LogWlError(display, "flush", prefix);
+        return false;
+      }
+      pollfd pfd{wl_fd, POLLOUT, 0};
+      if (poll(&pfd, 1, -1) < 0) {
+        if (errno == EINTR)
+          continue;
+        return false;
+      }
+    }
+
+    // ── Dispatch pending ───────────────────────────────────────────────────
+    if (wl_display_dispatch_pending(display) < 0) {
+      LogWlError(display, "dispatch_pending", prefix);
+      return false;
+    }
+
+    // ── Wait for events (Wayland fd + repeat fd when keyboard is present) ──
+    // Re-evaluate the repeat fd each iteration: it is -1 until a keyboard
+    // is bound and the compositor sends wl_keyboard::repeat_info (which
+    // creates the POSIX timer and the self-pipe).  Only poll it when valid.
+    const int rep_fd = get_repeat_fd();
+    const nfds_t nfds = (rep_fd >= 0) ? 2 : 1;
+    // Always initialise both entries; poll() only examines the first nfds.
+    // Keeping pfds[1].fd=-1 / events=0 when rep_fd<0 is safe with any
+    // conformant poll() implementation, but explicit is clearer.
+    pollfd pfds[2] = {{wl_fd, POLLIN, 0}, {-1, 0, 0}};
+    if (rep_fd >= 0)
+      pfds[1] = {rep_fd, POLLIN, 0};
+    if (poll(pfds, nfds, -1) < 0) {
+      if (errno == EINTR)
+        continue;
+      return false;
+    }
+
+    // ── Keyboard repeat ────────────────────────────────────────────────────
+    if (rep_fd >= 0 && (pfds[1].revents & POLLIN))
+      on_repeat();
+
+    // ── Wayland events ─────────────────────────────────────────────────────
+    if (pfds[0].revents & POLLIN) {
+      if (wl_display_dispatch(display) < 0) {
+        LogWlError(display, "dispatch", prefix);
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 }  // namespace wl
