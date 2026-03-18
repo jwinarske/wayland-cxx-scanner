@@ -28,21 +28,23 @@
 // Runtime requirement:
 //   A Wayland compositor with xdg-shell and zwp_linux_dmabuf_v1 ≥ 3.
 
-// ── Vulkan C++ bindings ───────────────────────────────────────────────────────
+// ── Vulkan C++ bindings
+// ───────────────────────────────────────────────────────
 // VULKAN_HPP_NO_EXCEPTIONS: every Vulkan call returns vk::Result /
 // vk::ResultValue<T> rather than throwing; every code path is explicit.
 #define VULKAN_HPP_NO_EXCEPTIONS
 #include <vulkan/vulkan.hpp>
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
-// linux_dmabuf_client.hpp  → namespace linux_dmabuf_unstable_v1::client
-// wayland_client.hpp       → namespace wayland::client
-// xdg_shell_client.hpp     → namespace xdg_shell::client
+// linux_dmabuf_client.hpp → namespace linux_dmabuf_unstable_v1::client
+// wayland_client.hpp → namespace wayland::client
+// xdg_shell_client.hpp → namespace xdg_shell::client
 #include "linux_dmabuf_client.hpp"
 #include "wayland_client.hpp"
 #include "xdg_shell_client.hpp"
 
-// ── System C headers ──────────────────────────────────────────────────────────
+// ── System C headers
+// ──────────────────────────────────────────────────────────
 extern "C" {
 // DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_LINEAR.
 #include <drm_fourcc.h>
@@ -54,14 +56,12 @@ extern "C" {
 #include <wayland-client-protocol.h>
 }
 
-// ── Framework headers ─────────────────────────────────────────────────────────
-// SetupHandler(), BindHandler(), RunEventLoop().
+// ── Framework headers
+// ───────────────────────────────────────────────────────── SetupHandler(),
+// BindHandler(), RunEventLoop().
 #include <wl/client_helpers.hpp>
 // DisplayHandle, RoundtripWithTimeout().
 #include <wl/display.hpp>
-// wl::dmabuf wl_interface tables + wl_iface() impls for linux-dmabuf.
-// Must follow linux_dmabuf_client.hpp.
-#include <wl/linux_dmabuf.hpp>
 // CRegistry.
 #include <wl/registry.hpp>
 // SeatManager<App> (wl_seat + wl_keyboard + xkbcommon).
@@ -70,8 +70,12 @@ extern "C" {
 #include <wl/wl_ptr.hpp>
 // XDG interface tables + CRTP handlers.  Must follow xdg_shell_client.hpp.
 #include <wl/xdg_shell.hpp>
+// linux-dmabuf wl_interface tables + wl_iface() impls.  Must follow
+// linux_dmabuf_client.hpp.
+#include <wl/linux_dmabuf.hpp>
 
-// ── Standard library ──────────────────────────────────────────────────────────
+// ── Standard library
+// ──────────────────────────────────────────────────────────
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -80,11 +84,10 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iterator>  // std::data, std::size
 
-// ── POSIX ─────────────────────────────────────────────────────────────────────
+// ── POSIX
+// ─────────────────────────────────────────────────────────────────────
 #include <getopt.h>
-#include <poll.h>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Embedded SPIR-V shaders
@@ -114,7 +117,7 @@ extern "C" {
 namespace {
 
 // clang-format off
-static constexpr uint32_t kVertSpv[] = {
+constexpr uint32_t kVertSpv[] = {
     0x07230203u, 0x00010000u, 0x0008000bu, 0x00000045u, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
     0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
     0x0009000fu, 0x00000000u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x0000001bu, 0x00000036u, 0x00000041u,
@@ -173,7 +176,7 @@ static constexpr uint32_t kVertSpv[] = {
     0x0004003du, 0x0000003fu, 0x00000044u, 0x00000043u, 0x0003003eu, 0x00000041u, 0x00000044u, 0x000100fdu,
     0x00010038u,
 };
-static constexpr uint32_t kFragSpv[] = {
+constexpr uint32_t kFragSpv[] = {
     0x07230203u, 0x00010000u, 0x0008000bu, 0x00000013u, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
     0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
     0x0007000fu, 0x00000004u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00000009u, 0x0000000cu, 0x00030010u,
@@ -199,30 +202,31 @@ struct Vertex {
   float r, g, b;
 };
 // The canonical Weston simple-dmabuf-vulkan triangle:
-//   top:          (  0.0, −0.5 ) → red
-//   bottom-left:  ( −0.5,  0.5 ) → green
-//   bottom-right: (  0.5,  0.5 ) → blue
-static constexpr Vertex kTriangle[3] = {
+//   top: (0.0, −0.5) → red
+//   bottom-left: (−0.5, 0.5) → green
+//   bottom-right: (0.5, 0.5) → blue
+constexpr Vertex kTriangle[3] = {
     {0.0f, -0.5f, 1.0f, 0.0f, 0.0f},
     {-0.5f, 0.5f, 0.0f, 1.0f, 0.0f},
     {0.5f, 0.5f, 0.0f, 0.0f, 1.0f},
 };
 
-// ── DRM format table ──────────────────────────────────────────────────────────
+// ── DRM format table
+// ──────────────────────────────────────────────────────────
 struct DrmFormatEntry {
   const char* name;
   uint32_t code;
 };
-static constexpr DrmFormatEntry kDrmFormats[] = {
+constexpr DrmFormatEntry kDrmFormats[] = {
     {"XRGB8888", DRM_FORMAT_XRGB8888},
     {"ARGB8888", DRM_FORMAT_ARGB8888},
 };
 
 /// Return the DRM code for @p name (case-sensitive), or 0 if unknown.
 uint32_t ParseDrmFormat(const char* name) noexcept {
-  for (const auto& e : kDrmFormats) {
-    if (std::strcmp(e.name, name) == 0)
-      return e.code;
+  for (const auto& [format, code] : kDrmFormats) {
+    if (std::strcmp(format, name) == 0)
+      return code;
   }
   return 0;
 }
@@ -270,9 +274,8 @@ namespace {
 bool VkOk(vk::Result result, const char* what) noexcept {
   if (result == vk::Result::eSuccess)
     return true;
-  std::fprintf(stderr,
-               "xdg-simple-dmabuf-vulkan: %s failed (VkResult=%d)\n", what,
-               static_cast<int>(result));
+  std::fprintf(stderr, "xdg-simple-dmabuf-vulkan: %s failed (VkResult=%d)\n",
+               what, static_cast<int>(result));
   return false;
 }
 
@@ -327,7 +330,7 @@ class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 
 // ── WlBufferHandler ──────────────────────────────────────────────────────────
 // Tracks wl_buffer.release so we know when the compositor is done reading the
-// DMA-BUF.  released_ starts true so the very first RenderFrame() proceeds.
+// DMA-BUF.  released_ starts true, so the very first RenderFrame() proceeds.
 
 class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
  public:
@@ -346,11 +349,12 @@ class LinuxDmabufHandler
   uint32_t desired_format = DRM_FORMAT_XRGB8888;
   bool has_format = false;
 
-  void OnFormat(uint32_t format) override {
+  void OnFormat(const uint32_t format) override {
     if (format == desired_format)
       has_format = true;
   }
-  void OnModifier(uint32_t format, uint32_t /*mod_hi*/,
+  void OnModifier(const uint32_t format,
+                  uint32_t /*mod_hi*/,
                   uint32_t /*mod_lo*/) override {
     if (format == desired_format)
       has_format = true;
@@ -360,7 +364,7 @@ class LinuxDmabufHandler
 // ── LinuxBufferParamsHandler ─────────────────────────────────────────────────
 // Used transiently inside CreateDmaBufBuffer() to build a wl_buffer via the
 // synchronous create_immed path.  The created/failed events are not needed;
-// the default no-op overrides in the generated base are sufficient.
+// the default no-op overrides in the generated base are enough.
 
 class LinuxBufferParamsHandler
     : public linux_dmabuf_unstable_v1::client::CZwpLinuxBufferParamsV1<
@@ -379,7 +383,7 @@ class App {
     int height = 250;
   };
 
-  explicit App(Options opts) : opts_(opts) {}
+  explicit App(const Options opts) : opts_(opts) {}
   int Run();
   ~App();
 
@@ -430,22 +434,23 @@ class App {
     vk::UniqueInstance instance;    // destroyed LAST (after everything)
     vk::PhysicalDevice phys_dev{};  // non-owning handle
     uint32_t queue_family = UINT32_MAX;
-    vk::UniqueDevice device;            // destroyed before instance
-    vk::Queue queue{};                  // non-owning handle
-    vk::UniqueCommandPool cmd_pool;     // destroyed before device
-    vk::UniqueCommandBuffer cmd_buf;    // freed before cmd_pool
-    vk::UniqueImage image;              // destroyed before device
-    vk::UniqueDeviceMemory memory;      // destroyed before device
-    vk::UniqueBuffer vertex_buf;        // destroyed before device
-    vk::UniqueDeviceMemory vertex_mem;  // destroyed before device
-    vk::UniqueRenderPass render_pass;   // destroyed before device
-    vk::UniquePipelineLayout pipeline_layout;  // destroyed before device
-    vk::UniqueShaderModule vert_module;        // destroyed before device
-    vk::UniqueShaderModule frag_module;        // destroyed before device
-    vk::UniqueImageView image_view;   // destroyed before image
-    vk::UniqueFramebuffer framebuffer;  // destroyed before render_pass/image_view
-    vk::UniquePipeline pipeline;        // destroyed before layout/renderpass
-    vk::UniqueFence fence;              // destroyed FIRST
+    vk::UniqueDevice device;                   // destroyed before instance
+    vk::Queue queue{};                         // non-owning handle
+    vk::UniqueCommandPool cmd_pool;            // destroyed before the device
+    vk::UniqueCommandBuffer cmd_buf;           // freed before cmd_pool
+    vk::UniqueImage image;                     // destroyed before the device
+    vk::UniqueDeviceMemory memory;             // destroyed before the device
+    vk::UniqueBuffer vertex_buf;               // destroyed before the device
+    vk::UniqueDeviceMemory vertex_mem;         // destroyed before the device
+    vk::UniqueRenderPass render_pass;          // destroyed before the device
+    vk::UniquePipelineLayout pipeline_layout;  // destroyed before the device
+    vk::UniqueShaderModule vert_module;        // destroyed before the device
+    vk::UniqueShaderModule frag_module;        // destroyed before the device
+    vk::UniqueImageView image_view;            // destroyed before image
+    vk::UniqueFramebuffer
+        framebuffer;              // destroyed before render_pass/image_view
+    vk::UniquePipeline pipeline;  // destroyed before layout/renderpass
+    vk::UniqueFence fence;        // destroyed FIRST
     int dma_fd = -1;
     uint32_t stride = 0;  // bytes per row; set by getImageSubresourceLayout
 
@@ -475,7 +480,7 @@ class App {
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
-  // Seat + keyboard manager — keyboard_ inside is destroyed before seat_.
+  // Seat + keyboard manager — keyboard_ inside is destroyed before a seat_.
   wl::SeatManager<App> seat_;
 
   // Frame-pacing callback — destroyed first among all WlPtrs.
@@ -502,12 +507,12 @@ class App {
 
   /// Maximum time (ms) to wait for a compositor response during start-up.
   static constexpr int kRoundtripTimeoutMs = 5000;
-  /// Maximum DMA-BUF bind version we support (v3: format + modifier events,
+  /// Maximum DMA-BUF bind version we support (v3: format and modifier events,
   /// create_immed).  Capped regardless of what the compositor advertises.
   static constexpr uint32_t kDmaBufVersion = 3;
   /// Maximum dimension accepted (guards against compositor sending huge sizes).
   static constexpr int kMaxDim = 16384;
-  /// Rotation step per frame (radians).  One full revolution every ~2 seconds
+  /// Rotation step per frame (radians).  One full revolution every 2 seconds
   /// at 60 Hz, matching Weston's simple-dmabuf-vulkan animation speed.
   static constexpr float kRotStep = 2.0f * static_cast<float>(M_PI) / 120.0f;
 
@@ -518,7 +523,7 @@ class App {
   bool CreateSurfaces();
   bool InitVulkan();
   bool CreateDmaBufBuffer();
-  /// Run the render loop.  Returns true on a clean exit (user closed the
+  /// Run the render loop.  Returns true on a clean exit (the user closed the
   /// window or pressed ESC), false if the compositor disconnected unexpectedly.
   bool MainLoop();
 
@@ -582,7 +587,8 @@ int App::Run() {
   return MainLoop() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-// ── ConnectDisplay ────────────────────────────────────────────────────────────
+// ── ConnectDisplay
+// ────────────────────────────────────────────────────────────
 
 bool App::ConnectDisplay() {
   if (!display_.Connect()) {
@@ -593,7 +599,8 @@ bool App::ConnectDisplay() {
   return true;
 }
 
-// ── ScanGlobals ───────────────────────────────────────────────────────────────
+// ── ScanGlobals
+// ───────────────────────────────────────────────────────────────
 
 bool App::ScanGlobals() {
   if (!registry_.Create(display_.Get())) {
@@ -602,8 +609,8 @@ bool App::ScanGlobals() {
     return false;
   }
 
-  registry_.OnGlobal([this](wl::CRegistry& /*reg*/, uint32_t name,
-                            std::string_view iface, uint32_t ver) {
+  registry_.OnGlobal([this](wl::CRegistry& /*reg*/, const uint32_t name,
+                            const std::string_view iface, const uint32_t ver) {
     using wl_comp = wayland::client::wl_compositor_traits;
     using xdg_base = xdg_shell::client::xdg_wm_base_traits;
     using wl_s = wayland::client::wl_seat_traits;
@@ -624,9 +631,9 @@ bool App::ScanGlobals() {
   });
 
   if (!wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs)) {
-    std::fprintf(
-        stderr,
-        "xdg-simple-dmabuf-vulkan: timed out waiting for global advertisements\n");
+    std::fprintf(stderr,
+                 "xdg-simple-dmabuf-vulkan: timed out waiting for global "
+                 "advertisements\n");
     return false;
   }
 
@@ -649,7 +656,8 @@ bool App::ScanGlobals() {
   return true;
 }
 
-// ── BindGlobals ───────────────────────────────────────────────────────────────
+// ── BindGlobals
+// ───────────────────────────────────────────────────────────────
 
 bool App::BindGlobals() {
   using namespace wayland::client;
@@ -668,24 +676,20 @@ bool App::BindGlobals() {
   }
 
   // xdg_wm_base — CRTP handler responds to ping automatically.
-  if (!wl::BindHandler<xdg_wm_base_traits>(registry_, xdg_wm_base_,
-                                            xdg_wm_base_name_,
-                                            xdg_wm_base_ver_)) {
-    std::fprintf(stderr,
-                 "xdg-simple-dmabuf-vulkan: xdg_wm_base bind failed\n");
+  if (!wl::BindHandler<xdg_wm_base_traits>(
+          registry_, xdg_wm_base_, xdg_wm_base_name_, xdg_wm_base_ver_)) {
+    std::fprintf(stderr, "xdg-simple-dmabuf-vulkan: xdg_wm_base bind failed\n");
     return false;
   }
 
   // zwp_linux_dmabuf_v1 — cap at kDmaBufVersion (v3) regardless of what the
   // compositor advertises; our wl_interface tables only cover v1–v3 messages.
-  const uint32_t dmabuf_bind_ver =
-      std::min({linux_dmabuf_ver_,
-                zwp_linux_dmabuf_v1_traits::version, kDmaBufVersion});
+  const uint32_t dmabuf_bind_ver = std::min(
+      {linux_dmabuf_ver_, zwp_linux_dmabuf_v1_traits::version, kDmaBufVersion});
   if (!wl::BindHandler<zwp_linux_dmabuf_v1_traits>(
           registry_, linux_dmabuf_, linux_dmabuf_name_, dmabuf_bind_ver)) {
-    std::fprintf(
-        stderr,
-        "xdg-simple-dmabuf-vulkan: zwp_linux_dmabuf_v1 bind failed\n");
+    std::fprintf(stderr,
+                 "xdg-simple-dmabuf-vulkan: zwp_linux_dmabuf_v1 bind failed\n");
     return false;
   }
   // Tell the handler which format to watch for.
@@ -694,9 +698,9 @@ bool App::BindGlobals() {
   // Roundtrip so the compositor sends format/modifier events from the
   // linux-dmabuf global before we check format support.
   if (!wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs)) {
-    std::fprintf(
-        stderr,
-        "xdg-simple-dmabuf-vulkan: timed out waiting for linux-dmabuf formats\n");
+    std::fprintf(stderr,
+                 "xdg-simple-dmabuf-vulkan: timed out waiting for linux-dmabuf "
+                 "formats\n");
     return false;
   }
 
@@ -709,11 +713,10 @@ bool App::BindGlobals() {
         break;
       }
     }
-    std::fprintf(
-        stderr,
-        "xdg-simple-dmabuf-vulkan: compositor does not support "
-        "DRM_FORMAT_%s\n",
-        fmt_name);
+    std::fprintf(stderr,
+                 "xdg-simple-dmabuf-vulkan: compositor does not support "
+                 "DRM_FORMAT_%s\n",
+                 fmt_name);
     return false;
   }
 
@@ -733,7 +736,8 @@ bool App::BindGlobals() {
   return true;
 }
 
-// ── CreateSurfaces ────────────────────────────────────────────────────────────
+// ── CreateSurfaces
+// ────────────────────────────────────────────────────────────
 
 bool App::CreateSurfaces() {
   using namespace wayland::client;
@@ -752,11 +756,10 @@ bool App::CreateSurfaces() {
   }
 
   // xdg_wm_base.get_xdg_surface → xdg_surface.
-  if (!wl::SetupHandler(
-          xdg_surface_,
-          wl::construct<xdg_surface_traits,
-                        xdg_wm_base_traits::Op::GetXdgSurface>(
-              *xdg_wm_base_.Get(), surface_.Get()->GetProxy()))) {
+  if (!wl::SetupHandler(xdg_surface_,
+                        wl::construct<xdg_surface_traits,
+                                      xdg_wm_base_traits::Op::GetXdgSurface>(
+                            *xdg_wm_base_.Get(), surface_.Get()->GetProxy()))) {
     std::fprintf(
         stderr,
         "xdg-simple-dmabuf-vulkan: xdg_wm_base.get_xdg_surface failed\n");
@@ -769,9 +772,8 @@ bool App::CreateSurfaces() {
                         wl::construct<xdg_toplevel_traits,
                                       xdg_surface_traits::Op::GetToplevel>(
                             *xdg_surface_.Get()))) {
-    std::fprintf(
-        stderr,
-        "xdg-simple-dmabuf-vulkan: xdg_surface.get_toplevel failed\n");
+    std::fprintf(stderr,
+                 "xdg-simple-dmabuf-vulkan: xdg_surface.get_toplevel failed\n");
     return false;
   }
   xdg_toplevel_.Get()->app_ = this;
@@ -784,23 +786,24 @@ bool App::CreateSurfaces() {
   // InitVulkan() will then allocate the image at that size.
   surface_.Get()->Commit();
   if (!wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs)) {
-    std::fprintf(
-        stderr,
-        "xdg-simple-dmabuf-vulkan: timed out waiting for xdg_surface configure\n");
+    std::fprintf(stderr,
+                 "xdg-simple-dmabuf-vulkan: timed out waiting for xdg_surface "
+                 "configure\n");
     return false;
   }
   return true;
 }
 
-// ── InitVulkan ────────────────────────────────────────────────────────────────
+// ── InitVulkan
+// ────────────────────────────────────────────────────────────────
 
 bool App::InitVulkan() {
   // ── Instance ───────────────────────────────────────────────────────────────
   // Require Vulkan 1.1 so that VkExternalMemoryImageCreateInfo and
   // VkExportMemoryAllocateInfo are core (no KHR suffix needed).
-  const vk::ApplicationInfo app_info{"xdg-simple-dmabuf-vulkan",
-                                     VK_MAKE_VERSION(0, 1, 0), nullptr, 0,
-                                     VK_API_VERSION_1_1};
+  constexpr vk::ApplicationInfo app_info{"xdg-simple-dmabuf-vulkan",
+                                         VK_MAKE_VERSION(0, 1, 0), nullptr, 0,
+                                         VK_API_VERSION_1_1};
   const vk::InstanceCreateInfo inst_ci{{}, &app_info};
   auto inst_rv = vk::createInstanceUnique(inst_ci);
   if (!VkOk(inst_rv.result, "vkCreateInstance"))
@@ -815,12 +818,12 @@ bool App::InitVulkan() {
                  "xdg-simple-dmabuf-vulkan: no Vulkan physical devices\n");
     return false;
   }
-  vk_.phys_dev = phys_rv.value[0];
+  vk_.phys_dev = phys_rv.value.at(0);
 
   // ── Graphics queue family ──────────────────────────────────────────────────
   const auto qfps = vk_.phys_dev.getQueueFamilyProperties();
   for (uint32_t i = 0; i < static_cast<uint32_t>(qfps.size()); ++i) {
-    if (qfps[i].queueFlags & vk::QueueFlagBits::eGraphics) {
+    if (qfps.at(i).queueFlags & vk::QueueFlagBits::eGraphics) {
       vk_.queue_family = i;
       break;
     }
@@ -837,10 +840,9 @@ bool App::InitVulkan() {
     return false;
   constexpr std::string_view kExtFd = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
   const bool has_ext_fd =
-      std::any_of(ext_rv.value.begin(), ext_rv.value.end(),
-                  [](const vk::ExtensionProperties& e) {
-                    return std::string_view{e.extensionName.data()} == kExtFd;
-                  });
+      std::ranges::any_of(ext_rv.value, [&](const vk::ExtensionProperties& e) {
+        return std::string_view{e.extensionName.data()} == kExtFd;
+      });
   if (!has_ext_fd) {
     std::fprintf(stderr,
                  "xdg-simple-dmabuf-vulkan: device missing extension %.*s\n",
@@ -849,17 +851,15 @@ bool App::InitVulkan() {
   }
 
   // ── Logical device ─────────────────────────────────────────────────────────
-  const float queue_prio = 1.0f;
-  const vk::DeviceQueueCreateInfo queue_ci{{}, vk_.queue_family, 1,
-                                           &queue_prio};
+  constexpr float queue_prio = 1.0f;
+  const vk::DeviceQueueCreateInfo queue_ci{
+      {}, vk_.queue_family, 1, &queue_prio};
   // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
   static constexpr const char* kDevExts[] = {
       VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
   };
   // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
-  const vk::DeviceCreateInfo dev_ci{
-      {}, 1,          &queue_ci, 0, nullptr,
-      1,  kDevExts};
+  const vk::DeviceCreateInfo dev_ci{{}, 1, &queue_ci, 0, nullptr, 1, kDevExts};
   auto dev_rv = vk_.phys_dev.createDeviceUnique(dev_ci);
   if (!VkOk(dev_rv.result, "vkCreateDevice"))
     return false;
@@ -880,7 +880,7 @@ bool App::InitVulkan() {
   // just whether the compositor honors the alpha channel).
   // VK_IMAGE_TILING_LINEAR is required for DMA-BUF export with the LINEAR
   // modifier (DRM_FORMAT_MOD_LINEAR = 0).
-  const vk::ExternalMemoryImageCreateInfo ext_img{
+  constexpr vk::ExternalMemoryImageCreateInfo ext_img{
       vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
   vk::ImageCreateInfo img_ci;
   img_ci.imageType = vk::ImageType::e2D;
@@ -919,7 +919,7 @@ bool App::InitVulkan() {
   for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
     if (!(mem_reqs.memoryTypeBits & (1u << i)))
       continue;
-    if (mem_props.memoryTypes[i].propertyFlags &
+    if (mem_props.memoryTypes.at(i).propertyFlags &
         vk::MemoryPropertyFlagBits::eDeviceLocal) {
       mem_type = i;
       break;
@@ -933,7 +933,7 @@ bool App::InitVulkan() {
     return false;
   }
 
-  const vk::ExportMemoryAllocateInfo export_mem{
+  constexpr vk::ExportMemoryAllocateInfo export_mem{
       vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
   vk::MemoryAllocateInfo mem_ai{mem_reqs.size, mem_type};
   mem_ai.setPNext(&export_mem);
@@ -955,7 +955,8 @@ bool App::InitVulkan() {
   // vkGetMemoryFdKHR is a VK_KHR_external_memory_fd device-level extension
   // entry point.  libvulkan.so only exports core loader symbols at link time,
   // so the function must be resolved at runtime via vkGetDeviceProcAddr.
-  // We call the C API directly to avoid needing VULKAN_HPP_DISPATCH_LOADER_DYNAMIC.
+  // We call the C API directly to avoid needing
+  // VULKAN_HPP_DISPATCH_LOADER_DYNAMIC.
   {
     const auto fn = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
         vkGetDeviceProcAddr(*vk_.device, "vkGetMemoryFdKHR"));
@@ -967,9 +968,7 @@ bool App::InitVulkan() {
       return false;
     }
     const VkMemoryGetFdInfoKHR fd_info_c{
-        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
-        nullptr,
-        *vk_.memory,
+        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, *vk_.memory,
         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
     int raw_fd = -1;
     if (!VkOk(static_cast<vk::Result>(fn(*vk_.device, &fd_info_c, &raw_fd)),
@@ -982,7 +981,7 @@ bool App::InitVulkan() {
   // HOST_VISIBLE | HOST_COHERENT so we can map and copy the triangle data
   // from the CPU.
   {
-    const vk::BufferCreateInfo buf_ci{
+    constexpr vk::BufferCreateInfo buf_ci{
         {},
         sizeof(kTriangle),
         vk::BufferUsageFlagBits::eVertexBuffer,
@@ -994,22 +993,22 @@ bool App::InitVulkan() {
 
     const vk::MemoryRequirements vb_reqs =
         vk_.device->getBufferMemoryRequirements(*vk_.vertex_buf);
-    const vk::MemoryPropertyFlags want =
+    constexpr vk::MemoryPropertyFlags want =
         vk::MemoryPropertyFlagBits::eHostVisible |
         vk::MemoryPropertyFlagBits::eHostCoherent;
     uint32_t vb_mem_type = UINT32_MAX;
     for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
       if (!(vb_reqs.memoryTypeBits & (1u << i)))
         continue;
-      if ((mem_props.memoryTypes[i].propertyFlags & want) == want) {
+      if ((mem_props.memoryTypes.at(i).propertyFlags & want) == want) {
         vb_mem_type = i;
         break;
       }
     }
     if (vb_mem_type == UINT32_MAX) {
-      std::fprintf(
-          stderr,
-          "xdg-simple-dmabuf-vulkan: no host-visible memory for vertex buffer\n");
+      std::fprintf(stderr,
+                   "xdg-simple-dmabuf-vulkan: no host-visible memory for "
+                   "vertex buffer\n");
       return false;
     }
     auto vm_rv = vk_.device->allocateMemoryUnique({vb_reqs.size, vb_mem_type});
@@ -1030,15 +1029,15 @@ bool App::InitVulkan() {
 
   // ── Render pass ────────────────────────────────────────────────────────────
   // Single BGRA color attachment.
-  //   Load  = eClear     → clear to black at the start of every render pass.
-  //   Store = eStore     → keep results so the compositor can read them.
-  //   initialLayout = eUndefined  → driver may discard contents (we always
+  //   Load = eClear → clear to black at the start of every render pass.
+  //   Store = eStore → keep results so the compositor can read them.
+  //   initialLayout = eUndefined → a driver may discard contents (we always
   //                                 clear, so this is safe and avoids a
   //                                 layout-transition cost on the first frame).
-  //   finalLayout   = eGeneral    → suitable for DMA-BUF / CPU reads by the
+  //   finalLayout = eGeneral → suitable for DMA-BUF / CPU reads by the
   //                                 compositor.
   {
-    const vk::AttachmentDescription color_att{
+    constexpr vk::AttachmentDescription color_att{
         {},
         vk::Format::eB8G8R8A8Unorm,
         vk::SampleCountFlagBits::e1,
@@ -1049,13 +1048,13 @@ bool App::InitVulkan() {
         vk::ImageLayout::eUndefined,
         vk::ImageLayout::eGeneral,
     };
-    const vk::AttachmentReference color_ref{
+    constexpr vk::AttachmentReference color_ref{
         0, vk::ImageLayout::eColorAttachmentOptimal};
     const vk::SubpassDescription subpass{
         {}, vk::PipelineBindPoint::eGraphics, 0, nullptr, 1, &color_ref};
     // Subpass dependency: ensure the render pass output is visible to external
     // (compositor DMA) readers before the next frame's render pass begins.
-    const vk::SubpassDependency dep{
+    constexpr vk::SubpassDependency dep{
         0,
         VK_SUBPASS_EXTERNAL,
         vk::PipelineStageFlagBits::eColorAttachmentOutput,
@@ -1063,8 +1062,8 @@ bool App::InitVulkan() {
         vk::AccessFlagBits::eColorAttachmentWrite,
         vk::AccessFlagBits::eMemoryRead,
         vk::DependencyFlagBits::eByRegion};
-    const vk::RenderPassCreateInfo rp_ci{{}, 1, &color_att, 1, &subpass,
-                                         1,  &dep};
+    const vk::RenderPassCreateInfo rp_ci{{},       1, &color_att, 1,
+                                         &subpass, 1, &dep};
     auto rp_rv = vk_.device->createRenderPassUnique(rp_ci);
     if (!VkOk(rp_rv.result, "vkCreateRenderPass"))
       return false;
@@ -1089,14 +1088,13 @@ bool App::InitVulkan() {
   // ── Framebuffer ────────────────────────────────────────────────────────────
   {
     const vk::ImageView attachments[] = {*vk_.image_view};
-    const vk::FramebufferCreateInfo fb_ci{
-        {},
-        *vk_.render_pass,
-        1,
-        attachments,
-        static_cast<uint32_t>(width_),
-        static_cast<uint32_t>(height_),
-        1};
+    const vk::FramebufferCreateInfo fb_ci{{},
+                                          *vk_.render_pass,
+                                          1,
+                                          attachments,
+                                          static_cast<uint32_t>(width_),
+                                          static_cast<uint32_t>(height_),
+                                          1};
     auto fb_rv = vk_.device->createFramebufferUnique(fb_ci);
     if (!VkOk(fb_rv.result, "vkCreateFramebuffer"))
       return false;
@@ -1105,20 +1103,15 @@ bool App::InitVulkan() {
 
   // ── Shader modules ─────────────────────────────────────────────────────────
   {
-    const vk::ShaderModuleCreateInfo vert_ci{
-        {},
-        sizeof(kVertSpv),
-        kVertSpv};
+    const vk::ShaderModuleCreateInfo vert_ci{{}, sizeof(kVertSpv), kVertSpv};
     auto vm_rv = vk_.device->createShaderModuleUnique(vert_ci);
     if (!VkOk(vm_rv.result, "vkCreateShaderModule (vert)"))
       return false;
     vk_.vert_module = std::move(vm_rv.value);
   }
   {
-    const vk::ShaderModuleCreateInfo frag_ci{
-        {},
-        sizeof(kFragSpv),
-        kFragSpv};
+    constexpr vk::ShaderModuleCreateInfo frag_ci{
+        {}, sizeof(kFragSpv), kFragSpv};
     auto fm_rv = vk_.device->createShaderModuleUnique(frag_ci);
     if (!VkOk(fm_rv.result, "vkCreateShaderModule (frag)"))
       return false;
@@ -1129,8 +1122,8 @@ bool App::InitVulkan() {
   // One push constant range: a single float (angle, in radians) at offset 0,
   // used by the vertex shader to rotate the triangle each frame.
   {
-    const vk::PushConstantRange pc_range{
-        vk::ShaderStageFlagBits::eVertex, 0, sizeof(float)};
+    constexpr vk::PushConstantRange pc_range{vk::ShaderStageFlagBits::eVertex,
+                                             0, sizeof(float)};
     const vk::PipelineLayoutCreateInfo layout_ci{{}, 0, nullptr, 1, &pc_range};
     auto pl_rv = vk_.device->createPipelineLayoutUnique(layout_ci);
     if (!VkOk(pl_rv.result, "vkCreatePipelineLayout"))
@@ -1140,14 +1133,14 @@ bool App::InitVulkan() {
 
   // ── Graphics pipeline ──────────────────────────────────────────────────────
   // Vertex binding 0: interleaved [x, y, r, g, b] per vertex.
-  //   Attribute 0: vec2 position  at offset 0.
-  //   Attribute 1: vec3 color     at offset offsetof(Vertex, r) = 8.
-  // Viewport and scissor are dynamic state so the pipeline does not need to
+  //   Attribute 0: vec2 position at offset 0.
+  //   Attribute 1: vec3 color at offset offsetof(Vertex, r) = 8.
+  // Viewport and scissor are dynamic state, so the pipeline does not need to
   // be recreated when the window is resized.
   {
-    const vk::VertexInputBindingDescription binding{
+    constexpr vk::VertexInputBindingDescription binding{
         0, sizeof(Vertex), vk::VertexInputRate::eVertex};
-    const vk::VertexInputAttributeDescription attrs[2]{
+    constexpr vk::VertexInputAttributeDescription attrs[2]{
         {0, 0, vk::Format::eR32G32Sfloat,
          static_cast<uint32_t>(offsetof(Vertex, x))},
         {1, 0, vk::Format::eR32G32B32Sfloat,
@@ -1156,15 +1149,15 @@ bool App::InitVulkan() {
     const vk::PipelineVertexInputStateCreateInfo vert_input{
         {}, 1, &binding, 2, attrs};
 
-    const vk::PipelineInputAssemblyStateCreateInfo input_asm{
+    constexpr vk::PipelineInputAssemblyStateCreateInfo input_asm{
         {}, vk::PrimitiveTopology::eTriangleList, VK_FALSE};
 
     // Counts must be declared even with dynamic state; actual values are set
     // per-draw via vkCmdSetViewport / vkCmdSetScissor in RenderFrame().
-    const vk::PipelineViewportStateCreateInfo viewport_state{
+    constexpr vk::PipelineViewportStateCreateInfo viewport_state{
         {}, 1, nullptr, 1, nullptr};
 
-    const vk::PipelineRasterizationStateCreateInfo raster{
+    constexpr vk::PipelineRasterizationStateCreateInfo raster{
         {},
         VK_FALSE,
         VK_FALSE,
@@ -1177,19 +1170,19 @@ bool App::InitVulkan() {
         0.0f,
         1.0f};
 
-    const vk::PipelineMultisampleStateCreateInfo msaa{
+    constexpr vk::PipelineMultisampleStateCreateInfo msaa{
         {}, vk::SampleCountFlagBits::e1};
 
-    const vk::ColorComponentFlags kAllComponents =
+    constexpr vk::ColorComponentFlags kAllComponents =
         vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-    const vk::PipelineColorBlendAttachmentState blend_att{
+    constexpr vk::PipelineColorBlendAttachmentState blend_att{
         VK_FALSE, {}, {}, {}, {}, {}, {}, kAllComponents};
     const vk::PipelineColorBlendStateCreateInfo blend{
         {}, VK_FALSE, vk::LogicOp::eCopy, 1, &blend_att};
 
-    const vk::DynamicState dyn_states[2]{vk::DynamicState::eViewport,
-                                         vk::DynamicState::eScissor};
+    constexpr vk::DynamicState dyn_states[2]{vk::DynamicState::eViewport,
+                                             vk::DynamicState::eScissor};
     const vk::PipelineDynamicStateCreateInfo dyn_state{{}, 2, dyn_states};
 
     const vk::PipelineShaderStageCreateInfo stages[2]{
@@ -1197,22 +1190,21 @@ bool App::InitVulkan() {
         {{}, vk::ShaderStageFlagBits::eFragment, *vk_.frag_module, "main"},
     };
 
-    const vk::GraphicsPipelineCreateInfo pipe_ci{
-        {},
-        2,
-        stages,
-        &vert_input,
-        &input_asm,
-        nullptr,
-        &viewport_state,
-        &raster,
-        &msaa,
-        nullptr,
-        &blend,
-        &dyn_state,
-        *vk_.pipeline_layout,
-        *vk_.render_pass,
-        0};
+    const vk::GraphicsPipelineCreateInfo pipe_ci{{},
+                                                 2,
+                                                 stages,
+                                                 &vert_input,
+                                                 &input_asm,
+                                                 nullptr,
+                                                 &viewport_state,
+                                                 &raster,
+                                                 &msaa,
+                                                 nullptr,
+                                                 &blend,
+                                                 &dyn_state,
+                                                 *vk_.pipeline_layout,
+                                                 *vk_.render_pass,
+                                                 0};
     auto pipe_rv = vk_.device->createGraphicsPipelineUnique({}, pipe_ci);
     if (!VkOk(pipe_rv.result, "vkCreateGraphicsPipelines"))
       return false;
@@ -1234,13 +1226,15 @@ bool App::InitVulkan() {
   vk_.fence = std::move(fence_rv.value);
 
   vulkan_init_ = true;
-  std::printf("xdg-simple-dmabuf-vulkan: Vulkan initialized "
-              "(stride=%u, dma_fd=%d)\n",
-              vk_.stride, vk_.dma_fd);
+  std::printf(
+      "xdg-simple-dmabuf-vulkan: Vulkan initialized "
+      "(stride=%u, dma_fd=%d)\n",
+      vk_.stride, vk_.dma_fd);
   return true;
 }
 
-// ── CreateDmaBufBuffer ────────────────────────────────────────────────────────
+// ── CreateDmaBufBuffer
+// ────────────────────────────────────────────────────────
 
 bool App::CreateDmaBufBuffer() {
   using namespace linux_dmabuf_unstable_v1::client;
@@ -1265,19 +1259,18 @@ bool App::CreateDmaBufBuffer() {
   // Add our DMA-BUF plane.  The fd is sent via SCM_RIGHTS (libwayland dups it
   // during marshalling); our copy vk_.dma_fd remains valid afterwards.
   // Modifier: DRM_FORMAT_MOD_LINEAR = 0.
-  params.Get()->Add(
-      vk_.dma_fd, 0u, 0u, vk_.stride,
-      static_cast<uint32_t>(static_cast<uint64_t>(DRM_FORMAT_MOD_LINEAR) >>
-                            32u),
-      static_cast<uint32_t>(DRM_FORMAT_MOD_LINEAR));
+  params.Get()->Add(vk_.dma_fd, 0u, 0u, vk_.stride,
+                    static_cast<uint32_t>(
+                        static_cast<uint64_t>(DRM_FORMAT_MOD_LINEAR) >> 32u),
+                    static_cast<uint32_t>(DRM_FORMAT_MOD_LINEAR));
 
   // create_immed synchronously returns a wl_buffer proxy on the client side
   // without waiting for a compositor round-trip.
-  if (wl_proxy* raw = wl::construct<wl_buffer_traits,
-                                    zwp_linux_buffer_params_v1_traits::Op::
-                                        CreateImmed>(
-          *params.Get(), static_cast<int32_t>(width_),
-          static_cast<int32_t>(height_), opts_.drm_format, 0u)) {
+  if (wl_proxy* raw =
+          wl::construct<wl_buffer_traits,
+                        zwp_linux_buffer_params_v1_traits::Op::CreateImmed>(
+              *params.Get(), static_cast<int32_t>(width_),
+              static_cast<int32_t>(height_), opts_.drm_format, 0u)) {
     // Use _SetProxy to install the event listener for wl_buffer.release.
     wl_buffer_.Get()->_SetProxy(raw);
   } else {
@@ -1295,7 +1288,8 @@ bool App::CreateDmaBufBuffer() {
   return true;
 }
 
-// ── DoResize ──────────────────────────────────────────────────────────────────
+// ── DoResize
+// ──────────────────────────────────────────────────────────────────
 
 bool App::DoResize() noexcept {
   const int new_w = (pending_width_ > 0) ? pending_width_ : width_;
@@ -1304,15 +1298,16 @@ bool App::DoResize() noexcept {
   if (new_w == width_ && new_h == height_)
     return true;  // Nothing to do.
 
-  std::printf("xdg-simple-dmabuf-vulkan: resize %dx%d → %dx%d\n",
-              width_, height_, new_w, new_h);
+  std::printf("xdg-simple-dmabuf-vulkan: resize %dx%d → %dx%d\n", width_,
+              height_, new_w, new_h);
 
   // Wait for any in-flight GPU work to finish before touching Vulkan objects.
   if (!VkOk(vk_.device->waitIdle(), "vkDeviceWaitIdle (resize)"))
     return false;
 
   // Destroy the old wl_buffer.  This sends wl_buffer.destroy to the
-  // compositor, which is the correct way to relinquish our claim on the DMA-BUF.
+  // compositor, which is the correct way to relinquish our claim on the
+  // DMA-BUF.
   wl_buffer_.Reset();
 
   // Destroy size-dependent Vulkan objects in reverse creation order.
@@ -1332,14 +1327,13 @@ bool App::DoResize() noexcept {
   height_ = new_h;
 
   // ── Recreate the exportable image ─────────────────────────────────────────
-  const vk::ExternalMemoryImageCreateInfo ext_img{
+  constexpr vk::ExternalMemoryImageCreateInfo ext_img{
       vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
   vk::ImageCreateInfo img_ci;
   img_ci.imageType = vk::ImageType::e2D;
   img_ci.format = vk::Format::eB8G8R8A8Unorm;
-  img_ci.extent =
-      vk::Extent3D{static_cast<uint32_t>(width_),
-                   static_cast<uint32_t>(height_), 1};
+  img_ci.extent = vk::Extent3D{static_cast<uint32_t>(width_),
+                               static_cast<uint32_t>(height_), 1};
   img_ci.mipLevels = 1;
   img_ci.arrayLayers = 1;
   img_ci.samples = vk::SampleCountFlagBits::e1;
@@ -1370,7 +1364,7 @@ bool App::DoResize() noexcept {
   for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
     if (!(mem_reqs.memoryTypeBits & (1u << i)))
       continue;
-    if (mem_props.memoryTypes[i].propertyFlags &
+    if (mem_props.memoryTypes.at(i).propertyFlags &
         vk::MemoryPropertyFlagBits::eDeviceLocal) {
       mem_type = i;
       break;
@@ -1385,7 +1379,7 @@ bool App::DoResize() noexcept {
     return false;
   }
 
-  const vk::ExportMemoryAllocateInfo export_mem{
+  constexpr vk::ExportMemoryAllocateInfo export_mem{
       vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
   vk::MemoryAllocateInfo mem_ai{mem_reqs.size, mem_type};
   mem_ai.setPNext(&export_mem);
@@ -1411,9 +1405,7 @@ bool App::DoResize() noexcept {
       return false;
     }
     const VkMemoryGetFdInfoKHR fd_info_c{
-        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
-        nullptr,
-        *vk_.memory,
+        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, *vk_.memory,
         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
     int raw_fd = -1;
     if (!VkOk(static_cast<vk::Result>(fn(*vk_.device, &fd_info_c, &raw_fd)),
@@ -1440,14 +1432,13 @@ bool App::DoResize() noexcept {
   // ── Recreate framebuffer ───────────────────────────────────────────────────
   {
     const vk::ImageView attachments[] = {*vk_.image_view};
-    const vk::FramebufferCreateInfo fb_ci{
-        {},
-        *vk_.render_pass,
-        1,
-        attachments,
-        static_cast<uint32_t>(width_),
-        static_cast<uint32_t>(height_),
-        1};
+    const vk::FramebufferCreateInfo fb_ci{{},
+                                          *vk_.render_pass,
+                                          1,
+                                          attachments,
+                                          static_cast<uint32_t>(width_),
+                                          static_cast<uint32_t>(height_),
+                                          1};
     auto fb_rv = vk_.device->createFramebufferUnique(fb_ci);
     if (!VkOk(fb_rv.result, "vkCreateFramebuffer (resize)"))
       return false;
@@ -1458,7 +1449,8 @@ bool App::DoResize() noexcept {
   return CreateDmaBufBuffer();
 }
 
-// ── MainLoop ──────────────────────────────────────────────────────────────────
+// ── MainLoop
+// ──────────────────────────────────────────────────────────────────
 
 bool App::MainLoop() {
   std::printf(
@@ -1470,14 +1462,14 @@ bool App::MainLoop() {
   RenderFrame();
 
   const bool ok = wl::RunEventLoop(
-      display_.Get(), [this] { return !running_; },
-      "xdg-simple-dmabuf-vulkan");
+      display_.Get(), [this] { return !running_; }, "xdg-simple-dmabuf-vulkan");
   if (ok)
     std::printf("xdg-simple-dmabuf-vulkan: exiting cleanly\n");
   return ok;
 }
 
-// ── RequestFrameCallback ──────────────────────────────────────────────────────
+// ── RequestFrameCallback
+// ──────────────────────────────────────────────────────
 
 void App::RequestFrameCallback() noexcept {
   // wl_surface.frame → wl_callback.  Must be called BEFORE wl_surface.commit
@@ -1491,7 +1483,8 @@ void App::RequestFrameCallback() noexcept {
   }
 }
 
-// ── RenderFrame ───────────────────────────────────────────────────────────────
+// ── RenderFrame
+// ───────────────────────────────────────────────────────────────
 
 void App::RenderFrame() noexcept {
   // Apply any pending resize before drawing.
@@ -1516,41 +1509,36 @@ void App::RenderFrame() noexcept {
 
   // Clear to black, then draw the rotating red/green/blue triangle.
   // Push the current rotation angle to the vertex shader before drawing.
-  const vk::ClearValue clear_val{
+  constexpr vk::ClearValue clear_val{
       vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}};
   const vk::RenderPassBeginInfo rp_begin{
       *vk_.render_pass,
       *vk_.framebuffer,
-      {{0, 0},
-       {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_)}},
+      {{0, 0}, {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_)}},
       1,
       &clear_val};
   vk_.cmd_buf->beginRenderPass(rp_begin, vk::SubpassContents::eInline);
   vk_.cmd_buf->bindPipeline(vk::PipelineBindPoint::eGraphics, *vk_.pipeline);
 
-  // Set dynamic viewport and scissor to cover the current surface dimensions.
-  const vk::Viewport vp{0.0f,
-                        0.0f,
-                        static_cast<float>(width_),
-                        static_cast<float>(height_),
-                        0.0f,
-                        1.0f};
+  // Set a dynamic viewport and scissor to cover the current surface dimensions.
+  const vk::Viewport vp{
+      0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_),
+      0.0f, 1.0f};
   vk_.cmd_buf->setViewport(0, 1, &vp);
-  const vk::Rect2D scissor{{0, 0},
-                            {static_cast<uint32_t>(width_),
-                             static_cast<uint32_t>(height_)}};
+  const vk::Rect2D scissor{
+      {0, 0}, {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_)}};
   vk_.cmd_buf->setScissor(0, 1, &scissor);
 
   // Upload the rotation angle as a push constant (offset 0, vertex stage).
   vk_.cmd_buf->pushConstants(*vk_.pipeline_layout,
-                              vk::ShaderStageFlagBits::eVertex,
-                              0, sizeof(float), &angle_);
+                             vk::ShaderStageFlagBits::eVertex, 0, sizeof(float),
+                             &angle_);
   // Advance the angle for the next frame.
   angle_ += kRotStep;
   if (angle_ >= 2.0f * static_cast<float>(M_PI))
     angle_ -= 2.0f * static_cast<float>(M_PI);
 
-  const vk::DeviceSize vert_off = 0;
+  constexpr vk::DeviceSize vert_off = 0;
   vk_.cmd_buf->bindVertexBuffers(0, 1, &*vk_.vertex_buf, &vert_off);
   vk_.cmd_buf->draw(3, 1, 0, 0);
   vk_.cmd_buf->endRenderPass();
@@ -1592,7 +1580,8 @@ void App::RenderFrame() noexcept {
   surface_.Get()->Commit();
 }
 
-// ── OnFrameReady ──────────────────────────────────────────────────────────────
+// ── OnFrameReady
+// ──────────────────────────────────────────────────────────────
 
 void App::OnFrameReady(uint32_t /*time_ms*/) noexcept {
   // Detach the now-spent wl_callback proxy before arming the next one.
@@ -1607,7 +1596,8 @@ void App::OnFrameReady(uint32_t /*time_ms*/) noexcept {
   RenderFrame();
 }
 
-// ── App callbacks ─────────────────────────────────────────────────────────────
+// ── App callbacks
+// ─────────────────────────────────────────────────────────────
 
 void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
   // The framework already sent ack_configure before calling this callback.
@@ -1621,7 +1611,7 @@ void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
     configured_ = true;
     return;
   }
-  // Subsequent configure: schedule a resize if the compositor changed the size.
+  // schedule a resize if the compositor changed the size.
   if (!vulkan_init_)
     return;
   const int nw = (pending_width_ > 0) ? pending_width_ : width_;
@@ -1679,10 +1669,10 @@ int main(int argc, char** argv) {
   // NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
   static constexpr option kLongOpts[] = {
       {"drm-format", required_argument, nullptr, 'f'},
-      {"width",      required_argument, nullptr, 'w'},
-      {"height",     required_argument, nullptr, 'h'},
-      {"help",       no_argument,       nullptr, '?'},
-      {nullptr,      0,                 nullptr,  0 },
+      {"width", required_argument, nullptr, 'w'},
+      {"height", required_argument, nullptr, 'h'},
+      {"help", no_argument, nullptr, '?'},
+      {nullptr, 0, nullptr, 0},
   };
   // NOLINTEND(cppcoreguidelines-avoid-c-arrays)
 

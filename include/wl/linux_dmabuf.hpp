@@ -4,13 +4,15 @@
 // linux-dmabuf — header-only wl_interface tables and wl_iface() inline
 // implementations for the linux-dmabuf-unstable-v1 protocol (version 3).
 //
-// ── Include order ─────────────────────────────────────────────────────────────
-// This header must be included AFTER the generated linux_dmabuf_client.hpp:
+// ── Include order
+// ───────────────────────────────────────────────────────────── This header
+// must be included AFTER the generated linux_dmabuf_client.hpp:
 //
 //   #include "linux_dmabuf_client.hpp"  // defines CZwpLinuxDmabufV1, …
 //   #include <wl/linux_dmabuf.hpp>      // tables + wl_iface() impls
 //
-// ── Provided utilities ────────────────────────────────────────────────────────
+// ── Provided utilities
+// ────────────────────────────────────────────────────────
 //
 // Interface tables (namespace wl::dmabuf, version 3):
 //   Inline wl_interface objects for zwp_linux_dmabuf_v1 (v3) and
@@ -25,8 +27,6 @@
 //   Including this header replaces the manual definitions that every example
 //   would otherwise duplicate in its .cpp file.
 #pragma once
-
-#include <wl/wl_ptr.hpp>
 
 extern "C" {
 #include <wayland-client-protocol.h>
@@ -43,9 +43,9 @@ extern "C" {
 // libwayland can type-check and dispatch correctly.
 //
 // Covered interfaces and versions:
-//   zwp_linux_dmabuf_v1         — requests: destroy(v1), create_params(v1)
+//   zwp_linux_dmabuf_v1 — requests: destroy(v1), create_params(v1)
 //                               — events:   format(v1), modifier(v3)
-//   zwp_linux_buffer_params_v1  — requests: destroy(v1), add(v1),
+//   zwp_linux_buffer_params_v1 — requests: destroy(v1), add(v1),
 //                                           create(v1), create_immed(v2)
 //                               — events:   created(v1), failed(v1)
 //
@@ -58,17 +58,18 @@ extern "C" {
 
 namespace wl::dmabuf {
 
-// ── Forward declarations ──────────────────────────────────────────────────────
-// Needed so the types[] array can reference both interface objects before
-// either definition appears.
+// ── Forward declarations
+// ────────────────────────────────────────────────────── Needed so the types[]
+// array can reference both interface objects before either definition appears.
 
 extern const wl_interface dmabuf_iface;
 extern const wl_interface params_iface;
 
-// ── Shared pointer array ──────────────────────────────────────────────────────
-// Mirrors linux_dmabuf_unstable_v1_types[] from the C wayland-scanner output.
+// ── Shared pointer array
+// ────────────────────────────────────────────────────── Mirrors
+// linux_dmabuf_unstable_v1_types[] from the C wayland-scanner output.
 //
-// • avoid-non-const-global-variables: element type must be non-const pointer
+// • avoid-non-const-global-variables: element type must be a non-const pointer
 //   (const wl_interface*) because wl_message::types is const wl_interface**;
 //   adding const to the pointer elements would break the implicit conversion.
 // • interfaces-global-init: initializers are object addresses (link-time
@@ -79,13 +80,13 @@ extern const wl_interface params_iface;
 //             cppcoreguidelines-avoid-non-const-global-variables,
 //             cppcoreguidelines-interfaces-global-init)
 inline const wl_interface* types[] = {
-    nullptr,              // [0]  scalar / no-type slots
-    nullptr,              // [1]
-    nullptr,              // [2]
-    nullptr,              // [3]
-    &params_iface,        // [4]  create_params → new_id
-    &wl_buffer_interface, // [5]  create_immed → new_id wl_buffer;
-                          //      created event → new_id wl_buffer
+    nullptr,               // [0]  scalar / no-type slots
+    nullptr,               // [1]
+    nullptr,               // [2]
+    nullptr,               // [3]
+    &params_iface,         // [4]  create_params → new_id
+    &wl_buffer_interface,  // [5]  create_immed → new_id wl_buffer;
+                           //      created event → new_id wl_buffer
 };
 
 // kScalars points at the null-filled head of types[]; used by messages
