@@ -59,6 +59,7 @@ extern "C" {
 #include <cstring>
 #include <iterator>
 #include <list>
+#include <memory>
 #include <string_view>
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -159,16 +160,23 @@ struct ShmMapping {
   ~ShmMapping() noexcept { Reset(); }
   ShmMapping(const ShmMapping&) = delete;
   ShmMapping& operator=(const ShmMapping&) = delete;
+  ShmMapping(ShmMapping&&) = delete;
+  ShmMapping& operator=(ShmMapping&&) = delete;
 
   [[nodiscard]] bool Create(std::size_t n) noexcept {
+    Reset();
     fd = memfd_create("presentation-shm", 0);
     if (fd < 0)
       return false;
-    if (ftruncate(fd, static_cast<off_t>(n)) < 0)
+    if (ftruncate(fd, static_cast<off_t>(n)) < 0) {
+      Reset();
       return false;
+    }
     data = mmap(nullptr, n, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (data == MAP_FAILED)
+    if (data == MAP_FAILED) {
+      Reset();
       return false;
+    }
     size = n;
     return true;
   }
@@ -557,13 +565,13 @@ class App {
   unsigned frame_seq_ = 0;               // monotone frame counter
   uint32_t refresh_nsec_ = 16'666'667u;  // 60 Hz default until feedback
 
-  // Pending presentation-feedback objects (ownership transferred to the list).
-  std::list<WpPresentationFeedbackHandler*> feedback_list_;
+  // Pending presentation-feedback objects (owned by the list).
+  std::list<std::unique_ptr<WpPresentationFeedbackHandler>> feedback_list_;
   // Last-presented feedback record (for p2p timing).
-  WpPresentationFeedbackHandler* last_presented_ = nullptr;
+  std::unique_ptr<WpPresentationFeedbackHandler> last_presented_;
   // Live feedkick handler in LowLatPresent mode (at most one at a time;
-  // self-deletes on callback, so track it for cleanup on exit).
-  FeedkickHandler* feedkick_ = nullptr;
+  // cleared on callback, so track it for cleanup on exit).
+  std::unique_ptr<FeedkickHandler> feedkick_;
   friend class FeedkickHandler;  // needs access to feedkick_
 
   // ── Global IDs from registry scan ────────────────────────────────────────
@@ -599,6 +607,11 @@ class App {
 
   /// Kick the first commit in RUN_MODE_PRESENT.
   void Feedkick() noexcept;
+
+  /// Find the unique_ptr in feedback_list_ that owns @p fb and remove it,
+  /// returning the extracted unique_ptr (or nullptr if not found).
+  std::unique_ptr<WpPresentationFeedbackHandler> ExtractFeedback(
+      const WpPresentationFeedbackHandler& fb);
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -864,7 +877,7 @@ void App::AttachPresentationFeedback(uint32_t stamp_ms) noexcept {
 
   using namespace presentation_time::client;
 
-  auto* fb = new WpPresentationFeedbackHandler();
+  auto fb = std::make_unique<WpPresentationFeedbackHandler>();
   fb->app_ = this;
   fb->frame_no = ++frame_seq_;
   fb->frame_stamp = stamp_ms;
@@ -881,9 +894,7 @@ void App::AttachPresentationFeedback(uint32_t stamp_ms) noexcept {
           &wp_presentation_feedback_traits::wl_iface(),
           surface_.Get()->GetProxy(), nullptr)) {
     fb->_SetProxy(raw);
-    feedback_list_.push_back(fb);
-  } else {
-    delete fb;
+    feedback_list_.push_back(std::move(fb));
   }
 }
 
@@ -944,6 +955,17 @@ void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
   CommitNext(stamp_ms);
 }
 
+std::unique_ptr<WpPresentationFeedbackHandler> App::ExtractFeedback(
+    const WpPresentationFeedbackHandler& fb) {
+  auto it = std::find_if(feedback_list_.begin(), feedback_list_.end(),
+                         [&fb](const auto& p) { return p.get() == &fb; });
+  if (it == feedback_list_.end())
+    return nullptr;
+  auto ptr = std::move(*it);
+  feedback_list_.erase(it);
+  return ptr;
+}
+
 void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
                               const uint32_t tv_sec_hi,
                               const uint32_t tv_sec_lo,
@@ -1001,10 +1023,8 @@ void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
   // Store the 'present' timestamp in the commit field so p2p works next round.
   fb.commit = present;
 
-  // Remove from a list, transfer to last_presented_.
-  feedback_list_.remove(&fb);
-  delete last_presented_;
-  last_presented_ = &fb;
+  // Remove from the list, transfer to last_presented_.
+  last_presented_ = ExtractFeedback(fb);
 
   // For low-latency mode, kick the next frame immediately.
   if (mode_ == RunMode::LowLatPresent) {
@@ -1017,8 +1037,7 @@ void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
 
 void App::OnFeedbackDiscarded(WpPresentationFeedbackHandler& fb) noexcept {
   std::printf("discarded %u\n", fb.frame_no);
-  feedback_list_.remove(&fb);
-  delete &fb;
+  ExtractFeedback(fb);
 
   if (mode_ == RunMode::LowLatPresent) {
     EmulateRendering();
@@ -1049,18 +1068,15 @@ class FeedkickHandler
                    uint32_t,
                    uint32_t,
                    uint32_t) override {
-    // Clear the App's tracking pointer before self-deleting so the destructor
-    // doesn't double-free if App outlives this callback for any reason.
-    app_->feedkick_ = nullptr;
-    // Update refresh estimate and trigger the next low-latency commit.
+    // Move ownership to a local so `this` remains valid through the function
+    // body but is freed automatically at scope exit.
+    auto self = std::move(app_->feedkick_);
     app_->UpdateRefresh(refresh_ns);
     wl_proxy_destroy(Detach());
-    delete this;
   }
   void OnDiscarded() override {
-    app_->feedkick_ = nullptr;
+    auto self = std::move(app_->feedkick_);
     wl_proxy_destroy(Detach());
-    delete this;
   }
 };
 
@@ -1069,7 +1085,7 @@ void App::Feedkick() noexcept {
     return;
   using namespace presentation_time::client;
 
-  auto* fk = new FeedkickHandler();
+  auto fk = std::make_unique<FeedkickHandler>();
   fk->app_ = this;
   // Same "on" signature fix as AttachPresentationFeedback: surface before
   // nullptr.
@@ -1078,9 +1094,7 @@ void App::Feedkick() noexcept {
           &wp_presentation_feedback_traits::wl_iface(),
           surface_.Get()->GetProxy(), nullptr)) {
     fk->_SetProxy(raw);
-    feedkick_ = fk;  // take ownership; cleared by OnPresented/OnDiscarded
-  } else {
-    delete fk;
+    feedkick_ = std::move(fk);
   }
 }
 
@@ -1088,26 +1102,22 @@ void App::Feedkick() noexcept {
 // ──────────────────────────────────────────────────────────────────
 
 // App::~App() is defined here (after FeedkickHandler is complete), so it can
-// call feedkick_->Detach() and delete feedkick_ without using an incomplete
-// type.
+// call feedkick_->Detach() and reset the unique_ptr without an incomplete type.
 App::~App() {
   // Send versioned seat/keyboard release requests before member destructors
   // run.
   seat_.Release();
   // Destroy any live feedkick handler before the display disconnects.
-  // FeedkickHandler is heap-allocated and normally self-deletes when its
-  // wp_presentation_feedback callback fires; if the app exits before that
-  // event (e.g., Ctrl+C), we must explicitly release the proxy and free the
-  // object here so neither the proxy nor the C++ object is leaked.
+  // If the app exits before the wp_presentation_feedback callback fires
+  // (e.g., Ctrl+C), we must explicitly release the proxy here.
   if (feedkick_) {
     if (wl_proxy* p = feedkick_->Detach())
       wl_proxy_destroy(p);
-    delete feedkick_;
+    feedkick_.reset();
   }
-  // Clean up pending feedback objects.
-  for (const auto* fb : feedback_list_)
-    delete fb;
-  delete last_presented_;
+  // Clean up pending feedback objects (unique_ptrs auto-delete).
+  feedback_list_.clear();
+  last_presented_.reset();
 }
 
 void App::StartFeedbackMode() {

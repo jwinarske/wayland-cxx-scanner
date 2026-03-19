@@ -194,7 +194,8 @@ class KeyboardHandler
         }
       }
     }
-    close(fd);
+    if (fd >= 0)
+      close(fd);
   }
 
   void OnEnter(uint32_t /*serial*/,

@@ -64,10 +64,24 @@ int main() {
     close(pipefd[1]);  // close write end
 
     // Block until the server writes the socket name.
+    // Loop to handle short reads and EINTR.
     char buf[64] = {};
-    const ssize_t n = read(pipefd[0], static_cast<char*>(buf), sizeof(buf) - 1);
+    ssize_t total_read = 0;
+    while (total_read < static_cast<ssize_t>(sizeof(buf) - 1)) {
+      const auto remaining =
+          sizeof(buf) - 1 - static_cast<std::size_t>(total_read);
+      const ssize_t n =
+          read(pipefd[0], static_cast<char*>(buf) + total_read, remaining);
+      if (n > 0) {
+        total_read += n;
+      } else if (n == 0) {
+        break;  // EOF — server closed its end
+      } else if (errno != EINTR) {
+        break;  // real error
+      }
+    }
     close(pipefd[0]);
-    if (n <= 0) {
+    if (total_read <= 0) {
       std::fprintf(stderr, "client: pipe read failed\n");
       std::exit(EXIT_FAILURE);
     }

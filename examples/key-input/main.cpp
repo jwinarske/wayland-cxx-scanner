@@ -392,6 +392,8 @@ struct ShmState {
   ~ShmState() noexcept { Reset(); }
   ShmState(const ShmState&) = delete;
   ShmState& operator=(const ShmState&) = delete;
+  ShmState(ShmState&&) = delete;
+  ShmState& operator=(ShmState&&) = delete;
 
   /// Release all resources (idempotent).
   void Reset() noexcept {
