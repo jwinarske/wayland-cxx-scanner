@@ -206,8 +206,11 @@ struct ShmMapping {
   ~ShmMapping() noexcept { Reset(); }
   ShmMapping(const ShmMapping&) = delete;
   ShmMapping& operator=(const ShmMapping&) = delete;
+  ShmMapping(ShmMapping&&) = delete;
+  ShmMapping& operator=(ShmMapping&&) = delete;
 
   [[nodiscard]] bool Create(const std::size_t n) noexcept {
+    Reset();
     fd = memfd_create("subsurfaces-shm", 0);
     if (fd < 0) {
       std::fprintf(stderr, "subsurfaces: memfd_create: %s\n",
@@ -217,11 +220,13 @@ struct ShmMapping {
     if (ftruncate(fd, static_cast<off_t>(n)) < 0) {
       std::fprintf(stderr, "subsurfaces: ftruncate: %s\n",
                    std::strerror(errno));
+      Reset();
       return false;
     }
     data = mmap(nullptr, n, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (data == MAP_FAILED) {
       std::fprintf(stderr, "subsurfaces: mmap: %s\n", std::strerror(errno));
+      Reset();
       return false;
     }
     size = n;

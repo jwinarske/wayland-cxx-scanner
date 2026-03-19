@@ -147,16 +147,23 @@ struct ShmMapping {
   ~ShmMapping() noexcept { Reset(); }
   ShmMapping(const ShmMapping&) = delete;
   ShmMapping& operator=(const ShmMapping&) = delete;
+  ShmMapping(ShmMapping&&) = delete;
+  ShmMapping& operator=(ShmMapping&&) = delete;
 
   [[nodiscard]] bool Create(std::size_t n) noexcept {
+    Reset();
     fd = memfd_create("ivi-shell", 0);
     if (fd < 0)
       return false;
-    if (ftruncate(fd, static_cast<off_t>(n)) < 0)
+    if (ftruncate(fd, static_cast<off_t>(n)) < 0) {
+      Reset();
       return false;
+    }
     data = mmap(nullptr, n, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (data == MAP_FAILED)
+    if (data == MAP_FAILED) {
+      Reset();
       return false;
+    }
     size = n;
     return true;
   }

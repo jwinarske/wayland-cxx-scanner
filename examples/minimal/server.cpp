@@ -20,6 +20,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 
 // ── wl_interface definitions ─────────────────────────────────────────────────
 //
@@ -113,13 +114,16 @@ static void on_bind(wl_client* client,
     return;
   }
 
-  auto* impl = new MinimalServer();
+  auto impl = std::make_unique<MinimalServer>();
   impl->_SetResource(resource);
 
-  // Free the implementation when the resource is destroyed.
+  // Release ownership to the resource's user-data slot; the destructor
+  // callback below will delete it when the resource is destroyed.
   wl_resource_set_destructor(resource, [](wl_resource* r) noexcept {
-    delete static_cast<MinimalServer*>(wl_resource_get_user_data(r));
+    auto* ptr = static_cast<MinimalServer*>(wl_resource_get_user_data(r));
+    delete ptr;
   });
+  impl.release();
 
   // Register a client destroy-listener so we can stop the event loop.
   auto* ctx = static_cast<ServerCtx*>(data);
