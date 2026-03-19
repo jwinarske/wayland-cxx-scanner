@@ -43,8 +43,7 @@
 #include "wayland_client.hpp"
 #include "xdg_shell_client.hpp"
 
-// ── System C headers
-// ──────────────────────────────────────────────────────────
+// ── System C headers ──────────────────────────────────────
 extern "C" {
 // DRM_FORMAT_ARGB8888, DRM_FORMAT_MOD_LINEAR.
 #include <drm_fourcc.h>
@@ -56,9 +55,8 @@ extern "C" {
 #include <wayland-client-protocol.h>
 }
 
-// ── Framework headers
-// ───────────────────────────────────────────────────────── SetupHandler(),
-// BindHandler(), RunEventLoop().
+// ── Framework headers ────────────────────────────────────
+// SetupHandler(), BindHandler(), RunEventLoop().
 #include <wl/client_helpers.hpp>
 // DisplayHandle, RoundtripWithTimeout().
 #include <wl/display.hpp>
@@ -129,7 +127,7 @@ constexpr uint32_t kVertSpv[] = {
     0x00000000u, 0x505f6c67u, 0x7469736fu, 0x006e6f69u, 0x00070006u, 0x00000034u, 0x00000001u, 0x505f6c67u,
     0x746e696fu, 0x657a6953u, 0x00000000u, 0x00070006u, 0x00000034u, 0x00000002u, 0x435f6c67u, 0x4470696cu,
     0x61747369u, 0x0065636eu, 0x00070006u, 0x00000034u, 0x00000003u, 0x435f6c67u, 0x446c6c75u, 0x61747369u,
-    0x0065636eu, 0x00030005u, 0x00000036u, 0x00000000u, 0x00050005u, 0x00000041u, 0x67617266u, 0x6c6f635fu,
+    0x0065636eu, 0x00030005u, 0x00000036u, 0x00000000u, 0x00050005u, 0x00000041u, 0x67617266u, 0x6c6f635f,
     0x0000726fu, 0x00050005u, 0x00000043u, 0x635f6e69u, 0x726f6c6fu, 0x00000000u, 0x00030047u, 0x00000009u,
     0x00000002u, 0x00050048u, 0x00000009u, 0x00000000u, 0x00000023u, 0x00000000u, 0x00040047u, 0x0000001bu,
     0x0000001eu, 0x00000000u, 0x00030047u, 0x00000034u, 0x00000002u, 0x00050048u, 0x00000034u, 0x00000000u,
@@ -182,7 +180,7 @@ constexpr uint32_t kFragSpv[] = {
     0x0007000fu, 0x00000004u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00000009u, 0x0000000cu, 0x00030010u,
     0x00000004u, 0x00000007u, 0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du,
     0x00000000u, 0x00050005u, 0x00000009u, 0x5f74756fu, 0x6f6c6f63u, 0x00000072u, 0x00050005u, 0x0000000cu,
-    0x67617266u, 0x6c6f635fu, 0x0000726fu, 0x00040047u, 0x00000009u, 0x0000001eu, 0x00000000u, 0x00040047u,
+    0x67617266u, 0x6c6f635f, 0x0000726fu, 0x00040047u, 0x00000009u, 0x0000001eu, 0x00000000u, 0x00040047u,
     0x0000000cu, 0x0000001eu, 0x00000000u, 0x00020013u, 0x00000002u, 0x00030021u, 0x00000003u, 0x00000002u,
     0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u, 0x00000004u, 0x00040020u,
     0x00000008u, 0x00000003u, 0x00000007u, 0x0004003bu, 0x00000008u, 0x00000009u, 0x00000003u, 0x00040017u,
@@ -331,11 +329,14 @@ class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 // ── WlBufferHandler ──────────────────────────────────────────────────────────
 // Tracks wl_buffer.release so we know when the compositor is done reading the
 // DMA-BUF.  released_ starts true, so the very first RenderFrame() proceeds.
+// When release fires, it notifies App so that a frame callback that arrived
+// before the buffer was released can be served immediately (REC-1).
 
 class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
  public:
+  App* app_ = nullptr;
   bool released_ = true;
-  void OnRelease() override { released_ = true; }
+  void OnRelease() override;  // defined after full App definition
 };
 
 // ── LinuxDmabufHandler ───────────────────────────────────────────────────────
@@ -395,6 +396,9 @@ class App {
   /// Called by WlCallbackHandler::OnDone — render one frame and arm the next
   /// frame callback.
   void OnFrameReady(uint32_t time_ms) noexcept;
+  /// Called by WlBufferHandler::OnRelease — records that the compositor has
+  /// finished reading the buffer (released_ bookkeeping for DoResize()).
+  static void OnBufferRelease() noexcept;
 
  private:
   Options opts_;
@@ -424,44 +428,55 @@ class App {
   // (closing the DMA-BUF fd and releasing all Vulkan objects) before the
   // wl_surface proxy is destroyed.
   //
-  // Member declaration order inside VulkanState is chosen so that
-  // vk::UniqueX handles are destroyed in the correct Vulkan teardown order
-  // (reverse of declaration order):
-  //   fence → pipeline → framebuffer → image_view → frag_module → vert_module
-  //   → pipeline_layout → render_pass → vertex_mem → vertex_buf
-  //   → memory → image → cmd_buf → cmd_pool → device → instance
+  // Member declaration order inside VulkanState determines RAII destruction
+  // order (reverse of declaration).  Shared handles are declared first
+  // (destroyed last); per-frame handles are in Frame (declared last →
+  // destroyed first), ensuring cmd_buf is freed while cmd_pool is still live.
   struct VulkanState {
-    vk::UniqueInstance instance;    // destroyed LAST (after everything)
-    vk::PhysicalDevice phys_dev{};  // non-owning handle
+    // ── Shared (one per logical device) ──────────────────────────────────
+    vk::UniqueInstance instance;    // destroyed LAST
+    vk::PhysicalDevice phys_dev{};  // non-owning
     uint32_t queue_family = UINT32_MAX;
-    vk::UniqueDevice device;                   // destroyed before instance
-    vk::Queue queue{};                         // non-owning handle
-    vk::UniqueCommandPool cmd_pool;            // destroyed before the device
-    vk::UniqueCommandBuffer cmd_buf;           // freed before cmd_pool
-    vk::UniqueImage image;                     // destroyed before the device
-    vk::UniqueDeviceMemory memory;             // destroyed before the device
-    vk::UniqueBuffer vertex_buf;               // destroyed before the device
-    vk::UniqueDeviceMemory vertex_mem;         // destroyed before the device
-    vk::UniqueRenderPass render_pass;          // destroyed before the device
-    vk::UniquePipelineLayout pipeline_layout;  // destroyed before the device
-    vk::UniqueShaderModule vert_module;        // destroyed before the device
-    vk::UniqueShaderModule frag_module;        // destroyed before the device
-    vk::UniqueImageView image_view;            // destroyed before image
-    vk::UniqueFramebuffer
-        framebuffer;              // destroyed before render_pass/image_view
-    vk::UniquePipeline pipeline;  // destroyed before layout/renderpass
-    vk::UniqueFence fence;        // destroyed FIRST
-    int dma_fd = -1;
-    uint32_t stride = 0;  // bytes per row; set by getImageSubresourceLayout
+    vk::UniqueDevice device;
+    vk::Queue queue{};  // non-owning
+    vk::UniqueCommandPool cmd_pool;
+    vk::UniqueBuffer vertex_buf;
+    vk::UniqueDeviceMemory vertex_mem;  // after vertex_buf
+    vk::UniqueRenderPass render_pass;
+    vk::UniquePipelineLayout pipeline_layout;
+    vk::UniqueShaderModule vert_module;
+    vk::UniqueShaderModule frag_module;
+    vk::UniquePipeline pipeline;
+    uint32_t stride = 0;  // row pitch in bytes (same for both frames)
+    // Cached device proc pointer — resolved once, reused on resize.
+    PFN_vkGetMemoryFdKHR get_memory_fd_khr = nullptr;
 
-    ~VulkanState() noexcept {
-      // Close the exported fd before the Vulkan memory object is released.
-      if (dma_fd >= 0) {
-        ::close(dma_fd);
-        dma_fd = -1;
+    // ── Per-frame (double-buffered) ───────────────────────────────────────
+    // Within Frame, members are destroyed in reverse declaration order:
+    //   fence → cmd_buf → framebuffer → image_view → image → memory
+    struct Frame {
+      vk::UniqueDeviceMemory memory;  // destroyed LAST within frame
+      vk::UniqueImage image;
+      vk::UniqueImageView image_view;
+      vk::UniqueFramebuffer framebuffer;
+      vk::UniqueCommandBuffer cmd_buf;
+      vk::UniqueFence fence;  // destroyed FIRST within frame
+      int dma_fd = -1;
+
+      ~Frame() noexcept {
+        if (dma_fd >= 0) {
+          ::close(dma_fd);
+          dma_fd = -1;
+        }
       }
-      // vk::UniqueX members destroy automatically in reverse declaration order.
-    }
+      Frame() = default;
+      Frame(const Frame&) = delete;
+      Frame& operator=(const Frame&) = delete;
+    };
+    // frames[] declared last → destroyed FIRST (before cmd_pool).
+    static constexpr int kNumFrames = 2;
+    Frame frames[kNumFrames];  // NOLINT(cppcoreguidelines-avoid-c-arrays)
+
     VulkanState() = default;
     VulkanState(const VulkanState&) = delete;
     VulkanState& operator=(const VulkanState&) = delete;
@@ -471,9 +486,11 @@ class App {
   // with the dmabuf global before the Vulkan memory is freed.
   wl::WlPtr<LinuxDmabufHandler> linux_dmabuf_;
 
-  // wl_buffer_ — destroyed before linux_dmabuf_; sends wl_buffer.destroy to
-  // the compositor so it can release its reference to the DMA-BUF.
-  wl::WlPtr<WlBufferHandler> wl_buffer_;
+  // Double-buffered Wayland wl_buffers — back_ selects which slot is being
+  // rendered into; the other slot is held by the compositor.
+  // Destroyed before linux_dmabuf_ (sends wl_buffer.destroy first).
+  std::array<wl::WlPtr<WlBufferHandler>, 2> wl_buffers_;
+  int back_ = 0;  // index of the slot currently being rendered to
 
   // XDG CRTP handlers — destroyed in reverse: toplevel first, wm_base last.
   wl::WlPtr<wl::XdgWmBaseHandler> xdg_wm_base_;
@@ -497,6 +514,8 @@ class App {
   int pending_width_ = 0;
   int pending_height_ = 0;
   bool needs_resize_ = false;
+  /// Set when the frame callback fires while the back buffer is still held by
+  /// the compositor.  Cleared and RenderFrame() called from OnBufferRelease().
   // Current rotation angle (radians), advanced by kRotStep each frame.
   float angle_ = 0.0f;
 
@@ -548,6 +567,14 @@ void WlCallbackHandler::OnDone(const uint32_t time_ms) {
   app_->OnFrameReady(time_ms);
 }
 
+/// REC-1: notify App when the compositor releases the buffer so that a frame
+/// callback that arrived while the buffer was busy can now be served.
+void WlBufferHandler::OnRelease() {
+  released_ = true;
+  if (app_)
+    App::OnBufferRelease();
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // App method implementations
 // ══════════════════════════════════════════════════════════════════════════════
@@ -587,8 +614,7 @@ int App::Run() {
   return MainLoop() ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-// ── ConnectDisplay
-// ────────────────────────────────────────────────────────────
+// ── ConnectDisplay ──────────────────────────────────────────
 
 bool App::ConnectDisplay() {
   if (!display_.Connect()) {
@@ -599,8 +625,7 @@ bool App::ConnectDisplay() {
   return true;
 }
 
-// ── ScanGlobals
-// ───────────────────────────────────────────────────────────────
+// ── ScanGlobals ────────────────────────────────────────────────
 
 bool App::ScanGlobals() {
   if (!registry_.Create(display_.Get())) {
@@ -656,8 +681,7 @@ bool App::ScanGlobals() {
   return true;
 }
 
-// ── BindGlobals
-// ───────────────────────────────────────────────────────────────
+// ── BindGlobals ────────────────────────────────────────────────
 
 bool App::BindGlobals() {
   using namespace wayland::client;
@@ -736,8 +760,7 @@ bool App::BindGlobals() {
   return true;
 }
 
-// ── CreateSurfaces
-// ────────────────────────────────────────────────────────────
+// ── CreateSurfaces ──────────────────────────────────────────
 
 bool App::CreateSurfaces() {
   using namespace wayland::client;
@@ -799,8 +822,6 @@ bool App::CreateSurfaces() {
 
 bool App::InitVulkan() {
   // ── Instance ───────────────────────────────────────────────────────────────
-  // Require Vulkan 1.1 so that VkExternalMemoryImageCreateInfo and
-  // VkExportMemoryAllocateInfo are core (no KHR suffix needed).
   constexpr vk::ApplicationInfo app_info{"xdg-simple-dmabuf-vulkan",
                                          VK_MAKE_VERSION(0, 1, 0), nullptr, 0,
                                          VK_API_VERSION_1_1};
@@ -874,112 +895,8 @@ bool App::InitVulkan() {
     return false;
   vk_.cmd_pool = std::move(pool_rv.value);
 
-  // ── Exportable image ───────────────────────────────────────────────────────
-  // VK_FORMAT_B8G8R8A8_UNORM maps to both DRM_FORMAT_XRGB8888 and
-  // DRM_FORMAT_ARGB8888 (same memory layout on little-endian; distinction is
-  // just whether the compositor honors the alpha channel).
-  // VK_IMAGE_TILING_LINEAR is required for DMA-BUF export with the LINEAR
-  // modifier (DRM_FORMAT_MOD_LINEAR = 0).
-  constexpr vk::ExternalMemoryImageCreateInfo ext_img{
-      vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
-  vk::ImageCreateInfo img_ci;
-  img_ci.imageType = vk::ImageType::e2D;
-  img_ci.format = vk::Format::eB8G8R8A8Unorm;
-  img_ci.extent = vk::Extent3D{static_cast<uint32_t>(width_),
-                               static_cast<uint32_t>(height_), 1};
-  img_ci.mipLevels = 1;
-  img_ci.arrayLayers = 1;
-  img_ci.samples = vk::SampleCountFlagBits::e1;
-  img_ci.tiling = vk::ImageTiling::eLinear;
-  img_ci.usage = vk::ImageUsageFlagBits::eColorAttachment;
-  img_ci.sharingMode = vk::SharingMode::eExclusive;
-  img_ci.initialLayout = vk::ImageLayout::eUndefined;
-  img_ci.setPNext(&ext_img);
-
-  auto img_rv = vk_.device->createImageUnique(img_ci);
-  if (!VkOk(img_rv.result, "vkCreateImage"))
-    return false;
-  vk_.image = std::move(img_rv.value);
-
-  // ── Memory allocation ──────────────────────────────────────────────────────
-  const vk::MemoryRequirements mem_reqs =
-      vk_.device->getImageMemoryRequirements(*vk_.image);
-
-  // Query the row stride — required for the DMA-BUF import by the compositor.
-  const vk::SubresourceLayout sub_layout =
-      vk_.device->getImageSubresourceLayout(
-          *vk_.image, {vk::ImageAspectFlagBits::eColor, 0, 0});
-  vk_.stride = static_cast<uint32_t>(sub_layout.rowPitch);
-
-  // Find a memory type that is compatible with the image and prefers
-  // device-local (fast GPU-side) memory.
-  const vk::PhysicalDeviceMemoryProperties mem_props =
-      vk_.phys_dev.getMemoryProperties();
-  uint32_t mem_type = UINT32_MAX;
-  for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
-    if (!(mem_reqs.memoryTypeBits & (1u << i)))
-      continue;
-    if (mem_props.memoryTypes.at(i).propertyFlags &
-        vk::MemoryPropertyFlagBits::eDeviceLocal) {
-      mem_type = i;
-      break;
-    }
-    if (mem_type == UINT32_MAX)
-      mem_type = i;  // accept any compatible type as fallback
-  }
-  if (mem_type == UINT32_MAX) {
-    std::fprintf(stderr,
-                 "xdg-simple-dmabuf-vulkan: no suitable Vulkan memory type\n");
-    return false;
-  }
-
-  constexpr vk::ExportMemoryAllocateInfo export_mem{
-      vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
-  vk::MemoryAllocateInfo mem_ai{mem_reqs.size, mem_type};
-  mem_ai.setPNext(&export_mem);
-
-  auto mem_rv = vk_.device->allocateMemoryUnique(mem_ai);
-  if (!VkOk(mem_rv.result, "vkAllocateMemory"))
-    return false;
-  vk_.memory = std::move(mem_rv.value);
-
-  if (!VkOk(vk_.device->bindImageMemory(*vk_.image, *vk_.memory, 0),
-            "vkBindImageMemory"))
-    return false;
-
-  // ── Export DMA-BUF fd ──────────────────────────────────────────────────────
-  // getMemoryFdKHR returns a fresh O_RDWR file descriptor.  We keep it for
-  // the lifetime of the application; the compositor receives a dup via the
-  // Wayland fd-passing mechanism when we call zwp_linux_buffer_params_v1::add.
-  //
-  // vkGetMemoryFdKHR is a VK_KHR_external_memory_fd device-level extension
-  // entry point.  libvulkan.so only exports core loader symbols at link time,
-  // so the function must be resolved at runtime via vkGetDeviceProcAddr.
-  // We call the C API directly to avoid needing
-  // VULKAN_HPP_DISPATCH_LOADER_DYNAMIC.
-  {
-    const auto fn = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
-        vkGetDeviceProcAddr(*vk_.device, "vkGetMemoryFdKHR"));
-    if (!fn) {
-      std::fprintf(
-          stderr,
-          "xdg-simple-dmabuf-vulkan: vkGetDeviceProcAddr(vkGetMemoryFdKHR) "
-          "returned null\n");
-      return false;
-    }
-    const VkMemoryGetFdInfoKHR fd_info_c{
-        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, *vk_.memory,
-        VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
-    int raw_fd = -1;
-    if (!VkOk(static_cast<vk::Result>(fn(*vk_.device, &fd_info_c, &raw_fd)),
-              "vkGetMemoryFdKHR"))
-      return false;
-    vk_.dma_fd = raw_fd;
-  }
-
   // ── Vertex buffer ──────────────────────────────────────────────────────────
-  // HOST_VISIBLE | HOST_COHERENT so we can map and copy the triangle data
-  // from the CPU.
+  // HOST_VISIBLE | HOST_COHERENT so we can map and copy the triangle data.
   {
     constexpr vk::BufferCreateInfo buf_ci{
         {},
@@ -993,6 +910,8 @@ bool App::InitVulkan() {
 
     const vk::MemoryRequirements vb_reqs =
         vk_.device->getBufferMemoryRequirements(*vk_.vertex_buf);
+    const vk::PhysicalDeviceMemoryProperties mem_props =
+        vk_.phys_dev.getMemoryProperties();
     constexpr vk::MemoryPropertyFlags want =
         vk::MemoryPropertyFlagBits::eHostVisible |
         vk::MemoryPropertyFlagBits::eHostCoherent;
@@ -1018,8 +937,6 @@ bool App::InitVulkan() {
     if (!VkOk(vk_.device->bindBufferMemory(*vk_.vertex_buf, *vk_.vertex_mem, 0),
               "vkBindBufferMemory (vertex)"))
       return false;
-
-    // Upload triangle data.
     auto map_rv = vk_.device->mapMemory(*vk_.vertex_mem, 0, vb_reqs.size);
     if (!VkOk(map_rv.result, "vkMapMemory (vertex)"))
       return false;
@@ -1028,14 +945,6 @@ bool App::InitVulkan() {
   }
 
   // ── Render pass ────────────────────────────────────────────────────────────
-  // Single BGRA color attachment.
-  //   Load = eClear → clear to black at the start of every render pass.
-  //   Store = eStore → keep results so the compositor can read them.
-  //   initialLayout = eUndefined → a driver may discard contents (we always
-  //                                 clear, so this is safe and avoids a
-  //                                 layout-transition cost on the first frame).
-  //   finalLayout = eGeneral → suitable for DMA-BUF / CPU reads by the
-  //                                 compositor.
   {
     constexpr vk::AttachmentDescription color_att{
         {},
@@ -1052,8 +961,6 @@ bool App::InitVulkan() {
         0, vk::ImageLayout::eColorAttachmentOptimal};
     const vk::SubpassDescription subpass{
         {}, vk::PipelineBindPoint::eGraphics, 0, nullptr, 1, &color_ref};
-    // Subpass dependency: ensure the render pass output is visible to external
-    // (compositor DMA) readers before the next frame's render pass begins.
     constexpr vk::SubpassDependency dep{
         0,
         VK_SUBPASS_EXTERNAL,
@@ -1068,37 +975,6 @@ bool App::InitVulkan() {
     if (!VkOk(rp_rv.result, "vkCreateRenderPass"))
       return false;
     vk_.render_pass = std::move(rp_rv.value);
-  }
-
-  // ── Image view ─────────────────────────────────────────────────────────────
-  {
-    const vk::ImageViewCreateInfo iv_ci{
-        {},
-        *vk_.image,
-        vk::ImageViewType::e2D,
-        vk::Format::eB8G8R8A8Unorm,
-        {},
-        {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
-    auto iv_rv = vk_.device->createImageViewUnique(iv_ci);
-    if (!VkOk(iv_rv.result, "vkCreateImageView"))
-      return false;
-    vk_.image_view = std::move(iv_rv.value);
-  }
-
-  // ── Framebuffer ────────────────────────────────────────────────────────────
-  {
-    const vk::ImageView attachments[] = {*vk_.image_view};
-    const vk::FramebufferCreateInfo fb_ci{{},
-                                          *vk_.render_pass,
-                                          1,
-                                          attachments,
-                                          static_cast<uint32_t>(width_),
-                                          static_cast<uint32_t>(height_),
-                                          1};
-    auto fb_rv = vk_.device->createFramebufferUnique(fb_ci);
-    if (!VkOk(fb_rv.result, "vkCreateFramebuffer"))
-      return false;
-    vk_.framebuffer = std::move(fb_rv.value);
   }
 
   // ── Shader modules ─────────────────────────────────────────────────────────
@@ -1119,8 +995,6 @@ bool App::InitVulkan() {
   }
 
   // ── Pipeline layout ────────────────────────────────────────────────────────
-  // One push constant range: a single float (angle, in radians) at offset 0,
-  // used by the vertex shader to rotate the triangle each frame.
   {
     constexpr vk::PushConstantRange pc_range{vk::ShaderStageFlagBits::eVertex,
                                              0, sizeof(float)};
@@ -1132,11 +1006,6 @@ bool App::InitVulkan() {
   }
 
   // ── Graphics pipeline ──────────────────────────────────────────────────────
-  // Vertex binding 0: interleaved [x, y, r, g, b] per vertex.
-  //   Attribute 0: vec2 position at offset 0.
-  //   Attribute 1: vec3 color at offset offsetof(Vertex, r) = 8.
-  // Viewport and scissor are dynamic state, so the pipeline does not need to
-  // be recreated when the window is resized.
   {
     constexpr vk::VertexInputBindingDescription binding{
         0, sizeof(Vertex), vk::VertexInputRate::eVertex};
@@ -1148,15 +1017,10 @@ bool App::InitVulkan() {
     };
     const vk::PipelineVertexInputStateCreateInfo vert_input{
         {}, 1, &binding, 2, attrs};
-
     constexpr vk::PipelineInputAssemblyStateCreateInfo input_asm{
         {}, vk::PrimitiveTopology::eTriangleList, VK_FALSE};
-
-    // Counts must be declared even with dynamic state; actual values are set
-    // per-draw via vkCmdSetViewport / vkCmdSetScissor in RenderFrame().
     constexpr vk::PipelineViewportStateCreateInfo viewport_state{
         {}, 1, nullptr, 1, nullptr};
-
     constexpr vk::PipelineRasterizationStateCreateInfo raster{
         {},
         VK_FALSE,
@@ -1169,10 +1033,8 @@ bool App::InitVulkan() {
         0.0f,
         0.0f,
         1.0f};
-
     constexpr vk::PipelineMultisampleStateCreateInfo msaa{
         {}, vk::SampleCountFlagBits::e1};
-
     constexpr vk::ColorComponentFlags kAllComponents =
         vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
@@ -1180,16 +1042,13 @@ bool App::InitVulkan() {
         VK_FALSE, {}, {}, {}, {}, {}, {}, kAllComponents};
     const vk::PipelineColorBlendStateCreateInfo blend{
         {}, VK_FALSE, vk::LogicOp::eCopy, 1, &blend_att};
-
     constexpr vk::DynamicState dyn_states[2]{vk::DynamicState::eViewport,
                                              vk::DynamicState::eScissor};
     const vk::PipelineDynamicStateCreateInfo dyn_state{{}, 2, dyn_states};
-
     const vk::PipelineShaderStageCreateInfo stages[2]{
         {{}, vk::ShaderStageFlagBits::eVertex, *vk_.vert_module, "main"},
         {{}, vk::ShaderStageFlagBits::eFragment, *vk_.frag_module, "main"},
     };
-
     const vk::GraphicsPipelineCreateInfo pipe_ci{{},
                                                  2,
                                                  stages,
@@ -1211,30 +1070,164 @@ bool App::InitVulkan() {
     vk_.pipeline = std::move(pipe_rv.value);
   }
 
-  // ── Command buffer ─────────────────────────────────────────────────────────
-  const vk::CommandBufferAllocateInfo cb_ai{
-      *vk_.cmd_pool, vk::CommandBufferLevel::ePrimary, 1};
-  auto cb_rv = vk_.device->allocateCommandBuffersUnique(cb_ai);
-  if (!VkOk(cb_rv.result, "vkAllocateCommandBuffers"))
-    return false;
-  vk_.cmd_buf = std::move(cb_rv.value.front());
+  // ── Per-frame resources (double-buffered) ─────────────────────────────────
+  // Two identical slots: image, memory, image_view, framebuffer, cmd_buf,
+  // fence (pre-signaled).  Shared stride and get_memory_fd_khr are derived
+  // from slot 0 and reused for slot 1.
+  const vk::PhysicalDeviceMemoryProperties mem_props =
+      vk_.phys_dev.getMemoryProperties();
 
-  // ── Fence ──────────────────────────────────────────────────────────────────
-  auto fence_rv = vk_.device->createFenceUnique({});
-  if (!VkOk(fence_rv.result, "vkCreateFence"))
-    return false;
-  vk_.fence = std::move(fence_rv.value);
+  constexpr vk::ExternalMemoryImageCreateInfo ext_img{
+      vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
+  vk::ImageCreateInfo img_ci;
+  img_ci.imageType = vk::ImageType::e2D;
+  img_ci.format = vk::Format::eB8G8R8A8Unorm;
+  img_ci.extent = vk::Extent3D{static_cast<uint32_t>(width_),
+                               static_cast<uint32_t>(height_), 1};
+  img_ci.mipLevels = 1;
+  img_ci.arrayLayers = 1;
+  img_ci.samples = vk::SampleCountFlagBits::e1;
+  img_ci.tiling = vk::ImageTiling::eLinear;
+  img_ci.usage = vk::ImageUsageFlagBits::eColorAttachment;
+  img_ci.sharingMode = vk::SharingMode::eExclusive;
+  img_ci.initialLayout = vk::ImageLayout::eUndefined;
+  img_ci.setPNext(&ext_img);
+
+  for (int i = 0; i < VulkanState::kNumFrames; ++i) {
+    VulkanState::Frame& fr = vk_.frames[i];
+
+    // Image
+    {
+      auto rv = vk_.device->createImageUnique(img_ci);
+      if (!VkOk(rv.result, "vkCreateImage"))
+        return false;
+      fr.image = std::move(rv.value);
+    }
+
+    // Memory
+    const vk::MemoryRequirements mem_reqs =
+        vk_.device->getImageMemoryRequirements(*fr.image);
+    if (i == 0) {
+      const vk::SubresourceLayout sub = vk_.device->getImageSubresourceLayout(
+          *fr.image, {vk::ImageAspectFlagBits::eColor, 0, 0});
+      vk_.stride = static_cast<uint32_t>(sub.rowPitch);
+    }
+    uint32_t mem_type = UINT32_MAX;
+    for (uint32_t j = 0; j < mem_props.memoryTypeCount; ++j) {
+      if (!(mem_reqs.memoryTypeBits & (1u << j)))
+        continue;
+      if (mem_props.memoryTypes.at(j).propertyFlags &
+          vk::MemoryPropertyFlagBits::eDeviceLocal) {
+        mem_type = j;
+        break;
+      }
+      if (mem_type == UINT32_MAX)
+        mem_type = j;
+    }
+    if (mem_type == UINT32_MAX) {
+      std::fprintf(stderr,
+                   "xdg-simple-dmabuf-vulkan: no suitable memory type "
+                   "(frame %d)\n",
+                   i);
+      return false;
+    }
+    constexpr vk::ExportMemoryAllocateInfo export_mem{
+        vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
+    vk::MemoryAllocateInfo mem_ai{mem_reqs.size, mem_type};
+    mem_ai.setPNext(&export_mem);
+    {
+      auto rv = vk_.device->allocateMemoryUnique(mem_ai);
+      if (!VkOk(rv.result, "vkAllocateMemory"))
+        return false;
+      fr.memory = std::move(rv.value);
+    }
+    if (!VkOk(vk_.device->bindImageMemory(*fr.image, *fr.memory, 0),
+              "vkBindImageMemory"))
+      return false;
+
+    // DMA-BUF fd (resolve proc addr on first slot only)
+    if (i == 0) {
+      vk_.get_memory_fd_khr = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+          vkGetDeviceProcAddr(*vk_.device, "vkGetMemoryFdKHR"));
+      if (!vk_.get_memory_fd_khr) {
+        std::fprintf(stderr,
+                     "xdg-simple-dmabuf-vulkan: vkGetDeviceProcAddr("
+                     "vkGetMemoryFdKHR) returned null\n");
+        return false;
+      }
+    }
+    {
+      const VkMemoryGetFdInfoKHR fd_info{
+          VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, *fr.memory,
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+      int raw_fd = -1;
+      if (!VkOk(static_cast<vk::Result>(
+                    vk_.get_memory_fd_khr(*vk_.device, &fd_info, &raw_fd)),
+                "vkGetMemoryFdKHR"))
+        return false;
+      fr.dma_fd = raw_fd;
+    }
+
+    // Image view
+    {
+      const vk::ImageViewCreateInfo iv_ci{
+          {},
+          *fr.image,
+          vk::ImageViewType::e2D,
+          vk::Format::eB8G8R8A8Unorm,
+          {},
+          {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+      auto rv = vk_.device->createImageViewUnique(iv_ci);
+      if (!VkOk(rv.result, "vkCreateImageView"))
+        return false;
+      fr.image_view = std::move(rv.value);
+    }
+
+    // Framebuffer
+    {
+      const vk::ImageView attachments[] = {*fr.image_view};
+      const vk::FramebufferCreateInfo fb_ci{{},
+                                            *vk_.render_pass,
+                                            1,
+                                            attachments,
+                                            static_cast<uint32_t>(width_),
+                                            static_cast<uint32_t>(height_),
+                                            1};
+      auto rv = vk_.device->createFramebufferUnique(fb_ci);
+      if (!VkOk(rv.result, "vkCreateFramebuffer"))
+        return false;
+      fr.framebuffer = std::move(rv.value);
+    }
+
+    // Command buffer
+    {
+      const vk::CommandBufferAllocateInfo cb_ai{
+          *vk_.cmd_pool, vk::CommandBufferLevel::ePrimary, 1};
+      auto rv = vk_.device->allocateCommandBuffersUnique(cb_ai);
+      if (!VkOk(rv.result, "vkAllocateCommandBuffers"))
+        return false;
+      fr.cmd_buf = std::move(rv.value.front());
+    }
+
+    // Fence — pre-signaled so first RenderFrame() wait returns immediately
+    {
+      auto rv =
+          vk_.device->createFenceUnique({vk::FenceCreateFlagBits::eSignaled});
+      if (!VkOk(rv.result, "vkCreateFence"))
+        return false;
+      fr.fence = std::move(rv.value);
+    }
+  }
 
   vulkan_init_ = true;
   std::printf(
-      "xdg-simple-dmabuf-vulkan: Vulkan initialized "
-      "(stride=%u, dma_fd=%d)\n",
-      vk_.stride, vk_.dma_fd);
+      "xdg-simple-dmabuf-vulkan: Vulkan initialized (stride=%u, "
+      "dma_fd[0]=%d dma_fd[1]=%d)\n",
+      vk_.stride, vk_.frames[0].dma_fd, vk_.frames[1].dma_fd);
   return true;
 }
 
-// ── CreateDmaBufBuffer
-// ────────────────────────────────────────────────────────
+// ── CreateDmaBufBuffer ──────────────────────────────────
 
 bool App::CreateDmaBufBuffer() {
   using namespace linux_dmabuf_unstable_v1::client;
@@ -1257,9 +1250,9 @@ bool App::CreateDmaBufBuffer() {
   }
 
   // Add our DMA-BUF plane.  The fd is sent via SCM_RIGHTS (libwayland dups it
-  // during marshalling); our copy vk_.dma_fd remains valid afterwards.
-  // Modifier: DRM_FORMAT_MOD_LINEAR = 0.
-  params.Get()->Add(vk_.dma_fd, 0u, 0u, vk_.stride,
+  // during marshalling); our copy vk_.frames[back_].dma_fd remains valid
+  // afterwards. Modifier: DRM_FORMAT_MOD_LINEAR = 0.
+  params.Get()->Add(vk_.frames[back_].dma_fd, 0u, 0u, vk_.stride,
                     static_cast<uint32_t>(
                         static_cast<uint64_t>(DRM_FORMAT_MOD_LINEAR) >> 32u),
                     static_cast<uint32_t>(DRM_FORMAT_MOD_LINEAR));
@@ -1272,7 +1265,10 @@ bool App::CreateDmaBufBuffer() {
               *params.Get(), static_cast<int32_t>(width_),
               static_cast<int32_t>(height_), opts_.drm_format, 0u)) {
     // Use _SetProxy to install the event listener for wl_buffer.release.
-    wl_buffer_.Get()->_SetProxy(raw);
+    wl_buffers_[back_].Get()->_SetProxy(raw);
+    // Wire the back-pointer so WlBufferHandler::OnRelease() can call
+    // App::OnBufferRelease() to serve any deferred frame (REC-1).
+    wl_buffers_[back_].Get()->app_ = this;
   } else {
     std::fprintf(
         stderr,
@@ -1284,12 +1280,11 @@ bool App::CreateDmaBufBuffer() {
   // params goes out of scope here — WlPtr::~WlPtr() sends
   // zwp_linux_buffer_params_v1.destroy and calls wl_proxy_destroy.
   // Mark the new buffer as available (not held by the compositor yet).
-  wl_buffer_.Get()->released_ = true;
+  wl_buffers_.at(back_).Get()->released_ = true;
   return true;
 }
 
-// ── DoResize
-// ──────────────────────────────────────────────────────────────────
+// ── DoResize ──────────────────────────────────────────────────────
 
 bool App::DoResize() noexcept {
   const int new_w = (pending_width_ > 0) ? pending_width_ : width_;
@@ -1308,19 +1303,19 @@ bool App::DoResize() noexcept {
   // Destroy the old wl_buffer.  This sends wl_buffer.destroy to the
   // compositor, which is the correct way to relinquish our claim on the
   // DMA-BUF.
-  wl_buffer_.Reset();
+  wl_buffers_.at(back_).Reset();
 
   // Destroy size-dependent Vulkan objects in reverse creation order.
-  vk_.framebuffer.reset();
-  vk_.image_view.reset();
-  vk_.image.reset();
+  vk_.frames[back_].framebuffer.reset();
+  vk_.frames[back_].image_view.reset();
+  vk_.frames[back_].image.reset();
 
   // Close the old DMA-BUF fd before freeing the memory it is backed by.
-  if (vk_.dma_fd >= 0) {
-    ::close(vk_.dma_fd);
-    vk_.dma_fd = -1;
+  if (vk_.frames[back_].dma_fd >= 0) {
+    ::close(vk_.frames[back_].dma_fd);
+    vk_.frames[back_].dma_fd = -1;
   }
-  vk_.memory.reset();
+  vk_.frames[back_].memory.reset();
 
   // Apply the new size.
   width_ = new_w;
@@ -1347,15 +1342,15 @@ bool App::DoResize() noexcept {
     auto img_rv = vk_.device->createImageUnique(img_ci);
     if (!VkOk(img_rv.result, "vkCreateImage (resize)"))
       return false;
-    vk_.image = std::move(img_rv.value);
+    vk_.frames[back_].image = std::move(img_rv.value);
   }
 
   // ── Allocate and bind memory ───────────────────────────────────────────────
   const vk::MemoryRequirements mem_reqs =
-      vk_.device->getImageMemoryRequirements(*vk_.image);
+      vk_.device->getImageMemoryRequirements(*vk_.frames[back_].image);
   const vk::SubresourceLayout sub_layout =
       vk_.device->getImageSubresourceLayout(
-          *vk_.image, {vk::ImageAspectFlagBits::eColor, 0, 0});
+          *vk_.frames[back_].image, {vk::ImageAspectFlagBits::eColor, 0, 0});
   vk_.stride = static_cast<uint32_t>(sub_layout.rowPitch);
 
   const vk::PhysicalDeviceMemoryProperties mem_props =
@@ -1388,37 +1383,38 @@ bool App::DoResize() noexcept {
     auto mem_rv = vk_.device->allocateMemoryUnique(mem_ai);
     if (!VkOk(mem_rv.result, "vkAllocateMemory (resize)"))
       return false;
-    vk_.memory = std::move(mem_rv.value);
+    vk_.frames[back_].memory = std::move(mem_rv.value);
   }
-  if (!VkOk(vk_.device->bindImageMemory(*vk_.image, *vk_.memory, 0),
+  if (!VkOk(vk_.device->bindImageMemory(*vk_.frames[back_].image,
+                                        *vk_.frames[back_].memory, 0),
             "vkBindImageMemory (resize)"))
     return false;
 
   // ── Export new DMA-BUF fd ──────────────────────────────────────────────────
   {
-    const auto fn = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
-        vkGetDeviceProcAddr(*vk_.device, "vkGetMemoryFdKHR"));
-    if (!fn) {
+    if (!vk_.get_memory_fd_khr) {
       std::fprintf(stderr,
-                   "xdg-simple-dmabuf-vulkan: vkGetDeviceProcAddr("
-                   "vkGetMemoryFdKHR) null (resize)\n");
+                   "xdg-simple-dmabuf-vulkan: vkGetMemoryFdKHR proc addr is "
+                   "null (resize)\n");
       return false;
     }
     const VkMemoryGetFdInfoKHR fd_info_c{
-        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, *vk_.memory,
+        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr,
+        *vk_.frames[back_].memory,
         VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
     int raw_fd = -1;
-    if (!VkOk(static_cast<vk::Result>(fn(*vk_.device, &fd_info_c, &raw_fd)),
+    if (!VkOk(static_cast<vk::Result>(
+                  vk_.get_memory_fd_khr(*vk_.device, &fd_info_c, &raw_fd)),
               "vkGetMemoryFdKHR (resize)"))
       return false;
-    vk_.dma_fd = raw_fd;
+    vk_.frames[back_].dma_fd = raw_fd;
   }
 
   // ── Recreate image view ────────────────────────────────────────────────────
   {
     const vk::ImageViewCreateInfo iv_ci{
         {},
-        *vk_.image,
+        *vk_.frames[back_].image,
         vk::ImageViewType::e2D,
         vk::Format::eB8G8R8A8Unorm,
         {},
@@ -1426,12 +1422,12 @@ bool App::DoResize() noexcept {
     auto iv_rv = vk_.device->createImageViewUnique(iv_ci);
     if (!VkOk(iv_rv.result, "vkCreateImageView (resize)"))
       return false;
-    vk_.image_view = std::move(iv_rv.value);
+    vk_.frames[back_].image_view = std::move(iv_rv.value);
   }
 
   // ── Recreate framebuffer ───────────────────────────────────────────────────
   {
-    const vk::ImageView attachments[] = {*vk_.image_view};
+    const vk::ImageView attachments[] = {*vk_.frames[back_].image_view};
     const vk::FramebufferCreateInfo fb_ci{{},
                                           *vk_.render_pass,
                                           1,
@@ -1442,15 +1438,14 @@ bool App::DoResize() noexcept {
     auto fb_rv = vk_.device->createFramebufferUnique(fb_ci);
     if (!VkOk(fb_rv.result, "vkCreateFramebuffer (resize)"))
       return false;
-    vk_.framebuffer = std::move(fb_rv.value);
+    vk_.frames[back_].framebuffer = std::move(fb_rv.value);
   }
 
   // ── Recreate wl_buffer ────────────────────────────────────────────────────
   return CreateDmaBufBuffer();
 }
 
-// ── MainLoop
-// ──────────────────────────────────────────────────────────────────
+// ── MainLoop ──────────────────────────────────────────────────────
 
 bool App::MainLoop() {
   std::printf(
@@ -1468,8 +1463,7 @@ bool App::MainLoop() {
   return ok;
 }
 
-// ── RequestFrameCallback
-// ──────────────────────────────────────────────────────
+// ── RequestFrameCallback ──────────────────────────────
 
 void App::RequestFrameCallback() noexcept {
   // wl_surface.frame → wl_callback.  Must be called BEFORE wl_surface.commit
@@ -1483,8 +1477,7 @@ void App::RequestFrameCallback() noexcept {
   }
 }
 
-// ── RenderFrame
-// ───────────────────────────────────────────────────────────────
+// ── RenderFrame ────────────────────────────────────────────────
 
 void App::RenderFrame() noexcept {
   // Apply any pending resize before drawing.
@@ -1497,11 +1490,12 @@ void App::RenderFrame() noexcept {
   }
 
   // ── Re-record the command buffer ──────────────────────────────────────────
-  if (vk_.cmd_buf->reset({}) != vk::Result::eSuccess) {
+  if (vk_.frames[back_].cmd_buf->reset({}) != vk::Result::eSuccess) {
     running_ = false;
     return;
   }
-  if (vk_.cmd_buf->begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit}) !=
+  if (vk_.frames[back_].cmd_buf->begin(
+          {vk::CommandBufferUsageFlagBits::eOneTimeSubmit}) !=
       vk::Result::eSuccess) {
     running_ = false;
     return;
@@ -1513,37 +1507,40 @@ void App::RenderFrame() noexcept {
       vk::ClearColorValue{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}}};
   const vk::RenderPassBeginInfo rp_begin{
       *vk_.render_pass,
-      *vk_.framebuffer,
+      *vk_.frames[back_].framebuffer,
       {{0, 0}, {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_)}},
       1,
       &clear_val};
-  vk_.cmd_buf->beginRenderPass(rp_begin, vk::SubpassContents::eInline);
-  vk_.cmd_buf->bindPipeline(vk::PipelineBindPoint::eGraphics, *vk_.pipeline);
+  vk_.frames[back_].cmd_buf->beginRenderPass(rp_begin,
+                                             vk::SubpassContents::eInline);
+  vk_.frames[back_].cmd_buf->bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                          *vk_.pipeline);
 
   // Set a dynamic viewport and scissor to cover the current surface dimensions.
   const vk::Viewport vp{
       0.0f, 0.0f, static_cast<float>(width_), static_cast<float>(height_),
       0.0f, 1.0f};
-  vk_.cmd_buf->setViewport(0, 1, &vp);
+  vk_.frames[back_].cmd_buf->setViewport(0, 1, &vp);
   const vk::Rect2D scissor{
       {0, 0}, {static_cast<uint32_t>(width_), static_cast<uint32_t>(height_)}};
-  vk_.cmd_buf->setScissor(0, 1, &scissor);
+  vk_.frames[back_].cmd_buf->setScissor(0, 1, &scissor);
 
   // Upload the rotation angle as a push constant (offset 0, vertex stage).
-  vk_.cmd_buf->pushConstants(*vk_.pipeline_layout,
-                             vk::ShaderStageFlagBits::eVertex, 0, sizeof(float),
-                             &angle_);
+  vk_.frames[back_].cmd_buf->pushConstants(*vk_.pipeline_layout,
+                                           vk::ShaderStageFlagBits::eVertex, 0,
+                                           sizeof(float), &angle_);
   // Advance the angle for the next frame.
   angle_ += kRotStep;
   if (angle_ >= 2.0f * static_cast<float>(M_PI))
     angle_ -= 2.0f * static_cast<float>(M_PI);
 
   constexpr vk::DeviceSize vert_off = 0;
-  vk_.cmd_buf->bindVertexBuffers(0, 1, &*vk_.vertex_buf, &vert_off);
-  vk_.cmd_buf->draw(3, 1, 0, 0);
-  vk_.cmd_buf->endRenderPass();
+  vk_.frames[back_].cmd_buf->bindVertexBuffers(0, 1, &*vk_.vertex_buf,
+                                               &vert_off);
+  vk_.frames[back_].cmd_buf->draw(3, 1, 0, 0);
+  vk_.frames[back_].cmd_buf->endRenderPass();
 
-  if (vk_.cmd_buf->end() != vk::Result::eSuccess) {
+  if (vk_.frames[back_].cmd_buf->end() != vk::Result::eSuccess) {
     running_ = false;
     return;
   }
@@ -1553,35 +1550,36 @@ void App::RenderFrame() noexcept {
   // reads fully rendered pixels.  Implicit DMA-BUF fence support in the
   // kernel would remove the need for this CPU stall; we use the simple
   // synchronous path here to keep the example self-contained.
-  const vk::SubmitInfo submit_info{{}, {}, *vk_.cmd_buf, {}};
-  if (vk_.queue.submit(1, &submit_info, *vk_.fence) != vk::Result::eSuccess) {
-    running_ = false;
-    return;
-  }
-  if (vk_.device->waitForFences(*vk_.fence, VK_TRUE, UINT64_MAX) !=
+  const vk::SubmitInfo submit_info{{}, {}, *vk_.frames[back_].cmd_buf, {}};
+  if (vk_.queue.submit(1, &submit_info, *vk_.frames[back_].fence) !=
       vk::Result::eSuccess) {
     running_ = false;
     return;
   }
-  if (!VkOk(vk_.device->resetFences(*vk_.fence), "vkResetFences")) {
+  if (vk_.device->waitForFences(*vk_.frames[back_].fence, VK_TRUE,
+                                UINT64_MAX) != vk::Result::eSuccess) {
+    running_ = false;
+    return;
+  }
+  if (!VkOk(vk_.device->resetFences(*vk_.frames[back_].fence),
+            "vkResetFences")) {
     running_ = false;
     return;
   }
 
   // ── Present via Wayland ───────────────────────────────────────────────────
   // Mark the buffer as "in use" so OnRelease() can track compositor ownership.
-  wl_buffer_.Get()->released_ = false;
+  wl_buffers_[back_].Get()->released_ = false;
   // Register the frame callback BEFORE commit so the request lands in the
   // same message batch as the buffer attachment (required by the Wayland
   // protocol — the callback fires after the frame that contains it).
   RequestFrameCallback();
-  surface_.Get()->Attach(wl_buffer_.Get()->GetProxy(), 0, 0);
+  surface_.Get()->Attach(wl_buffers_[back_].Get()->GetProxy(), 0, 0);
   surface_.Get()->Damage(0, 0, width_, height_);
   surface_.Get()->Commit();
 }
 
-// ── OnFrameReady
-// ──────────────────────────────────────────────────────────────
+// ── OnFrameReady ──────────────────────────────────────────────
 
 void App::OnFrameReady(uint32_t /*time_ms*/) noexcept {
   // Detach the now-spent wl_callback proxy before arming the next one.
@@ -1592,12 +1590,25 @@ void App::OnFrameReady(uint32_t /*time_ms*/) noexcept {
       wl_proxy_destroy(spent_cb);
   }};
 
-  // RenderFrame() re-arms the callback, submits GPU work, and commits.
+  // Single-buffer DMA-BUF: the vkWaitForFences call in RenderFrame() already
+  // ensures the GPU finished writing the previous frame before we reuse the
+  // buffer, and the kernel's implicit DMA-BUF fencing synchronises the
+  // compositor's GPU read with our next GPU write.  It is therefore safe to
+  // render unconditionally here without waiting for wl_buffer.release.
+  //
+  // REC-1 (release before done): if the compositor sent wl_buffer.release
+  // before this callback, released_ is already true and OnBufferRelease() is
+  // a no-op — this branch is the only render path in that case.
   RenderFrame();
 }
 
-// ── App callbacks
-// ─────────────────────────────────────────────────────────────
+void App::OnBufferRelease() noexcept {
+  // released_ was set to true by WlBufferHandler::OnRelease() before this
+  // call.  Nothing else to do: OnFrameReady() renders unconditionally so
+  // there is no deferred frame to serve here.
+}
+
+// ── App callbacks ────────────────────────────────────────────
 
 void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
   // The framework already sent ack_configure before calling this callback.
