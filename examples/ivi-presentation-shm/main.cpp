@@ -46,12 +46,16 @@ extern "C" {
 #include <array>
 #include <cassert>
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
+#include <span>
 #include <string_view>
+#include <vector>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
@@ -186,32 +190,32 @@ struct ShmMapping {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Fill @p image (XRGB8888) with an animated color wheel.
-static void paint_pixels(void* image,
+static void paint_pixels(std::span<uint32_t> buf,
                          int width,
                          int height,
                          uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
-  auto* base = static_cast<uint32_t*>(image);
 
   const double ang = M_PI * 2.0 / 1'000'000.0 * static_cast<double>(phase);
   const double s = std::sin(ang);
   const double c = std::cos(ang);
 
-  const int outer_r_sq = [&] {
-    int r = (halfw < halfh ? halfw : halfh) - 16;
+  const int64_t outer_r_sq = [&] {
+    const int64_t r = (halfw < halfh ? halfw : halfh) - 16;
     return r * r;
   }();
 
   for (int y = 0; y < height; ++y) {
     const int oy = y - halfh;
-    const int y2 = oy * oy;
+    const int64_t y2 = static_cast<int64_t>(oy) * oy;
     for (int x = 0; x < width; ++x) {
       const int ox = x - halfw;
-      const int idx = y * width + x;
-      if (ox * ox + y2 > outer_r_sq) {
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        base[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
+      const std::size_t idx =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+      if (static_cast<int64_t>(ox) * ox + y2 > outer_r_sq) {
+        buf[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
         continue;
       }
       const double rx = c * ox + s * oy;
@@ -223,8 +227,7 @@ static void paint_pixels(void* image,
         v |= 0x0000FF00u;
       if ((rx < 0.0) == (ry < 0.0))
         v |= 0x000000FFu;
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      base[idx] = v;
+      buf[idx] = v;
     }
   }
 }
@@ -546,24 +549,22 @@ bool App::CreateBuffers() {
     return false;
   }
 
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  wl_shm* raw_shm = reinterpret_cast<wl_shm*>(shm_.Get()->GetProxy());
-  wl_shm_pool* raw_pool =
-      wl_shm_create_pool(raw_shm, shm_mem_.fd, static_cast<int>(total));
-  if (!raw_pool) {
+  using wl_shm_t = wayland::client::wl_shm_traits;
+  using wl_pool_t = wayland::client::wl_shm_pool_traits;
+  wl::WlPtr<WlShmPoolHandler> pool;
+  if (wl_proxy* raw_pool = wl::construct<wl_pool_t, wl_shm_t::Op::CreatePool>(
+          *shm_.Get(), shm_mem_.fd, static_cast<int32_t>(total))) {
+    pool.Attach(raw_pool);
+  } else {
     std::fprintf(stderr, "ivi-shell: wl_shm_create_pool failed\n");
     return false;
   }
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  wl::WlPtr<WlShmPoolHandler> pool;
-  pool.Attach(reinterpret_cast<wl_proxy*>(raw_pool));
 
   for (int i = 0; i < kNumBufs; ++i) {
     const auto offset =
         static_cast<int32_t>(static_cast<std::size_t>(i) * per_buf);
     using wl_buf = wayland::client::wl_buffer_traits;
-    using wl_pool = wayland::client::wl_shm_pool_traits;
-    if (wl_proxy* raw = wl::construct<wl_buf, wl_pool::Op::CreateBuffer>(
+    if (wl_proxy* raw = wl::construct<wl_buf, wl_pool_t::Op::CreateBuffer>(
             *pool.Get(), offset, width_, height_, static_cast<int32_t>(stride),
             WL_SHM_FORMAT_XRGB8888)) {
       bufs_.at(static_cast<std::size_t>(i)).Get()->_SetProxy(raw);
@@ -594,20 +595,12 @@ bool App::CreateIviSurface() {
     return false;
   }
 
-  // Create the ivi_surface by calling ivi_application.surface_create.
-  //
-  // The request format is "uon" (uint ivi_id, object wl_surface, new_id).
-  // wl::construct<> places nullptr (new_id placeholder) BEFORE extra args,
-  // which only works for "n" or "no" signatures.  For "uon" we call
-  // _MarshalNew() directly, passing the wire args in protocol order with
-  // nullptr for the new_id placeholder at the end.
-  wl_proxy* ivi_surf_raw = ivi_app_.Get()->_MarshalNew(
-      ivi_application_traits::Op::SurfaceCreate,
-      &ivi_surface_traits::wl_iface(),
-      ivi_id_,                     // uint32_t ivi_id
-      surface_.Get()->GetProxy(),  // wl_proxy* wl_surface
-      nullptr                      // new_id placeholder
-  );
+  // ivi_application.surface_create has a wire signature of "uon" — the new_id
+  // comes after the leading uint + object args.
+  wl_proxy* ivi_surf_raw =
+      wl::construct_at_end<ivi_surface_traits,
+                           ivi_application_traits::Op::SurfaceCreate>(
+          *ivi_app_.Get(), ivi_id_, surface_.Get()->GetProxy());
   if (!ivi_surf_raw) {
     std::fprintf(stderr,
                  "ivi-shell: ivi_application.surface_create failed "
@@ -653,22 +646,24 @@ bool App::InitialCommit() {
     return false;
   }
 
-  const std::size_t stride = static_cast<std::size_t>(width_) * 4u;
-  const std::size_t per_buf = stride * static_cast<std::size_t>(height_);
-  void* pixels =
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      static_cast<uint8_t*>(shm_mem_.data) +
-      static_cast<std::size_t>(idx) * per_buf;
+  const std::size_t npixels =
+      static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
+  const std::size_t byte_offset =
+      static_cast<std::size_t>(idx) * npixels * sizeof(uint32_t);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  auto* base = reinterpret_cast<uint32_t*>(
+      static_cast<uint8_t*>(shm_mem_.data) + byte_offset);
 
-  paint_pixels(pixels, width_, height_, phase_);
+  paint_pixels({base, npixels}, width_, height_, phase_);
 
   auto* buf = bufs_.at(static_cast<std::size_t>(idx)).Get();
   buf->busy = true;
 
   RequestFrameCallback();
-  surface_.Get()->Attach(buf->GetProxy(), 0, 0);
-  surface_.Get()->Damage(0, 0, width_, height_);
-  surface_.Get()->Commit();
+  auto* surface = surface_.Get();
+  surface->Attach(buf->GetProxy(), 0, 0);
+  surface->Damage(0, 0, width_, height_);
+  surface->Commit();
   wl_display_flush(display_.Get());
   return true;
 }
@@ -692,23 +687,25 @@ void App::CommitFrame() noexcept {
   if (idx < 0)
     return;  // all buffers busy; skip frame
 
-  const std::size_t stride = static_cast<std::size_t>(width_) * 4u;
-  const std::size_t per_buf = stride * static_cast<std::size_t>(height_);
-  void* pixels =
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      static_cast<uint8_t*>(shm_mem_.data) +
-      static_cast<std::size_t>(idx) * per_buf;
+  const std::size_t npixels =
+      static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
+  const std::size_t byte_offset =
+      static_cast<std::size_t>(idx) * npixels * sizeof(uint32_t);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  auto* base = reinterpret_cast<uint32_t*>(
+      static_cast<uint8_t*>(shm_mem_.data) + byte_offset);
 
-  paint_pixels(pixels, width_, height_, phase_);
+  paint_pixels({base, npixels}, width_, height_, phase_);
   phase_ += 16'667;  // ~1/60 s in microseconds
 
   auto* buf = bufs_.at(static_cast<std::size_t>(idx)).Get();
   buf->busy = true;
 
   RequestFrameCallback();
-  surface_.Get()->Attach(buf->GetProxy(), 0, 0);
-  surface_.Get()->Damage(0, 0, width_, height_);
-  surface_.Get()->Commit();
+  auto* surface = surface_.Get();
+  surface->Attach(buf->GetProxy(), 0, 0);
+  surface->Damage(0, 0, width_, height_);
+  surface->Commit();
 }
 
 // ── App callbacks
@@ -770,25 +767,23 @@ void App::OnIviConfigure(const int32_t width, const int32_t height) noexcept {
     return;
   }
 
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  auto* raw_shm = reinterpret_cast<wl_shm*>(shm_.Get()->GetProxy());
-  wl_shm_pool* raw_pool =
-      wl_shm_create_pool(raw_shm, shm_mem_.fd, static_cast<int>(total));
-  if (!raw_pool) {
+  using wl_shm_t = wayland::client::wl_shm_traits;
+  using wl_pool_t = wayland::client::wl_shm_pool_traits;
+  wl::WlPtr<WlShmPoolHandler> pool;
+  if (wl_proxy* raw_pool = wl::construct<wl_pool_t, wl_shm_t::Op::CreatePool>(
+          *shm_.Get(), shm_mem_.fd, static_cast<int32_t>(total))) {
+    pool.Attach(raw_pool);
+  } else {
     std::fprintf(stderr, "ivi-shell: wl_shm_create_pool (resize) failed\n");
     running_ = false;
     return;
   }
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  wl::WlPtr<WlShmPoolHandler> pool;
-  pool.Attach(reinterpret_cast<wl_proxy*>(raw_pool));
 
   for (int i = 0; i < kNumBufs; ++i) {
     const auto offset =
         static_cast<int32_t>(static_cast<std::size_t>(i) * per_buf);
     using wl_buf = wayland::client::wl_buffer_traits;
-    using wl_pool = wayland::client::wl_shm_pool_traits;
-    if (wl_proxy* raw = wl::construct<wl_buf, wl_pool::Op::CreateBuffer>(
+    if (wl_proxy* raw = wl::construct<wl_buf, wl_pool_t::Op::CreateBuffer>(
             *pool.Get(), offset, width_, height_, static_cast<int32_t>(stride),
             WL_SHM_FORMAT_XRGB8888)) {
       bufs_.at(static_cast<std::size_t>(i)).Get()->_SetProxy(raw);
@@ -827,23 +822,27 @@ bool App::MainLoop() const {
 // Entry point
 // ══════════════════════════════════════════════════════════════════════════════
 
-int main(int argc, char* argv[]) {
+int main(const int argc, char* argv[]) {
   std::signal(SIGPIPE, SIG_IGN);
 
+  const std::vector<std::string_view> args(argv, std::next(argv, argc));
+
   uint32_t ivi_id = 9000u;  // default IVI surface ID
-  if (argc >= 2) {
+  if (args.size() >= 2) {
+    const auto val_str = args.at(1);
     char* end = nullptr;
     // Reject partial parses, overflow, and 0 (IVI ID 0 is reserved/invalid
     // on all known IVI compositors; strtol also returns 0 for non-numeric
     // input, so this check catches both cases).
-    if (const long val = std::strtol(argv[1], &end, 10);
-        end != argv[1] && *end == '\0' && val > 0 &&
+    errno = 0;
+    if (const long val = std::strtol(val_str.data(), &end, 10);
+        errno != ERANGE && end != val_str.data() && *end == '\0' && val > 0 &&
         val <= static_cast<long>(UINT32_MAX))
       ivi_id = static_cast<uint32_t>(val);
     else
       std::fprintf(stderr,
-                   "ivi-shell: invalid IVI ID '%s' — using default %u\n",
-                   argv[1], ivi_id);
+                   "ivi-shell: invalid IVI ID '%.*s' — using default %u\n",
+                   static_cast<int>(val_str.size()), val_str.data(), ivi_id);
   }
 
   std::printf("ivi-shell: using IVI surface ID %u\n", ivi_id);

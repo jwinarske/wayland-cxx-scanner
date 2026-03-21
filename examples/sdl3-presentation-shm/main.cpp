@@ -55,6 +55,7 @@ extern "C" {
 #include <list>
 #include <memory>
 #include <numbers>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -155,13 +156,12 @@ static int64_t timespec_diff_us(const timespec& a, const timespec& b) noexcept {
 // Pixel painting — spinning color wheel (identical to presentation-shm)
 // ══════════════════════════════════════════════════════════════════════════════
 
-static void paint_pixels(void* image,
+static void paint_pixels(std::span<uint32_t> buf,
                          const int width,
                          const int height,
                          const uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
-  auto* base = static_cast<uint32_t*>(image);
 
   const double ang =
       std::numbers::pi * 2.0 / 1'000'000.0 * static_cast<double>(phase);
@@ -182,8 +182,7 @@ static void paint_pixels(void* image,
           static_cast<std::size_t>(x);
 
       if (static_cast<int64_t>(ox) * ox + y2 > outer_r) {
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        base[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
+        buf[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
         continue;
       }
 
@@ -198,8 +197,7 @@ static void paint_pixels(void* image,
       if ((rx < 0.0) == (ry < 0.0))
         v |= 0x000000FFu;
 
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      base[idx] = v;
+      buf[idx] = v;
     }
   }
 }
@@ -494,15 +492,18 @@ void App::AttachPresentationFeedback() noexcept {
 
   using namespace presentation_time::client;
 
+  auto* pres = presentation_.Get();
+
   auto fb = std::make_unique<WpPresentationFeedbackHandler>();
   fb->app_ = this;
   fb->frame_no = ++frame_seq_;
-  if (clock_gettime(presentation_.Get()->clk_id, &fb->commit) != 0)
+  if (clock_gettime(pres->clk_id, &fb->commit) != 0)
     fb->commit = {};
 
-  if (wl_proxy* raw = presentation_.Get()->_MarshalNew(
-          wp_presentation_traits::Op::Feedback,
-          &wp_presentation_feedback_traits::wl_iface(), wl_surface_, nullptr)) {
+  if (wl_proxy* raw =
+          wl::construct_at_end<wp_presentation_feedback_traits,
+                               wp_presentation_traits::Op::Feedback>(
+              *pres, wl_surface_)) {
     fb->_SetProxy(raw);
     feedback_list_.push_back(std::move(fb));
   }
@@ -650,7 +651,7 @@ int App::Run() {
     EmulateRendering();
 
     // ── Render the spinning wheel ─────────────────────────────────────────
-    paint_pixels(pixels_.data(), width_, height_, phase);
+    paint_pixels(pixels_, width_, height_, phase);
     phase += 10'000u;
 
     if (!SDL_UpdateTexture(texture_, nullptr, pixels_.data(),

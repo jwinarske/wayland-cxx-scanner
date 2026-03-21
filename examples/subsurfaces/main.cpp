@@ -473,7 +473,7 @@ class App {
   bool BindGlobals();
   bool CreateSurfaces();
   bool CreateBuffers();
-  /// Initialise EGL + compile GL shaders for the red subsurface triangle.
+  /// Initialize EGL + compile GL shaders for the red subsurface triangle.
   bool InitGl() noexcept;
   bool InitialCommit();
   [[nodiscard]] bool MainLoop() const;
@@ -1185,16 +1185,18 @@ void App::OnKey(const uint32_t key, const uint32_t state) {
           if (gl_.window)
             wl_egl_window_resize(gl_.window, red_w_, red_h_, 0, 0);
           // Recommit blue and main with new dimensions.
+          auto* blue = blue_surface_.Get();
+          auto* main_s = main_surface_.Get();
           red_subsurface_.Get()->SetPosition(static_cast<int32_t>(red_x_),
                                              static_cast<int32_t>(red_y_));
           blue_subsurface_.Get()->SetPosition(static_cast<int32_t>(blue_x_),
                                               static_cast<int32_t>(blue_y_));
-          blue_surface_.Get()->Attach(blue_buf_.Get()->GetProxy(), 0, 0);
-          blue_surface_.Get()->Damage(0, 0, blue_w_, blue_h_);
-          blue_surface_.Get()->Commit();
-          main_surface_.Get()->Attach(main_buf_.Get()->GetProxy(), 0, 0);
-          main_surface_.Get()->Damage(0, 0, width_, height_);
-          main_surface_.Get()->Commit();
+          blue->Attach(blue_buf_.Get()->GetProxy(), 0, 0);
+          blue->Damage(0, 0, blue_w_, blue_h_);
+          blue->Commit();
+          main_s->Attach(main_buf_.Get()->GetProxy(), 0, 0);
+          main_s->Damage(0, 0, width_, height_);
+          main_s->Commit();
           xdg_surface_.Get()->SetWindowGeometry(0, 0, width_, height_);
         }
       }
@@ -1209,16 +1211,18 @@ void App::OnKey(const uint32_t key, const uint32_t state) {
           // Resize the EGL window for the red subsurface.
           if (gl_.window)
             wl_egl_window_resize(gl_.window, red_w_, red_h_, 0, 0);
+          auto* blue = blue_surface_.Get();
+          auto* main_s = main_surface_.Get();
           red_subsurface_.Get()->SetPosition(static_cast<int32_t>(red_x_),
                                              static_cast<int32_t>(red_y_));
           blue_subsurface_.Get()->SetPosition(static_cast<int32_t>(blue_x_),
                                               static_cast<int32_t>(blue_y_));
-          blue_surface_.Get()->Attach(blue_buf_.Get()->GetProxy(), 0, 0);
-          blue_surface_.Get()->Damage(0, 0, blue_w_, blue_h_);
-          blue_surface_.Get()->Commit();
-          main_surface_.Get()->Attach(main_buf_.Get()->GetProxy(), 0, 0);
-          main_surface_.Get()->Damage(0, 0, width_, height_);
-          main_surface_.Get()->Commit();
+          blue->Attach(blue_buf_.Get()->GetProxy(), 0, 0);
+          blue->Damage(0, 0, blue_w_, blue_h_);
+          blue->Commit();
+          main_s->Attach(main_buf_.Get()->GetProxy(), 0, 0);
+          main_s->Damage(0, 0, width_, height_);
+          main_s->Commit();
           xdg_surface_.Get()->SetWindowGeometry(0, 0, width_, height_);
         }
       }

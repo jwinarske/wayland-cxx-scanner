@@ -10,7 +10,7 @@
 # Plugin selection follows the libdecor pattern (highest-fidelity wins):
 #   • If GTK 3 is found  → GTK-themed CSD plugin (GTK + Cairo + Pango)
 #   • Elif Cairo is found → Cairo CSD plugin (Cairo + Pango, libdecor style)
-#   • Otherwise           → fallback flat-colour CSD plugin (no deps)
+#   • Otherwise           → fallback flat-color CSD plugin (no deps)
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 

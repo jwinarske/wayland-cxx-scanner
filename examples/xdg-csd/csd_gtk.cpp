@@ -29,7 +29,7 @@
 namespace wl::csd {
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Theme colour extraction helpers
+// Theme color extraction helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// ARGB8888 from GdkRGBA.
@@ -50,7 +50,7 @@ struct GtkCsdPlugin::Impl {
   bool focused = true;
   bool maximized = false;
 
-  // Cached theme colours (refreshed on state change).
+  // Cached theme colors (refreshed on state change).
   uint32_t title_bar_color = 0xFF3C3C3C;
   uint32_t title_bar_unfocused_color = 0xFF505050;
   uint32_t border_color = 0xFF505050;
@@ -98,7 +98,7 @@ struct GtkCsdPlugin::Impl {
     if (!header_ctx)
       return;
 
-    // Extract background colour by rendering to a tiny Cairo surface and
+    // Extract background color by rendering to a tiny Cairo surface and
     // sampling the result — avoids the deprecated
     // gtk_style_context_get_background_color().
     auto sample_bg = [](GtkStyleContext* ctx, GtkStateFlags state) -> uint32_t {
@@ -116,7 +116,7 @@ struct GtkCsdPlugin::Impl {
       return argb;
     };
 
-    // Active state colours.
+    // Active state colors.
     title_bar_color = sample_bg(header_ctx, GTK_STATE_FLAG_NORMAL);
     if ((title_bar_color & 0x00FFFFFFu) == 0)
       title_bar_color = 0xFF3C3C3C;  // Fallback if theme returns black.
@@ -126,7 +126,7 @@ struct GtkCsdPlugin::Impl {
     if ((title_bar_unfocused_color & 0x00FFFFFFu) == 0)
       title_bar_unfocused_color = 0xFF505050;
 
-    // Text colour.
+    // Text color.
     gtk_style_context_set_state(header_ctx, GTK_STATE_FLAG_NORMAL);
     {
       GdkRGBA fg{};
@@ -134,11 +134,11 @@ struct GtkCsdPlugin::Impl {
       title_text_color = GdkColorToArgb(fg);
     }
 
-    // Border colour — derive from title bar with reduced brightness.
+    // Border color — derive from title bar with reduced brightness.
     border_color = DarkenColor(title_bar_color, 0.7);
 
-    // Button colours — we keep sensible defaults since GTK doesn't
-    // expose per-button colours in a portable way.
+    // Button colors — we keep sensible defaults since GTK doesn't
+    // expose per-button colors in a portable way.
     close_btn_color = 0xFFE04040;
     max_btn_color = 0xFF40A040;
     min_btn_color = 0xFFD0A020;
@@ -179,7 +179,7 @@ int GtkCsdPlugin::TitleBarHeight() const noexcept {
 }
 
 void GtkCsdPlugin::SetTitle(std::string_view title) {
-  impl_->title = std::string{title};
+  impl_->title = title;
 }
 
 void GtkCsdPlugin::SetState(bool focused, bool maximized) {
@@ -250,7 +250,7 @@ static void RenderTitle(uint32_t* buf,
       cairo_image_surface_create(CAIRO_FORMAT_ARGB32, max_w, max_h);
   cairo_t* cr = cairo_create(surface);
 
-  // Set text colour.
+  // Set text color.
   const double r = ((text_color >> 16u) & 0xFFu) / 255.0;
   const double g = ((text_color >> 8u) & 0xFFu) / 255.0;
   const double b = (text_color & 0xFFu) / 255.0;
@@ -339,7 +339,7 @@ void GtkCsdPlugin::RenderFrame(uint32_t* buffer,
                                int content_w,
                                int content_h,
                                uint32_t time) {
-  // Fill entire surface with border colour.
+  // Fill entire surface with border color.
   FillRect(buffer, surface_w, 0, 0, surface_w, surface_h, impl_->border_color);
 
   // Title bar background.

@@ -63,6 +63,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include <string_view>
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -153,32 +154,32 @@ struct ShmMapping {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Fill the @p image (XRGB8888) with an animated color wheel.
-static void paint_pixels(void* image,
+static void paint_pixels(std::span<uint32_t> buf,
                          const int width,
                          const int height,
                          const uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
-  auto* base = static_cast<uint32_t*>(image);
 
   const double ang = M_PI * 2.0 / 1'000'000.0 * static_cast<double>(phase);
   const double s = std::sin(ang);
   const double c = std::cos(ang);
 
-  const int outer_r_sq = [&] {
-    const int r = (halfw < halfh ? halfw : halfh) - 16;
+  const int64_t outer_r_sq = [&] {
+    const int64_t r = (halfw < halfh ? halfw : halfh) - 16;
     return r * r;
   }();
 
   for (int y = 0; y < height; ++y) {
     const int oy = y - halfh;
-    const int y2 = oy * oy;
+    const int64_t y2 = static_cast<int64_t>(oy) * oy;
     for (int x = 0; x < width; ++x) {
       const int ox = x - halfw;
-      const int idx = y * width + x;
-      if (ox * ox + y2 > outer_r_sq) {
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        base[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
+      const std::size_t idx =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+      if (static_cast<int64_t>(ox) * ox + y2 > outer_r_sq) {
+        buf[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
         continue;
       }
       const double rx = c * ox + s * oy;
@@ -190,8 +191,7 @@ static void paint_pixels(void* image,
         v |= 0x0000FF00u;
       if ((rx < 0.0) == (ry < 0.0))
         v |= 0x000000FFu;
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      base[idx] = v;
+      buf[idx] = v;
     }
   }
 }
@@ -787,22 +787,24 @@ bool App::InitialCommit() {
     return false;
   }
 
-  const std::size_t stride = static_cast<std::size_t>(width_) * 4u;
-  const std::size_t per_buf = stride * static_cast<std::size_t>(height_);
-  void* pixels =
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      static_cast<uint8_t*>(shm_mem_.data) +
-      static_cast<std::size_t>(idx) * per_buf;
+  const std::size_t npixels =
+      static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
+  const std::size_t byte_offset =
+      static_cast<std::size_t>(idx) * npixels * sizeof(uint32_t);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  auto* base = reinterpret_cast<uint32_t*>(
+      static_cast<uint8_t*>(shm_mem_.data) + byte_offset);
 
-  paint_pixels(pixels, width_, height_, phase_);
+  paint_pixels({base, npixels}, width_, height_, phase_);
 
   auto* buf_handler = bufs_.at(static_cast<std::size_t>(idx)).Get();
   buf_handler->busy = true;
 
   RequestFrameCallback();
-  surface_.Get()->Attach(buf_handler->GetProxy(), 0, 0);
-  surface_.Get()->Damage(0, 0, width_, height_);
-  surface_.Get()->Commit();
+  auto* surface = surface_.Get();
+  surface->Attach(buf_handler->GetProxy(), 0, 0);
+  surface->Damage(0, 0, width_, height_);
+  surface->Commit();
   wl_display_flush(display_.Get());
   return true;
 }
@@ -826,23 +828,25 @@ void App::CommitFrame() noexcept {
   if (idx < 0)
     return;  // all buffers busy; skip frame
 
-  const std::size_t stride = static_cast<std::size_t>(width_) * 4u;
-  const std::size_t per_buf = stride * static_cast<std::size_t>(height_);
-  void* pixels =
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      static_cast<uint8_t*>(shm_mem_.data) +
-      static_cast<std::size_t>(idx) * per_buf;
+  const std::size_t npixels =
+      static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
+  const std::size_t byte_offset =
+      static_cast<std::size_t>(idx) * npixels * sizeof(uint32_t);
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  auto* base = reinterpret_cast<uint32_t*>(
+      static_cast<uint8_t*>(shm_mem_.data) + byte_offset);
 
-  paint_pixels(pixels, width_, height_, phase_);
+  paint_pixels({base, npixels}, width_, height_, phase_);
   phase_ += 16'667;  // ~1/60 s in microseconds
 
   auto* buf_handler = bufs_.at(static_cast<std::size_t>(idx)).Get();
   buf_handler->busy = true;
 
   RequestFrameCallback();
-  surface_.Get()->Attach(buf_handler->GetProxy(), 0, 0);
-  surface_.Get()->Damage(0, 0, width_, height_);
-  surface_.Get()->Commit();
+  auto* surface = surface_.Get();
+  surface->Attach(buf_handler->GetProxy(), 0, 0);
+  surface->Damage(0, 0, width_, height_);
+  surface->Commit();
 }
 
 // ── App callbacks

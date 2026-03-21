@@ -5,7 +5,7 @@
 //
 // Header-only helpers used by both the Cairo and GTK decoration plugins.
 // Provides Gaussian blur for shadow rendering, shadow tile compositing,
-// and ARGB colour decomposition — ported from libdecor's
+// and ARGB color decomposition — ported from libdecor's
 // src/plugins/common/libdecor-cairo-blur.{c,h}.
 //
 // ── Provided utilities
@@ -30,7 +30,7 @@
 namespace wl::csd::common {
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Colour helpers
+// Color helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Decompose an ARGB8888 value into (r, g, b, a) doubles in [0, 1].
@@ -43,7 +43,7 @@ Rgba32ToComponents(uint32_t argb) noexcept {
   return {r, g, b, a};
 }
 
-/// Set the Cairo source colour from an ARGB8888 value.
+/// Set the Cairo source color from an ARGB8888 value.
 inline void CairoSetRgba32(cairo_t* cr, uint32_t argb) noexcept {
   const auto [r, g, b, a] = Rgba32ToComponents(argb);
   cairo_set_source_rgba(cr, r, g, b, a);

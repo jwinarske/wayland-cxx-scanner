@@ -60,7 +60,9 @@ extern "C" {
 #include <iterator>
 #include <list>
 #include <memory>
+#include <span>
 #include <string_view>
+#include <vector>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
@@ -218,17 +220,17 @@ static constexpr std::string_view run_mode_name(RunMode m) noexcept {
 
 /// Combine the protocol's split tv_sec_hi / tv_sec_lo into a timespec.
 static void timespec_from_proto(timespec& ts,
-                                uint32_t sec_hi,
-                                uint32_t sec_lo,
-                                uint32_t nsec) noexcept {
+                                const uint32_t sec_hi,
+                                const uint32_t sec_lo,
+                                const uint32_t nsec) noexcept {
   ts.tv_sec =
       (static_cast<int64_t>(sec_hi) << 32) | static_cast<int64_t>(sec_lo);
   ts.tv_nsec = static_cast<long>(nsec);
 }
 
 static uint32_t timespec_to_ms(const timespec& ts) noexcept {
-  return static_cast<uint32_t>(ts.tv_sec) * 1000u +
-         static_cast<uint32_t>(ts.tv_nsec / 1'000'000L);
+  return static_cast<uint32_t>(static_cast<uint64_t>(ts.tv_sec) * 1000u +
+                               static_cast<uint64_t>(ts.tv_nsec / 1'000'000L));
 }
 
 static int64_t timespec_diff_us(const timespec& a, const timespec& b) noexcept {
@@ -241,33 +243,33 @@ static int64_t timespec_diff_us(const timespec& a, const timespec& b) noexcept {
 
 /// Paint an animated spinning color wheel into the @p image (XRGB8888).
 /// @p Phase drives the rotation; call with increasing values for animation.
-static void paint_pixels(void* image,
+static void paint_pixels(std::span<uint32_t> buf,
                          int width,
                          int height,
                          const uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
-  auto* base = static_cast<uint32_t*>(image);
 
   const double ang = M_PI * 2.0 / 1'000'000.0 * static_cast<double>(phase);
   const double s = std::sin(ang);
   const double c = std::cos(ang);
 
   // Squared outer-radius threshold.
-  int outer_r = (halfw < halfh ? halfw : halfh) - 16;
+  int64_t outer_r = (halfw < halfh ? halfw : halfh) - 16;
   outer_r *= outer_r;
 
   for (int y = 0; y < height; ++y) {
     const int oy = y - halfh;
-    const int y2 = oy * oy;
+    const int64_t y2 = static_cast<int64_t>(oy) * oy;
 
     for (int x = 0; x < width; ++x) {
       const int ox = x - halfw;
-      const int idx = y * width + x;
+      const std::size_t idx =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
 
-      if (ox * ox + y2 > outer_r) {
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        base[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
+      if (static_cast<int64_t>(ox) * ox + y2 > outer_r) {
+        buf[idx] = (ox * oy > 0) ? 0xFF000000u : 0xFFFFFFFFu;
         continue;
       }
 
@@ -282,8 +284,7 @@ static void paint_pixels(void* image,
       if ((rx < 0.0) == (ry < 0.0))
         v |= 0x000000FFu;
 
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      base[idx] = v;
+      buf[idx] = v;
     }
   }
 }
@@ -348,8 +349,8 @@ class WlCallbackHandler
 };
 
 // ── XDG shell handlers provided by <wl/xdg_shell.hpp> ────────────────────────
-//   wl::XdgWmBaseHandler        — responds to ping automatically
-//   wl::XdgSurfaceHandler<App>  — acks configure, calls
+//   wl::XdgWmBaseHandler — responds to ping automatically
+//   wl::XdgSurfaceHandler<App> — acks `configure`, calls
 //   App::OnXdgSurfaceConfigure wl::XdgToplevelHandler<App> — delegates
 //   configure/close to App
 
@@ -360,7 +361,9 @@ class WpPresentationHandler
     : public presentation_time::client::CWpPresentation<WpPresentationHandler> {
  public:
   clockid_t clk_id = CLOCK_MONOTONIC;
-  void OnClockId(uint32_t id) override { clk_id = static_cast<clockid_t>(id); }
+  void OnClockId(const uint32_t id) override {
+    clk_id = static_cast<clockid_t>(id);
+  }
 };
 
 // ── WpPresentationFeedbackHandler
@@ -407,22 +410,25 @@ struct BufferPool {
   int width = 0;
   int height = 0;
 
-  [[nodiscard]] bool Create(int w, int h, wl_proxy* shm_raw) noexcept;
+  [[nodiscard]] bool Create(int w, int h, WlShmHandler& shm) noexcept;
 
   // Returns the mapped pixel data for buffer index i.
-  [[nodiscard]] void* PixelData(int i) const noexcept {
-    const std::size_t stride = static_cast<std::size_t>(width) * 4u;
+  [[nodiscard]] std::span<uint32_t> PixelData(int i) const noexcept {
+    const std::size_t npixels =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    const std::size_t byte_offset =
+        static_cast<std::size_t>(i) * npixels * sizeof(uint32_t);
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    return static_cast<uint8_t*>(mem.data) +
-           static_cast<std::size_t>(i) * stride *
-               static_cast<std::size_t>(height);
+    auto* base = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(mem.data) +
+                                             byte_offset);
+    return {base, npixels};
   }
 
   // Finds and returns the next non-busy buffer index, or -1 if all are busy.
   [[nodiscard]] int NextFree() noexcept {
     for (int attempt = 0; attempt < kNumBuffers; ++attempt) {
-      const int idx = (next + attempt) % kNumBuffers;
-      if (!bufs.at(static_cast<std::size_t>(idx)).Get()->busy) {
+      if (const int idx = (next + attempt) % kNumBuffers;
+          !bufs.at(static_cast<std::size_t>(idx)).Get()->busy) {
         next = (idx + 1) % kNumBuffers;
         return idx;
       }
@@ -431,7 +437,7 @@ struct BufferPool {
   }
 };
 
-bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
+bool BufferPool::Create(const int w, const int h, WlShmHandler& shm) noexcept {
   using namespace wayland::client;
   width = w;
   height = h;
@@ -445,27 +451,15 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
     return false;
   }
 
-  // Create the pool.
-  // We build a temporary CProxyImpl wrapper around the raw shm proxy.
-  // Since WlShmHandler (which owns the shm proxy) is stored in the App,
-  // we receive the raw proxy and marshal via _MarshalNew directly.
-  // Use the WlShmPoolHandler via wl::construct.
+  // Create the pool via the C++ construct helper — no reinterpret_cast needed.
   wl::WlPtr<WlShmPoolHandler> pool;
-  {
-    // shm_raw is a wl_proxy* pointing to the wl_shm object.
-    // We need to call wl_proxy_marshal_constructor on it to create the pool.
-    // Build a temporary non-owning CProxyImpl around the raw shm proxy.
-    // The cleanest approach: use the C API directly here.
-    wl_shm_pool* raw_pool =
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-        wl_shm_create_pool(reinterpret_cast<wl_shm*>(shm_raw), mem.fd,
-                           static_cast<int>(total));
-    if (!raw_pool) {
-      std::fprintf(stderr, "presentation-shm: wl_shm_create_pool failed\n");
-      return false;
-    }
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-    pool.Attach(reinterpret_cast<wl_proxy*>(raw_pool));
+  if (wl_proxy* raw_pool =
+          wl::construct<wl_shm_pool_traits, wl_shm_traits::Op::CreatePool>(
+              shm, mem.fd, static_cast<int32_t>(total))) {
+    pool.Attach(raw_pool);
+  } else {
+    std::fprintf(stderr, "presentation-shm: wl_shm_create_pool failed\n");
+    return false;
   }
 
   for (int i = 0; i < kNumBuffers; ++i) {
@@ -499,16 +493,16 @@ class FeedkickHandler;
 
 class App {
  public:
-  App(const RunMode mode, const int commit_delay_ms)
-      : mode_(mode), commit_delay_ms_(commit_delay_ms) {}
+  // Defined after FeedkickHandler is complete (unique_ptr member requires it).
+  App(RunMode mode, int commit_delay_ms);
   ~App();
 
   int Run();
 
   // ── Callbacks from CRTP handlers ────────────────────────────────────────
   void OnXdgSurfaceConfigure(uint32_t serial);
-  void OnToplevelConfigure(int32_t /*width*/, int32_t /*height*/) noexcept {
-  }  // fixed size
+  static void OnToplevelConfigure(int32_t /*width*/,
+                                  int32_t /*height*/) noexcept {}  // fixed size
   void OnToplevelClose();
   void OnKey(uint32_t key, uint32_t state);
   void OnFrameDone(uint32_t stamp_ms) noexcept;
@@ -520,7 +514,7 @@ class App {
                            uint32_t seq_hi,
                            uint32_t seq_lo,
                            uint32_t flags) noexcept;
-  void OnFeedbackDiscarded(WpPresentationFeedbackHandler& fb) noexcept;
+  void OnFeedbackDiscarded(const WpPresentationFeedbackHandler& fb) noexcept;
 
   /// Called by FeedkickHandler to update the display refresh period estimate.
   void UpdateRefresh(const uint32_t refresh_ns) noexcept {
@@ -599,7 +593,7 @@ class App {
   /// Create a wp_presentation_feedback for the current surface commit.
   void AttachPresentationFeedback(uint32_t stamp_ms) noexcept;
 
-  /// Submit the next buffer to the compositor, acking any pending configure.
+  /// Submit the next buffer to the compositor, acking any pending `configure`.
   void CommitNext(uint32_t stamp_ms) noexcept;
 
   /// Request a wl_surface.frame callback (feedback/feedback-idle modes).
@@ -819,7 +813,8 @@ bool App::CreateWindow() {
     std::fprintf(stderr, "presentation-shm: xdg_surface.get_toplevel failed\n");
     return false;
   }
-  xdg_toplevel_.Get()->app_ = this;
+  auto* toplevel = xdg_toplevel_.Get();
+  toplevel->app_ = this;
 
   // Format title like the original.
   std::array<char, 128> title{};
@@ -827,12 +822,12 @@ bool App::CreateWindow() {
                 "presentation-shm: %.*s [delay %d ms]",
                 static_cast<int>(run_mode_name(mode_).size()),
                 run_mode_name(mode_).data(), commit_delay_ms_);
-  xdg_toplevel_.Get()->SetTitle(title.data());
-  xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.presentation-shm");
-  xdg_toplevel_.Get()->SetMinSize(kWidth, kHeight);
-  xdg_toplevel_.Get()->SetMaxSize(kWidth, kHeight);
+  toplevel->SetTitle(title.data());
+  toplevel->SetAppId("org.wayland-cxx.presentation-shm");
+  toplevel->SetMinSize(kWidth, kHeight);
+  toplevel->SetMaxSize(kWidth, kHeight);
 
-  // Commit to trigger the configure sequence.
+  // Commit to trigger the `configure` sequence.
   surface_.Get()->Commit();
   if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "presentation-shm: timed out waiting for configure\n");
@@ -847,7 +842,7 @@ bool App::CreateWindow() {
 
 bool App::PreRender() {
   // Create the buffer pool.
-  if (!pool_.Create(kWidth, kHeight, shm_.Get()->GetProxy()))
+  if (!pool_.Create(kWidth, kHeight, *shm_.Get()))
     return false;
 
   // Pre-paint all buffers at evenly spaced phases (like the original).
@@ -877,22 +872,22 @@ void App::AttachPresentationFeedback(uint32_t stamp_ms) noexcept {
 
   using namespace presentation_time::client;
 
+  auto* pres = presentation_.Get();
+
   auto fb = std::make_unique<WpPresentationFeedbackHandler>();
   fb->app_ = this;
   fb->frame_no = ++frame_seq_;
   fb->frame_stamp = stamp_ms;
-  clock_gettime(presentation_.Get()->clk_id, &fb->commit);
+  if (clock_gettime(pres->clk_id, &fb->commit) != 0)
+    fb->commit = {};
   fb->target = fb->commit;
 
-  // wp_presentation.feedback has protocol signature "on" — the surface object
-  // argument comes FIRST, then the new_id. wl::construct<> always prepends
-  // nullptr (the new_id placeholder) before user args, which is correct for
-  // "no" requests but wrong for "on".  Use _MarshalNew directly so the args
-  // are in wire order: (surface, nullptr).
-  if (wl_proxy* raw = presentation_.Get()->_MarshalNew(
-          wp_presentation_traits::Op::Feedback,
-          &wp_presentation_feedback_traits::wl_iface(),
-          surface_.Get()->GetProxy(), nullptr)) {
+  // wp_presentation.feedback has the wire signature "on" — surface before
+  // new_id.
+  if (wl_proxy* raw =
+          wl::construct_at_end<wp_presentation_feedback_traits,
+                               wp_presentation_traits::Op::Feedback>(
+              *pres, surface_.Get()->GetProxy())) {
     fb->_SetProxy(raw);
     feedback_list_.push_back(std::move(fb));
   }
@@ -906,11 +901,12 @@ void App::CommitNext(uint32_t stamp_ms) noexcept {
     return;
   }
 
-  surface_.Get()->Attach(
-      pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
-  surface_.Get()->Damage(0, 0, kWidth, kHeight);
-  surface_.Get()->Commit();
-  pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->busy = true;
+  auto& buf = *pool_.bufs.at(static_cast<std::size_t>(idx)).Get();
+  auto* surface = surface_.Get();
+  surface->Attach(buf.GetProxy(), 0, 0);
+  surface->Damage(0, 0, kWidth, kHeight);
+  surface->Commit();
+  buf.busy = true;
 }
 
 void App::RequestFrameCallback() noexcept {
@@ -957,8 +953,8 @@ void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
 
 std::unique_ptr<WpPresentationFeedbackHandler> App::ExtractFeedback(
     const WpPresentationFeedbackHandler& fb) {
-  auto it = std::find_if(feedback_list_.begin(), feedback_list_.end(),
-                         [&fb](const auto& p) { return p.get() == &fb; });
+  auto it = std::ranges::find_if(
+      feedback_list_, [&fb](const auto& p) { return p.get() == &fb; });
   if (it == feedback_list_.end())
     return nullptr;
   auto ptr = std::move(*it);
@@ -1035,7 +1031,8 @@ void App::OnFeedbackPresented(WpPresentationFeedbackHandler& fb,
   }
 }
 
-void App::OnFeedbackDiscarded(WpPresentationFeedbackHandler& fb) noexcept {
+void App::OnFeedbackDiscarded(
+    const WpPresentationFeedbackHandler& fb) noexcept {
   std::printf("discarded %u\n", fb.frame_no);
   ExtractFeedback(fb);
 
@@ -1087,12 +1084,10 @@ void App::Feedkick() noexcept {
 
   auto fk = std::make_unique<FeedkickHandler>();
   fk->app_ = this;
-  // Same "on" signature fix as AttachPresentationFeedback: surface before
-  // nullptr.
-  if (wl_proxy* raw = presentation_.Get()->_MarshalNew(
-          wp_presentation_traits::Op::Feedback,
-          &wp_presentation_feedback_traits::wl_iface(),
-          surface_.Get()->GetProxy(), nullptr)) {
+  if (wl_proxy* raw =
+          wl::construct_at_end<wp_presentation_feedback_traits,
+                               wp_presentation_traits::Op::Feedback>(
+              *presentation_.Get(), surface_.Get()->GetProxy())) {
     fk->_SetProxy(raw);
     feedkick_ = std::move(fk);
   }
@@ -1101,8 +1096,12 @@ void App::Feedkick() noexcept {
 // ── MainLoop
 // ──────────────────────────────────────────────────────────────────
 
-// App::~App() is defined here (after FeedkickHandler is complete), so it can
-// call feedkick_->Detach() and reset the unique_ptr without an incomplete type.
+// App::App() and App::~App() are defined here (after FeedkickHandler is
+// complete), so the unique_ptr<FeedkickHandler> member can be properly
+// constructed and destroyed without an incomplete type.
+App::App(const RunMode mode, const int commit_delay_ms)
+    : mode_(mode), commit_delay_ms_(commit_delay_ms) {}
+
 App::~App() {
   // Send versioned seat/keyboard release requests before member destructors
   // run.
@@ -1181,7 +1180,7 @@ static void print_usage(const char* prog) {
                prog);
 }
 
-int main(int argc, char* argv[]) {
+int main(const int argc, char* argv[]) {
   std::signal(SIGPIPE, SIG_IGN);
 
   struct sigaction sa{};
@@ -1190,36 +1189,37 @@ int main(int argc, char* argv[]) {
   sa.sa_flags = SA_RESETHAND;
   sigaction(SIGINT, &sa, nullptr);
 
+  const std::vector<std::string_view> args(argv, std::next(argv, argc));
+
   auto mode = RunMode::Feedback;
   int commit_delay_ms = 0;
 
-  // argv is a C-API parameter; pointer arithmetic on it is unavoidable.
-  // NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  for (int i = 1; i < argc; ++i) {
-    if (const std::string_view arg{argv[i]}; arg == "-f")
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    if (const auto& arg = args.at(i); arg == "-f")
       mode = RunMode::Feedback;
     else if (arg == "-i")
       mode = RunMode::FeedbackIdle;
     else if (arg == "-p")
       mode = RunMode::LowLatPresent;
-    else if (arg == "-d" && i + 1 < argc) {
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      const char* val_str = argv[++i];
+    else if (arg == "-d" && i + 1 < args.size()) {
+      const auto val_str = args.at(++i);
       char* end = nullptr;
-      const long val = std::strtol(val_str, &end, 10);
-      if (end == val_str || *end != '\0' || val < 0 || val > INT_MAX) {
-        std::fprintf(stderr, "presentation-shm: invalid -d MSECS value '%s'\n",
-                     val_str);
-        print_usage(argv[0]);
+      errno = 0;
+      const long val = std::strtol(val_str.data(), &end, 10);
+      if (errno == ERANGE || end == val_str.data() || *end != '\0' || val < 0 ||
+          val > INT_MAX) {
+        std::fprintf(stderr,
+                     "presentation-shm: invalid -d MSECS value '%.*s'\n",
+                     static_cast<int>(val_str.size()), val_str.data());
+        print_usage(args.at(0).data());
         return EXIT_FAILURE;
       }
       commit_delay_ms = static_cast<int>(val);
     } else {
-      print_usage(argv[0]);
+      print_usage(args.at(0).data());
       return EXIT_FAILURE;
     }
   }
-  // NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 
   App app{mode, commit_delay_ms};
   return app.Run();

@@ -77,6 +77,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
@@ -1670,10 +1671,32 @@ static void PrintUsage(const char* argv0) {
       argv0);
 }
 
+// Helper: parse a positive integer from a C string (used by getopt cases).
+static bool ParsePositiveInt(const char* prog,
+                             const char* flag,
+                             const char* val_str,
+                             int& out) {
+  char* end = nullptr;
+  errno = 0;
+  const long val = std::strtol(val_str, &end, 10);
+  if (errno == ERANGE || end == val_str || *end != '\0' || val <= 0 ||
+      val > INT_MAX) {
+    std::fprintf(stderr, "%s: invalid %s '%s'\n", prog, flag, val_str);
+    return false;
+  }
+  out = static_cast<int>(val);
+  return true;
+}
+
 int main(int argc, char** argv) {
   // Suppress SIGPIPE so a compositor disconnect during wl_display_flush is
   // reported as EPIPE / error return rather than terminating the process.
   std::signal(SIGPIPE, SIG_IGN);
+
+  // getopt_long requires raw argc/argv, but capture argv[0] once to avoid
+  // repeated pointer arithmetic elsewhere.
+  const char* const prog =
+      argv[0];  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 
   App::Options opts{};
 
@@ -1696,31 +1719,25 @@ int main(int argc, char** argv) {
           std::fprintf(stderr,
                        "%s: unknown DRM format '%s'; "
                        "supported: XRGB8888, ARGB8888\n",
-                       argv[0], optarg);
+                       prog, optarg);
           return EXIT_FAILURE;
         }
         opts.drm_format = code;
         break;
       }
       case 'w':
-        opts.width = static_cast<int>(std::strtol(optarg, nullptr, 10));
-        if (opts.width <= 0) {
-          std::fprintf(stderr, "%s: invalid width '%s'\n", argv[0], optarg);
+        if (!ParsePositiveInt(prog, "width", optarg, opts.width))
           return EXIT_FAILURE;
-        }
         break;
       case 'h':
-        opts.height = static_cast<int>(std::strtol(optarg, nullptr, 10));
-        if (opts.height <= 0) {
-          std::fprintf(stderr, "%s: invalid height '%s'\n", argv[0], optarg);
+        if (!ParsePositiveInt(prog, "height", optarg, opts.height))
           return EXIT_FAILURE;
-        }
         break;
       case '?':
-        PrintUsage(argv[0]);
+        PrintUsage(prog);
         return EXIT_SUCCESS;
       default:
-        PrintUsage(argv[0]);
+        PrintUsage(prog);
         return EXIT_FAILURE;
     }
   }

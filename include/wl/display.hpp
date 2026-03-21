@@ -290,7 +290,7 @@ template <typename StopFn, typename RepeatFdFn, typename RepeatFn>
     // creates the POSIX timer and the self-pipe).  Only poll it when valid.
     const int rep_fd = get_repeat_fd();
     const nfds_t nfds = (rep_fd >= 0) ? 2 : 1;
-    // Always initialise both entries; poll() only examines the first nfds.
+    // Always initialize both entries; poll() only examines the first nfds.
     // Keeping pfds[1].fd=-1 / events=0 when rep_fd<0 is safe with any
     // conformant poll() implementation, but explicit is clearer.
     pollfd pfds[2] = {{wl_fd, POLLIN, 0}, {-1, 0, 0}};

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// csd_fallback — Header-only fallback CSD plugin using flat-colour SHM
+// csd_fallback — Header-only fallback CSD plugin using flat-color SHM
 // rendering.
 //
 // This is the "regular" decoration plugin that requires no external
 // dependencies.  It draws a dark title bar with close/maximize/minimize
-// buttons (solid-colour rectangles) and thin resize borders around the
+// buttons (solid-color rectangles) and thin resize borders around the
 // content area — the same decoration style previously hard-coded in the
 // xdg-csd example.
 //
@@ -28,15 +28,15 @@
 namespace wl::csd {
 
 // ══════════════════════════════════════════════════════════════════════════════
-// FallbackCsdPlugin — flat-colour SHM CSD plugin
+// FallbackCsdPlugin — flat-color SHM CSD plugin
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Draws client-side decorations using solid-colour rectangles: a dark
+/// Draws client-side decorations using solid-color rectangles: a dark
 /// title bar (with close/maximize/minimize buttons), and thin resize
 /// borders.  No external rendering library is needed.
 class FallbackCsdPlugin final : public CsdPlugin {
  public:
-  // ── Default colour theme (XRGB8888) ────────────────────────────────────
+  // ── Default color theme (XRGB8888) ────────────────────────────────────
   static constexpr uint32_t kColorTitleBar = 0xFF3C3C3C;
   static constexpr uint32_t kColorTitleBarUnfocused = 0xFF505050;
   static constexpr uint32_t kColorBorder = 0xFF505050;
@@ -59,9 +59,7 @@ class FallbackCsdPlugin final : public CsdPlugin {
     return kTitleBarHeight;
   }
 
-  void SetTitle(std::string_view title) override {
-    title_ = std::string{title};
-  }
+  void SetTitle(std::string_view title) override { title_ = title; }
 
   void SetState(bool focused, bool maximized) override {
     focused_ = focused;
@@ -74,7 +72,7 @@ class FallbackCsdPlugin final : public CsdPlugin {
                    int content_w,
                    int content_h,
                    uint32_t time) override {
-    // Fill entire surface with border colour.
+    // Fill entire surface with border color.
     FillRect(buffer, surface_w, 0, 0, surface_w, surface_h, kColorBorder);
 
     // Title bar.

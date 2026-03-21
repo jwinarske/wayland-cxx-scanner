@@ -6,7 +6,7 @@
 // Following the plugin pattern from libdecor's GTK plugin
 // (https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/gtk),
 // this plugin uses GTK 3's CSS theming engine and Cairo rendering to produce
-// decorations that match the user's GTK theme.  Colours for the title bar,
+// decorations that match the user's GTK theme.  Colors for the title bar,
 // borders, and window-control buttons are extracted from the GTK style
 // context, and the title text is drawn with Pango.
 //
@@ -42,7 +42,7 @@ namespace wl::csd {
 /// CSD plugin that uses GTK 3's style context and Cairo to render
 /// decorations matching the user's GTK theme.
 ///
-/// The title bar colour, border colour, button colours and title text are
+/// The title bar color, border color, button colors and title text are
 /// all derived from the active GTK theme.  When the window loses focus the
 /// decoration dims to the theme's backdrop style.
 class GtkCsdPlugin final : public CsdPlugin {

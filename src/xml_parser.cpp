@@ -41,8 +41,7 @@ bool is_valid_identifier(std::string_view s) noexcept {
 
 void require_identifier(std::string_view s, const char* ctx) {
   if (!is_valid_identifier(s))
-    throw ParseError(std::string("invalid identifier '") + std::string(s) +
-                     "' on " + ctx);
+    throw ParseError("invalid identifier '" + std::string(s) + "' on " + ctx);
 }
 
 // ── Numeric parsing helpers (S1 — no-throw integer parsing) ─────────────────

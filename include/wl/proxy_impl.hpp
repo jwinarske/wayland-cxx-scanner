@@ -110,4 +110,32 @@ requires WlProxyTraits<ChildTraits> [[nodiscard]] wl_proxy* construct(
   return proxy._MarshalNew(Opcode, &ChildTraits::wl_iface(), nullptr, args...);
 }
 
+// ── wl::construct_at_end<>
+// ─────────────────────────────────────────────────
+
+/// Variant of @c wl::construct<> for requests where the new_id placeholder
+/// appears **after** one or more leading wire arguments ("on", "uon", …).
+///
+/// The standard @c wl::construct<> emits @c nullptr before @p args, matching
+/// the common "n…" signature.  This overload emits the extra arguments first,
+/// then @c nullptr, matching signatures like "on" or "uon".
+///
+/// Example:
+/// @code
+///   // wp_presentation.feedback has wire signature "on" (surface, new_id):
+///   wl::construct_at_end<wp_presentation_feedback_traits,
+///                        wp_presentation_traits::Op::Feedback>(
+///       presentation, surface.GetProxy());
+/// @endcode
+template <typename ChildTraits,
+          uint32_t Opcode,
+          typename Derived,
+          typename ParentTraits,
+          typename... Args>
+requires WlProxyTraits<ChildTraits> [[nodiscard]] wl_proxy* construct_at_end(
+    CProxyImpl<Derived, ParentTraits>& proxy,
+    Args... args) noexcept {
+  return proxy._MarshalNew(Opcode, &ChildTraits::wl_iface(), args..., nullptr);
+}
+
 }  // namespace wl
