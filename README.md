@@ -26,7 +26,7 @@ replace the hand-written C bindings normally provided by `wayland-scanner`.
 - **Strict quality gates** — CI enforces `-Werror`, clang-tidy, clang-format,
   and CodeQL on every push.
 
-## Quick Start
+## Getting Started
 
 ### Prerequisites
 
@@ -39,6 +39,7 @@ replace the hand-written C bindings normally provided by `wayland-scanner`.
 | [wayland-protocols](https://gitlab.freedesktop.org/wayland/wayland-protocols) | — | Optional; required for some tests and examples |
 | [Google Test](https://github.com/google/googletest) | — | Optional; required for tests (auto-fetched) |
 | [libxkbcommon](https://xkbcommon.org/) | — | Optional; required for keyboard examples/tests |
+| [SDL3](https://github.com/libsdl-org/SDL) | 3.x | Optional; required for `sdl3-presentation-shm` |
 
 **Ubuntu / Debian:**
 
@@ -59,16 +60,39 @@ sudo dnf install meson ninja-build pugixml-devel \
 ### Building
 
 ```sh
+# Clone the repository
+git clone https://github.com/jwinarske/wayland-cxx-scanner.git
+cd wayland-cxx-scanner
+
 # Configure (scanner only)
 meson setup build
 
-# Configure with tests and examples
-meson setup build -Dtests=true -Dexamples=true
-
 # Build
 ninja -C build
+```
 
-# Run tests
+### Building with examples
+
+Most examples require `wayland-client`, `wayland-protocols`, and their
+protocol-specific dependencies (see the [Examples](#examples) table below).
+
+```sh
+# Configure with examples enabled
+meson setup build -Dexamples=true
+
+# Build everything
+ninja -C build
+
+# Or build a single example
+ninja -C build examples/presentation-shm/presentation_shm
+ninja -C build examples/sdl3-presentation-shm/sdl3_presentation_shm
+```
+
+### Building with tests
+
+```sh
+meson setup build -Dtests=true
+ninja -C build
 meson test -C build
 ```
 
@@ -193,6 +217,7 @@ passed to `meson setup` (requires `wayland-client` and `wayland-server`).
 | [simple-egl](examples/simple-egl) | Animated EGL/GLES triangle | EGL, GLESv2 |
 | [subsurfaces](examples/subsurfaces) | Subsurface protocol demonstration | EGL, GLESv2 |
 | [presentation-shm](examples/presentation-shm) | Frame-timing feedback via `wp_presentation` | wayland-protocols |
+| [sdl3-presentation-shm](examples/sdl3-presentation-shm) | SDL3 window with `wp_presentation` frame-timing | SDL3, wayland-protocols |
 | [agl-presentation-shm](examples/agl-presentation-shm) | AGL compositor integration | wayland-protocols |
 | [ivi-presentation-shm](examples/ivi-presentation-shm) | IVI shell integration | wayland-protocols |
 | [xdg-csd](examples/xdg-csd) | Client-side decorations (Cairo / GTK back-ends) | cairo or gtk+-3.0 |
