@@ -4,7 +4,7 @@
 // csd_cairo.cpp — Cairo CSD plugin implementation.
 //
 // Uses Cairo and Pango to render libdecor-cairo style window decorations:
-// a near-black title bar with coloured button backgrounds, line-art
+// a near-black title bar with colored button backgrounds, line-art
 // symbols (close ×, maximize □/⧉, minimize ─), and centred Pango title
 // text.
 //
@@ -59,7 +59,7 @@ int CairoCsdPlugin::TitleBarHeight() const noexcept {
 }
 
 void CairoCsdPlugin::SetTitle(std::string_view title) {
-  impl_->title = std::string{title};
+  impl_->title = title;
 }
 
 void CairoCsdPlugin::SetState(bool focused, bool maximized) {
@@ -210,7 +210,7 @@ static void DrawTitleText(uint32_t* buf,
       cairo_image_surface_create(CAIRO_FORMAT_ARGB32, max_w, max_h);
   cairo_t* cr = cairo_create(surface);
 
-  // Text colour: light when focused, muted when unfocused.
+  // Text color: light when focused, muted when unfocused.
   const uint32_t text_col =
       active ? CairoCsdPlugin::kColSym : CairoCsdPlugin::kColSymInact;
   const auto [r, g, b, a] = common::Rgba32ToComponents(text_col);
@@ -284,7 +284,7 @@ void CairoCsdPlugin::RenderFrame(uint32_t* buffer,
                                  uint32_t time) {
   constexpr int bw = 1;  // BorderWidth()
 
-  // Fill entire surface with border colour (thin black outline).
+  // Fill entire surface with border color (thin black outline).
   constexpr uint32_t kBorderColor = 0xFF000000;
   FillRect(buffer, surface_w, 0, 0, surface_w, surface_h, kBorderColor);
 

@@ -22,7 +22,7 @@ uint32_t msg_since(const Message& m) {
 /// M3: every ArgType value is explicitly listed; the default branch is
 /// unreachable (asserts in debug, returns void* in release as a last resort
 /// to avoid silently emitting wrong code when a new ArgType is added).
-std::string cpp_arg_type(const Arg& arg) {
+std::string_view cpp_arg_type(const Arg& arg) {
   switch (arg.type) {
     case ArgType::Int:
       return "int32_t";
@@ -49,18 +49,18 @@ std::string cpp_arg_type(const Arg& arg) {
 
 void emit_enum(std::ostringstream& os, const Interface& iface, const Enum& en) {
   // S6: names validated at parse time.
-  std::string enum_class =
-      snake_to_pascal(iface.name) + snake_to_pascal(en.name);
-  os << "enum class " << enum_class << " : uint32_t {\n";
-  for (const auto& e : en.entries) {
-    std::string entry_name = enum_entry_to_pascal(e.name, en.name);
-    os << "    " << entry_name << " = " << e.value << ",\n";
-  }
+  os << "enum class " << snake_to_pascal(iface.name) << snake_to_pascal(en.name)
+     << " : uint32_t {\n";
+  for (const auto& e : en.entries)
+    os << "    " << enum_entry_to_pascal(e.name, en.name) << " = " << e.value
+       << ",\n";
   os << "};\n\n";
 }
 
-void emit_traits(std::ostringstream& os, const Interface& iface, CppStd std) {
-  std::string traits_name = iface.name + "_traits";
+void emit_traits(std::ostringstream& os,
+                 const Interface& iface,
+                 CppStd std,
+                 std::string_view traits_name) {
   os << "struct " << traits_name << " {\n";
   os << "    static constexpr std::string_view interface_name = \""
      << iface.name << "\";\n";
@@ -139,8 +139,8 @@ void emit_crack_event(std::ostringstream& os, const Message& evt) {
     for (std::size_t i = 0; i < evt.args.size(); ++i) {
       if (i > 0)
         os << ", ";
-      os << "*reinterpret_cast<" << cpp_arg_type(evt.args[i]) << "*>(args[" << i
-         << "])";
+      os << "*reinterpret_cast<" << cpp_arg_type(evt.args.at(i)) << "*>(args["
+         << i << "])";
     }
     os << ");\n";
   }
@@ -149,10 +149,10 @@ void emit_crack_event(std::ostringstream& os, const Message& evt) {
 
 void emit_client_class(std::ostringstream& os,
                        const Interface& iface,
-                       CppStd std) {
+                       CppStd std,
+                       std::string_view traits_name) {
   // S6: names validated at parse time.
   std::string cls_name = "C" + snake_to_pascal(iface.name);
-  std::string traits_name = iface.name + "_traits";
 
   os << "template <class Derived>\n";
   // C++20+ adds a requires-constraint to catch non-class template arguments
@@ -197,7 +197,8 @@ void emit_client_class(std::ostringstream& os,
       for (std::size_t i = 0; i < r.args.size(); ++i) {
         if (i > 0)
           os << ", ";
-        os << cpp_arg_type(r.args[i]) << " " << r.args[i].name;
+        const auto& arg = r.args.at(i);
+        os << cpp_arg_type(arg) << " " << arg.name;
       }
       os << ") noexcept {\n";
       os << "        Base::_Marshal(" << traits_name << "::Op::" << method;
@@ -220,7 +221,8 @@ void emit_client_class(std::ostringstream& os,
       for (std::size_t i = 0; i < r.args.size(); ++i) {
         if (i > 0)
           os << ", ";
-        os << cpp_arg_type(r.args[i]) << " " << r.args[i].name;
+        const auto& arg = r.args.at(i);
+        os << cpp_arg_type(arg) << " " << arg.name;
       }
       os << ") noexcept {\n";
       os << "        Base::_Marshal(" << traits_name << "::Op::" << method;
@@ -237,12 +239,12 @@ void emit_client_class(std::ostringstream& os,
     emit_crack_event(os, e);
 
   for (const auto& e : iface.events) {
-    std::string handler = "On" + snake_to_pascal(e.name);
-    os << "    virtual void " << handler << "(";
+    os << "    virtual void On" << snake_to_pascal(e.name) << "(";
     for (std::size_t i = 0; i < e.args.size(); ++i) {
       if (i > 0)
         os << ", ";
-      os << cpp_arg_type(e.args[i]) << " /*" << e.args[i].name << "*/";
+      const auto& arg = e.args.at(i);
+      os << cpp_arg_type(arg) << " /*" << arg.name << "*/";
     }
     os << ") {}\n";
   }
@@ -262,8 +264,8 @@ void emit_client_class(std::ostringstream& os,
     os << "    friend class wl::CProxyImpl<Derived, " << traits_name
        << ">;\n\n";
     for (const auto& e : iface.events) {
-      std::string fn = "_Evt" + snake_to_pascal(e.name);
-      os << "    static void " << fn << "(void* data, wl_proxy* /*proxy*/";
+      os << "    static void _Evt" << snake_to_pascal(e.name)
+         << "(void* data, wl_proxy* /*proxy*/";
       for (const auto& a : e.args)
         os << ", " << cpp_arg_type(a) << " " << a.name;
       os << ") {\n";
@@ -275,7 +277,7 @@ void emit_client_class(std::ostringstream& os,
         for (std::size_t i = 0; i < e.args.size(); ++i) {
           if (i > 0)
             os << ", ";
-          os << "&" << e.args[i].name;
+          os << "&" << e.args.at(i).name;
         }
         os << "};\n";
       }
@@ -339,12 +341,13 @@ std::string generate_client_cxx_header(const Protocol& proto, CppStd std) {
   for (const auto& iface : proto.interfaces) {
     for (const auto& en : iface.enums)
       emit_enum(os, iface, en);
-    emit_traits(os, iface, std);
-    emit_client_class(os, iface, std);
+    const std::string traits_name = iface.name + "_traits";
+    emit_traits(os, iface, std, traits_name);
+    emit_client_class(os, iface, std, traits_name);
   }
 
   os << "}  // namespace " << ns << "\n";
-  return os.str();
+  return std::move(os).str();
 }
 
 }  // namespace wl::scanner

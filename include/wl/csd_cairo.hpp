@@ -6,9 +6,9 @@
 // Following the plugin pattern from libdecor's Cairo plugin
 // (https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/cairo),
 // this plugin uses Cairo rendering and Pango text to produce dark-themed
-// decorations with coloured window-control buttons and line-art symbols.
+// decorations with colored window-control buttons and line-art symbols.
 //
-// The title bar, button colours, and symbol style are taken from the
+// The title bar, button colors, and symbol style are taken from the
 // libdecor-cairo defaults.  Title text is rendered with Pango and centred
 // in the available space.
 //
@@ -39,10 +39,10 @@ namespace wl::csd {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// CSD plugin that uses Cairo and Pango to render dark-themed decorations
-/// with coloured window-control buttons and line-art symbols.
+/// with colored window-control buttons and line-art symbols.
 ///
 /// The aesthetic follows libdecor's Cairo plugin: a near-black title bar
-/// with amber/green/orange button backgrounds and light-coloured symbols.
+/// with amber/green/orange button backgrounds and light-colored symbols.
 /// When the window loses focus the title bar and symbols dim.
 class CairoCsdPlugin final : public CsdPlugin {
  public:
@@ -51,7 +51,7 @@ class CairoCsdPlugin final : public CsdPlugin {
   static constexpr int kButtonWidth = 32;
   static constexpr int kSymDim = 14;
 
-  // Colours matching libdecor-cairo defaults (ARGB8888).
+  // Colors matching libdecor-cairo defaults (ARGB8888).
   static constexpr uint32_t kColTitle = 0xFF080706;
   static constexpr uint32_t kColTitleInact = 0xFF303030;
   static constexpr uint32_t kColButtonMin = 0xFFFFBB00;

@@ -21,7 +21,7 @@ uint32_t msg_since(const Message& m) {
 /// Map ArgType to a C++ parameter type for server-side code.
 /// M3: every ArgType value is explicitly listed; the default branch is
 /// unreachable and asserts in debug builds.
-std::string cpp_server_arg_type(const Arg& arg) {
+std::string_view cpp_server_arg_type(const Arg& arg) {
   switch (arg.type) {
     case ArgType::Int:
       return "int32_t";
@@ -48,9 +48,8 @@ std::string cpp_server_arg_type(const Arg& arg) {
 
 void emit_server_traits(std::ostringstream& os,
                         const Interface& iface,
-                        CppStd std) {
-  // S6: names validated at parse time.
-  std::string traits_name = iface.name + "_server_traits";
+                        CppStd std,
+                        std::string_view traits_name) {
   os << "struct " << traits_name << " {\n";
   os << "    static constexpr std::string_view interface_name = \""
      << iface.name << "\";\n";
@@ -124,7 +123,7 @@ void emit_crack_request(std::ostringstream& os, const Message& req) {
     os << "        (void)args;\n";
   os << "        (self->*fn)(client, resource";
   for (std::size_t i = 0; i < req.args.size(); ++i)
-    os << ", *reinterpret_cast<" << cpp_server_arg_type(req.args[i])
+    os << ", *reinterpret_cast<" << cpp_server_arg_type(req.args.at(i))
        << "*>(args[" << i << "])";
   os << ");\n    }\n\n";
 }
@@ -136,7 +135,7 @@ void emit_server_class(std::ostringstream& os,
   std::string cls_name = "C" + snake_to_pascal(iface.name) + "Server";
   std::string traits_name = iface.name + "_server_traits";
 
-  emit_server_traits(os, iface, std);
+  emit_server_traits(os, iface, std, traits_name);
 
   os << "template <class Derived>\n";
   // C++20+ adds a requires-constraint to catch non-class template arguments
@@ -148,8 +147,8 @@ void emit_server_class(std::ostringstream& os,
 
   // C++23 can use the explicit-object parameter ("deducing this", P0847R7)
   // when the compiler supports it (__cpp_explicit_this_parameter, GCC 14+,
-  // Clang 18+).  On older compilers that only partially implement C++23 (e.g.
-  // GCC 13 which sets __cplusplus=202100L, not 202302L), we fall back to the
+  // Clang 18+).  On older compilers that only partially implement C++23 (e.g.,
+  // GCC 13, which sets __cplusplus=202100L, not 202302L), we fall back to the
   // C++17/20 `using Base` + `Base::method()` form.
   if (std >= CppStd::Cpp23) {
     // Emit a compile-time feature switch so downstream consumers work with
@@ -180,7 +179,8 @@ void emit_server_class(std::ostringstream& os,
       for (std::size_t i = 0; i < e.args.size(); ++i) {
         if (i > 0)
           os << ", ";
-        os << cpp_server_arg_type(e.args[i]) << " " << e.args[i].name;
+        const auto& arg = e.args.at(i);
+        os << cpp_server_arg_type(arg) << " " << arg.name;
       }
       os << ") noexcept {\n";
       os << "        Base::_PostEvent(" << traits_name
@@ -201,7 +201,8 @@ void emit_server_class(std::ostringstream& os,
       for (std::size_t i = 0; i < e.args.size(); ++i) {
         if (i > 0)
           os << ", ";
-        os << cpp_server_arg_type(e.args[i]) << " " << e.args[i].name;
+        const auto& arg = e.args.at(i);
+        os << cpp_server_arg_type(arg) << " " << arg.name;
       }
       os << ") noexcept {\n";
       os << "        Base::_PostEvent(" << traits_name
@@ -216,8 +217,7 @@ void emit_server_class(std::ostringstream& os,
     emit_crack_request(os, r);
 
   for (const auto& r : iface.requests) {
-    std::string handler = "On" + snake_to_pascal(r.name);
-    os << "    virtual void " << handler
+    os << "    virtual void On" << snake_to_pascal(r.name)
        << "(wl_client* /*client*/, wl_resource* /*resource*/";
     for (const auto& a : r.args)
       os << ", " << cpp_server_arg_type(a) << " /*" << a.name << "*/";
@@ -238,7 +238,6 @@ void emit_server_class(std::ostringstream& os,
     os << "    friend class wl::CResourceImpl<Derived, " << traits_name
        << ">;\n\n";
     for (const auto& r : iface.requests) {
-      std::string fn = "_Req" + snake_to_pascal(r.name);
       // R5: generated dispatch functions null-check the user_data pointer
       // before dereferencing, guarding against uninitialized resources.
       // The function signature matches what wl_resource_set_implementation
@@ -246,7 +245,7 @@ void emit_server_class(std::ostringstream& os,
       // then packed into a void*[] so the _CrackRequest_N helpers can unpack
       // them with reinterpret_cast — the same pattern used on the client side
       // for _EvtN functions.
-      os << "    static void " << fn
+      os << "    static void _Req" << snake_to_pascal(r.name)
          << "(wl_client* client, wl_resource* resource";
       for (const auto& a : r.args)
         os << ", " << cpp_server_arg_type(a) << " " << a.name;
@@ -258,7 +257,7 @@ void emit_server_class(std::ostringstream& os,
         for (std::size_t i = 0; i < r.args.size(); ++i) {
           if (i > 0)
             os << ", ";
-          os << "static_cast<void*>(&" << r.args[i].name << ")";
+          os << "static_cast<void*>(&" << r.args.at(i).name << ")";
         }
         os << "};\n";
       }
@@ -328,7 +327,7 @@ std::string generate_server_cxx_header(const Protocol& proto, CppStd std) {
     emit_server_class(os, iface, std);
 
   os << "}  // namespace " << ns << "\n";
-  return os.str();
+  return std::move(os).str();
 }
 
 }  // namespace wl::scanner

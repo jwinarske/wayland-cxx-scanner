@@ -51,6 +51,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -386,7 +387,7 @@ struct ShmState {
   int fd = -1;
   void* data = MAP_FAILED;
   std::size_t total = 0;
-  ShmBuffer bufs[2];
+  std::array<ShmBuffer, 2> bufs{};
 
   ShmState() = default;
   ~ShmState() noexcept { Reset(); }
@@ -397,10 +398,10 @@ struct ShmState {
 
   /// Release all resources (idempotent).
   void Reset() noexcept {
-    bufs[0].buf.Reset();
-    bufs[1].buf.Reset();
-    bufs[0].pixels = nullptr;
-    bufs[1].pixels = nullptr;
+    bufs.at(0).buf.Reset();
+    bufs.at(1).buf.Reset();
+    bufs.at(0).pixels = nullptr;
+    bufs.at(1).pixels = nullptr;
     if (data != MAP_FAILED) {
       munmap(data, total);
       data = MAP_FAILED;
@@ -414,9 +415,9 @@ struct ShmState {
 
   /// Returns index of a non-busy buffer, or -1 when both are in use.
   [[nodiscard]] int NextFree() const noexcept {
-    if (!bufs[0].buf.IsNull() && !bufs[0].buf.Get()->busy)
+    if (!bufs.at(0).buf.IsNull() && !bufs.at(0).buf.Get()->busy)
       return 0;
-    if (!bufs[1].buf.IsNull() && !bufs[1].buf.Get()->busy)
+    if (!bufs.at(1).buf.IsNull() && !bufs.at(1).buf.Get()->busy)
       return 1;
     return -1;
   }
@@ -433,7 +434,7 @@ static constexpr int kCellH = 16;    // character cell height
 static constexpr int kFontPad = 4;   // padding above the 8-px glyph in a cell
 static constexpr int kStatusH = 26;  // status-bar height at bottom
 
-// Colours (0xXXRRGGBB — XRGB8888).
+// Colors (0xXXRRGGBB — XRGB8888).
 static constexpr uint32_t kColBg = 0xFFFFFFFF;        // text-area background
 static constexpr uint32_t kColFg = 0xFF1E1E1E;        // normal text
 static constexpr uint32_t kColCursorBg = 0xFF3584E4;  // cursor cell bg (blue)
@@ -441,23 +442,22 @@ static constexpr uint32_t kColCursorFg = 0xFFFFFFFF;  // cursor cell fg (white)
 static constexpr uint32_t kColBarBg = 0xFF2E3440;     // status-bar background
 static constexpr uint32_t kColBarFg = 0xFFD8DEE9;     // status-bar text
 
-/// Fill a rectangle in the pixel buffer with a solid colour.
-static void FillRect(uint32_t* pixels,
+/// Fill a rectangle in the pixel buffer with a solid color.
+static void FillRect(std::span<uint32_t> pixels,
                      int pitch,
                      int x,
                      int y,
                      int w,
                      int h,
-                     uint32_t colour) noexcept {
+                     uint32_t color) noexcept {
   for (int row = 0; row < h; ++row)
     for (int col = 0; col < w; ++col)
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      pixels[(y + row) * pitch + (x + col)] = colour;
+      pixels[static_cast<std::size_t>((y + row) * pitch + (x + col))] = color;
 }
 
 /// Render one 8×8 glyph at pixel position (x, y).
 /// @p c must be a printable ASCII character (0x20–0x7E); others are skipped.
-static void DrawGlyph(uint32_t* pixels,
+static void DrawGlyph(std::span<uint32_t> pixels,
                       int pitch,
                       int x,
                       int y,
@@ -472,21 +472,23 @@ static void DrawGlyph(uint32_t* pixels,
     const uint8_t bits = glyph[row];
     for (int col = 0; col < 8; ++col) {
       const bool set = ((bits >> (7 - col)) & 1u) != 0u;
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-      pixels[(y + row) * pitch + (x + col)] = set ? fg : bg;
+      pixels[static_cast<std::size_t>((y + row) * pitch + (x + col))] =
+          set ? fg : bg;
     }
   }
 }
 
 /// Render a NUL-terminated string into the pixel buffer starting at (x, y).
-static void DrawString(uint32_t* pixels,
+/// Characters that would extend beyond @p max_x are not drawn.
+static void DrawString(std::span<uint32_t> pixels,
                        int pitch,
+                       int max_x,
                        int x,
                        int y,
                        const char* str,
                        uint32_t fg,
                        uint32_t bg) noexcept {
-  for (; *str; ++str, x += kCellW)
+  for (; *str && x + kCellW <= max_x; ++str, x += kCellW)
     DrawGlyph(pixels, pitch, x, y, *str, fg, bg);
 }
 
@@ -496,7 +498,7 @@ static void DrawString(uint32_t* pixels,
 /// @param w       Buffer width in pixels (== stride / 4).
 /// @param h       Buffer height in pixels.
 /// @param buf     Text buffer to render.
-static void RenderFrame(uint32_t* pixels,
+static void RenderFrame(std::span<uint32_t> pixels,
                         int w,
                         int h,
                         const TextBuffer& buf) noexcept {
@@ -608,8 +610,8 @@ static void RenderFrame(uint32_t* pixels,
                 "  Ln %d, Col %d | %zu chars | arrows/home/end/bksp/del/enter "
                 "repeatable | ESC: quit",
                 ln + 1, col_pos + 1, text.size());
-  DrawString(pixels, pitch, kMargin, h - kStatusH + (kStatusH - 8) / 2, status,
-             kColBarFg, kColBarBg);
+  DrawString(pixels, pitch, w, kMargin, h - kStatusH + (kStatusH - 8) / 2,
+             status, kColBarFg, kColBarBg);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -909,7 +911,8 @@ bool App::InitShm() {
 
   shm_state_.Reset();  // safe to call on first run (all members are -1/null)
 
-  const auto stride = static_cast<int32_t>(width_) * 4;
+  const auto stride =
+      static_cast<int32_t>(static_cast<std::size_t>(width_) * 4u);
   const auto buf_bytes =
       static_cast<std::size_t>(stride) * static_cast<std::size_t>(height_);
   const std::size_t total = buf_bytes * 2;
@@ -959,10 +962,11 @@ bool App::InitShm() {
                    i);
       return false;
     }
-    shm_state_.bufs[i].buf.Get()->_SetProxy(raw);
+    shm_state_.bufs.at(static_cast<std::size_t>(i)).buf.Get()->_SetProxy(raw);
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    shm_state_.bufs[i].pixels = static_cast<uint8_t*>(shm_state_.data) +
-                                static_cast<std::size_t>(i) * buf_bytes;
+    shm_state_.bufs.at(static_cast<std::size_t>(i)).pixels =
+        static_cast<uint8_t*>(shm_state_.data) +
+        static_cast<std::size_t>(i) * buf_bytes;
   }
 
   pool.Reset();  // wl_shm_pool no longer needed after buffer creation
@@ -1008,14 +1012,19 @@ void App::Redraw() noexcept {
   if (idx < 0)
     return;  // both buffers still in use by the compositor — drop frame
 
+  const std::size_t npixels =
+      static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-  RenderFrame(reinterpret_cast<uint32_t*>(shm_state_.bufs[idx].pixels), width_,
-              height_, text_buf_);
+  auto* base = reinterpret_cast<uint32_t*>(
+      shm_state_.bufs.at(static_cast<std::size_t>(idx)).pixels);
+  RenderFrame({base, npixels}, width_, height_, text_buf_);
 
-  surface_.Get()->Attach(shm_state_.bufs[idx].buf.Get()->GetProxy(), 0, 0);
+  surface_.Get()->Attach(
+      shm_state_.bufs.at(static_cast<std::size_t>(idx)).buf.Get()->GetProxy(),
+      0, 0);
   surface_.Get()->Damage(0, 0, width_, height_);
   surface_.Get()->Commit();
-  shm_state_.bufs[idx].buf.Get()->busy = true;
+  shm_state_.bufs.at(static_cast<std::size_t>(idx)).buf.Get()->busy = true;
 }
 
 // ── App callbacks

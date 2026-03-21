@@ -94,7 +94,7 @@ std::string generate_c_header(const Protocol& proto) {
   os << "#ifdef __cplusplus\n";
   os << "}\n";
   os << "#endif\n";
-  return os.str();
+  return std::move(os).str();
 }
 
 }  // namespace wl::scanner

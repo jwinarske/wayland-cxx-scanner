@@ -11,7 +11,7 @@
 // Following the plugin pattern from libdecor
 // (https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/gtk):
 //   • GtkCsdPlugin      — GTK-themed decorations via Cairo/Pango (optional)
-//   • FallbackCsdPlugin  — flat-colour SHM decorations (always available)
+//   • FallbackCsdPlugin  — flat-color SHM decorations (always available)
 //
 // The build system selects the GTK plugin when gtk+-3.0 is available,
 // otherwise falls back to the regular plugin.
@@ -71,12 +71,16 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
+#include <span>
 #include <string_view>
+#include <vector>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
@@ -355,22 +359,24 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Paint the content area only (no decorations — SSD mode).
-static void paint_ssd_frame(uint32_t* buf,
+static void paint_ssd_frame(std::span<uint32_t> buf,
                             int width,
                             int height,
                             uint32_t time) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
-  int outer_r = (halfw < halfh ? halfw : halfh) - 8;
-  const int inner_r = outer_r - 32;
+  int64_t outer_r = (halfw < halfh ? halfw : halfh) - 8;
+  const int64_t inner_r = outer_r - 32;
   outer_r *= outer_r;
-  const int inner_r2 = inner_r * inner_r;
+  const int64_t inner_r2 = inner_r * inner_r;
 
   for (int y = 0; y < height; ++y) {
-    const int y2 = (y - halfh) * (y - halfh);
+    const int64_t oy = y - halfh;
+    const int64_t y2 = oy * oy;
     for (int x = 0; x < width; ++x) {
       uint32_t v;
-      const int r2 = (x - halfw) * (x - halfw) + y2;
+      const int64_t ox = x - halfw;
+      const int64_t r2 = ox * ox + y2;
       if (r2 < inner_r2)
         v = (static_cast<uint32_t>(r2 / 32) + time / 64) * 0x0080401u;
       else if (r2 < outer_r)
@@ -380,7 +386,10 @@ static void paint_ssd_frame(uint32_t* buf,
       v &= 0x00FFFFFFu;
       if (std::abs(x - y) > 6 && std::abs(x + y - height) > 6)
         v |= 0xFF000000u;
-      buf[y * width + x] = v;
+      const std::size_t idx =
+          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+          static_cast<std::size_t>(x);
+      buf[idx] = v;
     }
   }
 }
@@ -729,9 +738,10 @@ bool App::CreateWindow() {
     std::fprintf(stderr, "xdg-csd: xdg_surface.get_toplevel failed\n");
     return false;
   }
-  xdg_toplevel_.Get()->app_ = this;
-  xdg_toplevel_.Get()->SetTitle(title_);
-  xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.xdg-csd");
+  auto* toplevel = xdg_toplevel_.Get();
+  toplevel->app_ = this;
+  toplevel->SetTitle(title_);
+  toplevel->SetAppId("org.wayland-cxx.xdg-csd");
 
   // Negotiate decoration mode via zxdg_decoration_manager_v1.
   if (!decoration_mgr_.IsNull()) {
@@ -793,10 +803,9 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) {
       content_w_ = width;
       content_h_ = height;
     }
-    if (content_w_ < 1)
-      content_w_ = 1;
-    if (content_h_ < 1)
-      content_h_ = 1;
+    static constexpr int kMaxDim = 16384;
+    content_w_ = std::clamp(content_w_, 1, kMaxDim);
+    content_h_ = std::clamp(content_h_, 1, kMaxDim);
     need_redraw_ = true;
   }
 }
@@ -947,11 +956,13 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
   }
 
   auto* pixels = static_cast<uint32_t*>(pool_.PixelData(idx));
+  const std::size_t npixels =
+      static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh);
 
   if (use_csd_ && csd_plugin_) {
     csd_plugin_->RenderFrame(pixels, sw, sh, content_w_, content_h_, time_ms);
   } else {
-    paint_ssd_frame(pixels, sw, sh, time_ms);
+    paint_ssd_frame({pixels, npixels}, sw, sh, time_ms);
   }
 
   // Set window geometry to exclude decoration area.
@@ -1017,7 +1028,7 @@ static void print_usage(const char* prog) {
                prog);
 }
 
-int main(int argc, char* argv[]) {
+int main(const int argc, char* argv[]) {
   std::signal(SIGPIPE, SIG_IGN);
 
   struct sigaction sa{};
@@ -1026,27 +1037,42 @@ int main(int argc, char* argv[]) {
   sa.sa_flags = SA_RESETHAND;
   sigaction(SIGINT, &sa, nullptr);
 
+  const std::vector<std::string_view> args(argv, std::next(argv, argc));
+
   int content_w = 400;
   int content_h = 300;
   const char* title = "xdg-csd demo";
 
-  for (int i = 1; i < argc; ++i) {
-    const std::string_view arg{argv[i]};
-    if (arg == "-w" && i + 1 < argc) {
-      content_w = std::atoi(argv[++i]);
-    } else if (arg == "-h" && i + 1 < argc) {
-      content_h = std::atoi(argv[++i]);
-    } else if (arg == "-t" && i + 1 < argc) {
-      title = argv[++i];
+  // Helper: parse a positive integer argument for the given option flag.
+  const auto parse_int_arg = [&](const char* flag, std::string_view val_str,
+                                 int& out) -> bool {
+    char* end = nullptr;
+    errno = 0;
+    const long val = std::strtol(val_str.data(), &end, 10);
+    if (errno == ERANGE || end == val_str.data() || *end != '\0' || val <= 0 ||
+        val > INT_MAX) {
+      std::fprintf(stderr, "xdg-csd: invalid %s value '%.*s'\n", flag,
+                   static_cast<int>(val_str.size()), val_str.data());
+      print_usage(args.at(0).data());
+      return false;
+    }
+    out = static_cast<int>(val);
+    return true;
+  };
+
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    if (const auto& arg = args.at(i); arg == "-w" && i + 1 < args.size()) {
+      if (!parse_int_arg("-w", args.at(++i), content_w))
+        return EXIT_FAILURE;
+    } else if (arg == "-h" && i + 1 < args.size()) {
+      if (!parse_int_arg("-h", args.at(++i), content_h))
+        return EXIT_FAILURE;
+    } else if (arg == "-t" && i + 1 < args.size()) {
+      title = args.at(++i).data();
     } else {
-      print_usage(argv[0]);
+      print_usage(args.at(0).data());
       return EXIT_FAILURE;
     }
-  }
-
-  if (content_w <= 0 || content_h <= 0) {
-    std::fprintf(stderr, "xdg-csd: invalid dimensions\n");
-    return EXIT_FAILURE;
   }
 
   // Create CSD plugin — highest-fidelity available at build time.

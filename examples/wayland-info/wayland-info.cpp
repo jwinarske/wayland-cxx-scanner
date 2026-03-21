@@ -582,6 +582,7 @@ int main() {
   wl::CRegistry registry;
   if (!registry.Create(display)) {
     std::fprintf(stderr, "wayland-info: wl_display_get_registry failed\n");
+    registry.Reset();
     wl_display_disconnect(display);
     return EXIT_FAILURE;
   }
