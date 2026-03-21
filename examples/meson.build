@@ -21,3 +21,5 @@ subdir('xdg-csd')
 # xdg-simple-dmabuf-vulkan uses subdir_done() internally if
 # vulkan/libdrm/wayland-protocols/xkbcommon deps are absent.
 subdir('xdg-simple-dmabuf-vulkan')
+# sdl3-presentation-shm uses subdir_done() internally if SDL3/wayland-protocols absent.
+subdir('sdl3-presentation-shm')
