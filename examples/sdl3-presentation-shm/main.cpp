@@ -342,9 +342,16 @@ void WpPresentationFeedbackHandler::OnDiscarded() {
 
 App::~App() {
   // Destroy all Wayland proxies BEFORE SDL_Quit() disconnects the display.
-  // WlPtr member destructors run after this body, so we must explicitly reset
-  // presentation_ here — otherwise wl_proxy_destroy hits freed memory.
+  // Feedback handlers are unique_ptr<T> (not WlPtr), so we must explicitly
+  // destroy each proxy to unregister the listener — otherwise SDL's internal
+  // Wayland dispatch during shutdown could fire a callback on freed memory.
+  for (auto& fb : feedback_list_) {
+    if (fb && !fb->IsNull())
+      fb->Destroy();
+  }
   feedback_list_.clear();
+  if (last_presented_ && !last_presented_->IsNull())
+    last_presented_->Destroy();
   last_presented_.reset();
   presentation_.Reset();
   registry_.Reset();
