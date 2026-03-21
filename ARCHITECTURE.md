@@ -5,15 +5,15 @@
 `wayland-cxx-scanner` is a code-generation tool and companion C++23 framework
 for the [Wayland](https://wayland.freedesktop.org/) display protocol.  Given a
 Wayland XML protocol definition it produces type-safe, zero-overhead C++23
-headers that replace the hand-written C bindings normally provided by
+headers that replace the handwritten C bindings normally provided by
 `wayland-scanner`.
 
 The project has two distinct deliverables:
 
-| Deliverable | Description |
-|---|---|
-| **Scanner tool** (`wayland-cxx-scanner`) | Reads a `.xml` protocol file and writes a `.hpp` header. |
-| **Framework library** (`wayland-cxx`) | A header-only C++23 base library installed to `${includedir}/wl/`. |
+| Deliverable                              | Description                                                        |
+|------------------------------------------|--------------------------------------------------------------------|
+| **Scanner tool** (`wayland-cxx-scanner`) | Reads a `.xml` protocol file and writes a `.hpp` header.           |
+| **Framework library** (`wayland-cxx`)    | A header-only C++23 base library installed to `${includedir}/wl/`. |
 
 ---
 
@@ -38,14 +38,14 @@ wayland-cxx-scanner/
 
 ```
   ┌──────────────┐      ┌──────────────────┐      ┌─────────────────────┐
-  │  protocol.xml │─────▶│   XML Parser     │─────▶│  Intermediate       │
-  │  (Wayland)    │      │  (xml_parser)    │      │  Representation     │
+  │ protocol.xml │────▶│   XML Parser     │────▶│  Intermediate       │
+  │ (Wayland)    │      │  (xml_parser)    │      │  Representation     │
   └──────────────┘      └──────────────────┘      │  (ir.hpp)           │
-                                                   └────────┬────────────┘
-                                                            │
-                              ┌─────────────────────────────┼──────────────────┐
-                              │                             │                  │
-                              ▼                             ▼                  ▼
+                                                  └────────┬────────────┘
+                                                           │
+                              ─────────────────────────────┼──────────────────┐
+                             │                             │                  │
+                             ▼                             ▼                  ▼
                    ┌──────────────────┐        ┌──────────────────┐  ┌──────────────────┐
                    │ codegen_client   │        │ codegen_server   │  │  codegen_c       │
                    │ _cxx             │        │ _cxx             │  │                  │
@@ -85,14 +85,14 @@ Protocol
 
 Key types:
 
-| Type | Description |
-|---|---|
-| `ir::Protocol` | Top-level container; holds all parsed interfaces. |
-| `ir::Interface` | One `<interface>` block with requests, events, and enums. |
-| `ir::Message` | A single `<request>` or `<event>`, carrying its opcode and argument list. |
-| `ir::Arg` | One typed argument; `ArgType` maps to the Wayland wire types. |
-| `ir::Enum` / `ir::EnumEntry` | Named enumeration with optional bitfield flag. |
-| `ir::ParseError` | Exception thrown for malformed XML. |
+| Type                         | Description                                                               |
+|------------------------------|---------------------------------------------------------------------------|
+| `ir::Protocol`               | Top-level container; holds all parsed interfaces.                         |
+| `ir::Interface`              | One `<interface>` block with requests, events, and enums.                 |
+| `ir::Message`                | A single `<request>` or `<event>`, carrying its opcode and argument list. |
+| `ir::Arg`                    | One typed argument; `ArgType` maps to the Wayland wire types.             |
+| `ir::Enum` / `ir::EnumEntry` | Named enumeration with optional bitfield flag.                            |
+| `ir::ParseError`             | Exception thrown for malformed XML.                                       |
 
 #### `name_transform` (`src/name_transform.{cpp,hpp}`)
 
@@ -101,11 +101,11 @@ Utility functions that convert Wayland `snake_case` identifiers into C++
 
 #### Code Generators
 
-| Module | Generates | Entry point |
-|---|---|---|
-| `codegen_client_cxx` | C++23 client proxy headers (CRTP, event maps) | `generate_client_cxx_header()` |
-| `codegen_server_cxx` | C++23 server resource headers (CRTP, request maps) | `generate_server_cxx_header()` |
-| `codegen_c` | C-style protocol headers (compatible with `wayland-scanner` output) | `generate_c_header()` |
+| Module               | Generates                                                           | Entry point                    |
+|----------------------|---------------------------------------------------------------------|--------------------------------|
+| `codegen_client_cxx` | C++23 client proxy headers (CRTP, direct dispatch)                  | `generate_client_cxx_header()` |
+| `codegen_server_cxx` | C++23 server resource headers (CRTP, direct dispatch)               | `generate_server_cxx_header()` |
+| `codegen_c`          | C-style protocol headers (compatible with `wayland-scanner` output) | `generate_c_header()`          |
 
 All three generators accept a `CppStd` enum (`Cpp17`, `Cpp20`, `Cpp23`) that
 gates which language features appear in the output.
@@ -130,20 +130,19 @@ Modes:
 ## Framework Library (`include/wl/`)
 
 The framework is a header-only base library that generated code builds upon.
-It follows the WTL (Windows Template Library) message-map pattern adapted for
-Wayland events and requests.
 
 ### Class Hierarchy
 
 ```
-wl::CEventMap           (abstract: ProcessEvent)
+wl::CProxy<Traits>      (non-owning handle wrapper)
     └── wl::CProxyImpl<Derived, Traits>   (CRTP client proxy base)
             └── <Generated> CXxxInterface<App>
 
-wl::CProxy<Traits>      (non-owning handle wrapper, ≈ WTL CWindow)
-    └── wl::CProxyImpl  (also inherits CProxy)
+wl::CResourceImpl<Derived, Traits>   (CRTP server resource base)
+    └── <Generated> CXxxInterfaceServer<App>
 
-wl::WlPtr<T>            (RAII owning wrapper, ≈ WTL CAutoPtr)
+wl::WlPtr<T>            (RAII owning wrapper)
+wl::CEventMap            (optional; available for hand-written event maps)
 ```
 
 ### Key Headers
@@ -158,28 +157,23 @@ concept, requiring:
 - `static constexpr uint32_t version`
 - `static const wl_interface& wl_iface() noexcept`
 
-#### `event_map.hpp` — `wl::CEventMap` + macros
+#### `event_map.hpp` — `wl::CEventMap` + macros (optional)
 
-Abstract base for opcode dispatch.  Generated proxy and resource classes
-implement `ProcessEvent` using the macro DSL:
-
-```cpp
-BEGIN_EVENT_MAP(MyProxy)
-  EVENT_HANDLER(0, OnEnter)
-  EVENT_HANDLER(1, OnLeave)
-END_EVENT_MAP()
-```
-
-Server-side equivalents: `BEGIN_REQUEST_MAP` / `REQUEST_HANDLER` /
-`END_REQUEST_MAP`.
+Available for handwritten code that needs opcode-based dispatch.  Generated
+code no longer uses this — it uses direct CRTP dispatch instead (see
+[Generated Code Conventions](#generated-code-conventions) below).
 
 #### `proxy_impl.hpp` — `wl::CProxyImpl<Derived, Traits>`
 
-CRTP base that combines `CProxy` and `CEventMap`.  Provides:
+CRTP base inheriting `CProxy<Traits>`.  Provides:
 
 - `_SetProxy(wl_proxy*)` — attach and install the static listener table.
 - `_Marshal(opcode, args…)` — send a request to the compositor.
 - `_MarshalNew(opcode, &iface, args…)` — send a request that creates a new object.
+
+Also provides the type-safe `wl::construct<ChildTraits, Opcode>(parent, args…)`
+and `wl::construct_at_end<>()` free functions that encode the child interface
+and opcode at compile time, replacing error-prone `_MarshalNew` calls.
 
 #### `wl_ptr.hpp` — `wl::WlPtr<T>`
 
@@ -230,17 +224,17 @@ The project uses [Meson](https://mesonbuild.com/) ≥ 1.1 with C++23.
 
 ### Build Options
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `tests` | boolean | `false` | Build and run unit/integration tests |
-| `examples` | boolean | `false` | Build example Wayland applications |
-| `docs` | boolean | `false` | Generate Doxygen HTML documentation |
+| Option     | Type    | Default | Description                          |
+|------------|---------|---------|--------------------------------------|
+| `tests`    | boolean | `false` | Build and run unit/integration tests |
+| `examples` | boolean | `false` | Build example Wayland applications   |
+| `docs`     | boolean | `false` | Generate Doxygen HTML documentation  |
 
 ### Dependencies
 
-| Dependency | Required | Notes |
-|---|---|---|
-| `pugixml` | Yes | Bundled as a Meson subproject fallback |
+| Dependency       | Required | Notes                                    |
+|------------------|----------|------------------------------------------|
+| `pugixml`        | Yes      | Bundled as a Meson subproject fallback   |
 | `wayland-client` | Optional | Required for examples and client headers |
 | `wayland-server` | Optional | Required for examples and server headers |
 
@@ -253,28 +247,33 @@ The project uses [Meson](https://mesonbuild.com/) ≥ 1.1 with C++23.
 For each `<interface>` the scanner emits:
 
 1. **Traits struct** — satisfies `WlProxyTraits`; holds `interface_name`,
-   `version`, and a reference to the protocol's `wl_interface`.
+   `version`, `Op::` request opcodes, `Evt::` event opcodes, and a reference
+   to the protocol's `wl_interface`.
 2. **Proxy class** `CXxx<Derived>` — CRTP template inheriting
-   `wl::CProxyImpl<Derived, XxxTraits>`.  One `_EvtN` static function per
-   event; one `SendFoo()` method per request.
-3. **Listener table** `s_listener_table_` — `inline static const void*[]`
-   array of `_EvtN` function pointers passed to `wl_proxy_add_listener`.
+   `wl::CProxyImpl<Derived, XxxTraits>`.  Request methods call `_Marshal()`
+   directly.  Virtual `OnFoo()` handlers are provided for each event (default
+   no-op; users override in their `Derived` class).
+3. **Direct-dispatch callbacks** — one `_EvtFoo` static function per event.
+   Each callback does a single `static_cast<CXxx*>(data)->OnFoo(args…)` call,
+   matching the cost of raw C `wayland-scanner` output (no `void*[]` packing,
+   no opcode scan, no intermediate `ProcessEvent` virtual).
+4. **Listener table** `s_listener_table_` — `inline static const void*[]`
+   array of `_EvtFoo` function pointers passed to `wl_proxy_add_listener`.
 
 ### Server Side
 
 For each `<interface>` the scanner emits:
 
-1. **Traits struct** — server-side interface traits.
-2. **Resource class** `CXxx<Derived>` — CRTP template inheriting
-   `wl::CResourceImpl<Derived, XxxTraits>` with `_ReqN` static functions and
-   `SendFoo()` event senders.
-3. **Dispatch table** for `wl_resource_set_implementation`.
-
-### Opcode Macros
-
-`EVENT_HANDLER` and `REQUEST_HANDLER` macros require raw integer opcodes (not
-symbolic names) because the `##` token-paste operator must produce single
-identifiers such as `_CrackEvent_0`.
+1. **Traits struct** — server-side interface traits with `Req::` and `Evt::`
+   opcode constants.
+2. **Resource class** `CXxxServer<Derived>` — CRTP template inheriting
+   `wl::CResourceImpl<Derived, XxxTraits>`.  `SendFoo()` methods send events
+   to the client.  Virtual `OnFoo()` handlers are provided for each request.
+3. **Direct-dispatch callbacks** — one `_ReqFoo` static function per request.
+   Each callback null-checks `wl_resource_get_user_data`, then calls
+   `OnFoo(client, resource, args…)` directly.
+4. **Request vtable** `s_request_vtable_` — function pointer array passed to
+   `wl_resource_set_implementation`.
 
 ---
 
@@ -282,25 +281,26 @@ identifiers such as `_CrackEvent_0`.
 
 ```
 wayland-cxx-scanner --mode=client-header xdg-shell.xml xdg_shell.hpp
-                          │
-          ┌───────────────▼────────────────┐
-          │   parse_protocol("xdg-shell.xml")  │
-          │   → ir::Protocol               │
-          └───────────────┬────────────────┘
-                          │
-          ┌───────────────▼────────────────┐
-          │  generate_client_cxx_header()  │
-          │  (codegen_client_cxx.cpp)      │
-          └───────────────┬────────────────┘
-                          │
-                    xdg_shell.hpp
-                          │
-          ┌───────────────▼────────────────┐
-          │  Application code              │
-          │  #include "xdg_shell.hpp"      │
-          │  class App : CXdgSurface<App>  │
-          │  { BEGIN_EVENT_MAP(App)        │
-          │    EVENT_HANDLER(0, OnConfigure│
-          │    END_EVENT_MAP() }           │
-          └────────────────────────────────┘
+                           │
+          ┌────────────────▼─────────────────┐
+          │ parse_protocol("xdg-shell.xml")  │
+          │   → ir::Protocol                 │
+          └────────────────┬─────────────────┘
+                           │
+           ┌───────────────▼────────────────┐
+           │  generate_client_cxx_header()  │
+           │  (codegen_client_cxx.cpp)      │
+           └───────────────┬────────────────┘
+                           │
+                     xdg_shell.hpp
+                           │
+           ┌───────────────▼────────────────┐
+           │  Application code              │
+           │  #include "xdg_shell.hpp"      │
+           │  class App : CXdgSurface<App>  │
+           │  {                             │
+           │    void OnConfigure(…) override│
+           │    { /* handle event */ }      │
+           │  }                             │
+           └────────────────────────────────┘
 ```
