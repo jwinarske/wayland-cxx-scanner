@@ -20,6 +20,7 @@ version = '0.1'
 # ---------------------------------------------------------------------------
 extensions = [
     'myst_parser',
+    'breathe',
 ]
 
 # MyST Markdown feature set
@@ -28,6 +29,19 @@ myst_enable_extensions = [
     'deflist',
     'tasklist',
 ]
+
+# ---------------------------------------------------------------------------
+# Breathe — bridge Doxygen XML into Sphinx
+# ---------------------------------------------------------------------------
+# RTD runs Doxygen before Sphinx (see .readthedocs.yaml build.commands).
+# The XML output lands in _doxygen/xml/ relative to the repository root.
+breathe_projects = {
+    'wayland-cxx-scanner': os.path.join(
+        os.path.dirname(__file__), '..', '_doxygen', 'xml'
+    ),
+}
+breathe_default_project = 'wayland-cxx-scanner'
+breathe_default_members = ('members', 'undoc-members')
 
 # ---------------------------------------------------------------------------
 # Source files
