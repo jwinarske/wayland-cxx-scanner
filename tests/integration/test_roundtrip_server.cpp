@@ -35,8 +35,7 @@ TEST(RoundtripServer, ParseFixtureAndGenerateHeader) {
   EXPECT_THAT(out, HasSubstr("wl::CResourceImpl"));
   EXPECT_THAT(out, HasSubstr("virtual void OnReqA("));
   EXPECT_THAT(out, HasSubstr("void SendEvtX("));
-  EXPECT_THAT(out, HasSubstr("BEGIN_REQUEST_MAP(CWlMinimalServer)"));
-  EXPECT_THAT(out, HasSubstr("END_REQUEST_MAP()"));
+  EXPECT_THAT(out, HasSubstr("->OnReqA("));
 }
 
 TEST(RoundtripServer, VersionPropagated) {
@@ -57,5 +56,5 @@ TEST(RoundtripServer, DestructorRequestPresent) {
 </protocol>)");
   auto out = generate_server_cxx_header(proto);
   EXPECT_THAT(out, HasSubstr("virtual void OnDestroy("));
-  EXPECT_THAT(out, HasSubstr("REQUEST_HANDLER("));
+  EXPECT_THAT(out, HasSubstr("->OnDestroy("));
 }

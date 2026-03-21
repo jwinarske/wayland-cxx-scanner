@@ -95,12 +95,16 @@ TEST(CodegenClientCxx, ContainsRequestMethod) {
   EXPECT_THAT(out, HasSubstr("void Pong("));
 }
 
-TEST(CodegenClientCxx, ContainsEventHandlerAndMap) {
+TEST(CodegenClientCxx, ContainsDirectDispatchEventHandler) {
   const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("virtual void OnPing("));
-  EXPECT_THAT(out, HasSubstr("BEGIN_EVENT_MAP(CXdgWmBase)"));
-  EXPECT_THAT(out, HasSubstr("EVENT_HANDLER("));
-  EXPECT_THAT(out, HasSubstr("END_EVENT_MAP()"));
+  // Direct CRTP dispatch — _EvtPing calls OnPing directly, no event map.
+  EXPECT_THAT(out, HasSubstr("static void _EvtPing("));
+  EXPECT_THAT(out, HasSubstr("->OnPing("));
+  // No WTL message-map machinery.
+  EXPECT_THAT(out, Not(HasSubstr("BEGIN_EVENT_MAP")));
+  EXPECT_THAT(out, Not(HasSubstr("ProcessEvent")));
+  EXPECT_THAT(out, Not(HasSubstr("_CrackEvent")));
 }
 
 TEST(CodegenClientCxx, ContainsEnumClass) {

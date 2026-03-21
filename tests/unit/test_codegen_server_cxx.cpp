@@ -86,13 +86,17 @@ TEST(CodegenServerCxx, ContainsSendEventMethod) {
   EXPECT_THAT(out, HasSubstr("void SendPing("));
 }
 
-TEST(CodegenServerCxx, ContainsRequestHandlersAndMap) {
+TEST(CodegenServerCxx, ContainsDirectDispatchRequestHandlers) {
   const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("virtual void OnDestroy("));
   EXPECT_THAT(out, HasSubstr("virtual void OnPong("));
-  EXPECT_THAT(out, HasSubstr("BEGIN_REQUEST_MAP(CXdgWmBaseServer)"));
-  EXPECT_THAT(out, HasSubstr("REQUEST_HANDLER("));
-  EXPECT_THAT(out, HasSubstr("END_REQUEST_MAP()"));
+  // Direct CRTP dispatch — _ReqPong calls OnPong directly.
+  EXPECT_THAT(out, HasSubstr("static void _ReqPong("));
+  EXPECT_THAT(out, HasSubstr("->OnPong("));
+  // No WTL request-map machinery.
+  EXPECT_THAT(out, Not(HasSubstr("BEGIN_REQUEST_MAP")));
+  EXPECT_THAT(out, Not(HasSubstr("ProcessRequest")));
+  EXPECT_THAT(out, Not(HasSubstr("_CrackRequest")));
 }
 
 TEST(CodegenServerCxx, EmptyProtocol) {

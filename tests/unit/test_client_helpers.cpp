@@ -23,11 +23,6 @@ struct FakeHandler : wl::CProxyImpl<FakeHandler, FakeHelperTraits> {
   // Required by _SetProxy when proxy is non-null; a null-entry table is
   // sufficient for these null-path tests.
   static const void* s_listener_table_[];
-
-  // CEventMap::ProcessEvent is pure virtual; provide a no-op implementation.
-  bool ProcessEvent(uint32_t /*opcode*/, void** /*args*/) override {
-    return false;
-  }
 };
 const void* FakeHandler::s_listener_table_[] = {nullptr};
 

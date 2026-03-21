@@ -208,7 +208,6 @@ class App;
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlShmPoolHandler
@@ -216,7 +215,6 @@ class WlCompositorHandler
 
 class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlShmHandler

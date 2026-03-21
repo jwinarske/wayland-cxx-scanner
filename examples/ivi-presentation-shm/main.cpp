@@ -244,7 +244,6 @@ class App;
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlShmPoolHandler
@@ -252,7 +251,6 @@ class WlCompositorHandler
 
 class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlShmHandler
@@ -292,12 +290,10 @@ class WlCallbackHandler
 };
 
 // ── IviApplicationHandler ────────────────────────────────────────────────────
-// ivi_application has no events; provide the required ProcessEvent stub.
 
 class IviApplicationHandler
     : public ivi_application::client::CIviApplication<IviApplicationHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── IviSurfaceHandler

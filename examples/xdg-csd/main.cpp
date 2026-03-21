@@ -182,14 +182,12 @@ class App;
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlShmPoolHandler ────────────────────────────────────────────────────────
 
 class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlShmHandler ────────────────────────────────────────────────────────────
@@ -255,7 +253,6 @@ class WlPointerHandler : public wayland::client::CWlPointer<WlPointerHandler> {
 //   wl::XdgToplevelHandler<App> — delegates configure/close to App
 
 // ── XDG decoration handlers provided by <wl/xdg_decoration.hpp> ─────────────
-//   wl::XdgDecorationManagerHandler — event-less ProcessEvent stub
 //   wl::XdgDecorationHandler<App>   — delegates configure to App
 
 // ── Seat handler (custom — manages both keyboard and pointer) ───────────────

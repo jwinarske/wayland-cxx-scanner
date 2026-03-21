@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 #pragma once
-#include <wl/event_map.hpp>
 #include <wl/proxy.hpp>
 
 extern "C" {
@@ -12,8 +11,8 @@ namespace wl {
 
 /// CRTP base for generated client protocol proxy classes.
 ///
-/// Inherits both the non-owning handle (CProxy) and the event-dispatch base
-/// (CEventMap).  Generated protocol classes inherit from this:
+/// Inherits the non-owning handle (CProxy).  Generated protocol classes
+/// inherit from this:
 ///
 ///   template<class Derived>
 ///   class CXdgWmBase: public wl::CProxyImpl<Derived, xdg_wm_base_traits> { …
@@ -22,11 +21,12 @@ namespace wl {
 /// @tparam Derived  The most-derived class (CRTP).
 /// @tparam Traits   Interface traits struct satisfying WlProxyTraits.
 template <typename Derived, typename Traits>
-requires WlProxyTraits<Traits> class CProxyImpl : public CProxy<Traits>,
-                                                  public CEventMap {
+requires WlProxyTraits<Traits> class CProxyImpl : public CProxy<Traits> {
   using Base = CProxy<Traits>;
 
  public:
+  virtual ~CProxyImpl() = default;
+
   /// Bind an already-created wl_proxy and install the static event listener.
   void _SetProxy(wl_proxy* proxy) noexcept {
     Base::Attach(proxy);

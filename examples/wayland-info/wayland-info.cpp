@@ -311,14 +311,7 @@ class WlOutputInfo : public wayland::client::CWlOutput<WlOutputInfo> {
 
 class WlXdgOutputManager
     : public xdg_output_unstable_v1::client::CZxdgOutputManagerV1<
-          WlXdgOutputManager> {
- public:
-  // zxdg_output_manager_v1 has no events; provide the required ProcessEvent
-  // stub so the class is concrete (CEventMap::ProcessEvent is pure virtual).
-  bool ProcessEvent(uint32_t /*opcode*/, void** /*args*/) override {
-    return false;
-  }
-};
+          WlXdgOutputManager> {};
 
 // ── zxdg_output_v1 ───────────────────────────────────────────────────────────
 
