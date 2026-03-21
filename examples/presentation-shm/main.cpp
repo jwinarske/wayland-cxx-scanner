@@ -1112,8 +1112,16 @@ App::~App() {
       wl_proxy_destroy(p);
     feedkick_.reset();
   }
-  // Clean up pending feedback objects (unique_ptrs auto-delete).
+  // Destroy feedback proxies to unregister listeners before the display
+  // disconnects — unique_ptr destruction alone frees the C++ object but
+  // leaves the wl_proxy alive with a dangling listener.
+  for (auto& fb : feedback_list_) {
+    if (fb && !fb->IsNull())
+      fb->Destroy();
+  }
   feedback_list_.clear();
+  if (last_presented_ && !last_presented_->IsNull())
+    last_presented_->Destroy();
   last_presented_.reset();
 }
 
