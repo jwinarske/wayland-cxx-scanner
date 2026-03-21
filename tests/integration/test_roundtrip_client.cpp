@@ -38,8 +38,7 @@ TEST(RoundtripClient, ParseFixtureAndGenerateHeader) {
   EXPECT_THAT(out, HasSubstr("wl::CProxyImpl"));
   EXPECT_THAT(out, HasSubstr("void ReqA("));
   EXPECT_THAT(out, HasSubstr("virtual void OnEvtX("));
-  EXPECT_THAT(out, HasSubstr("BEGIN_EVENT_MAP(CWlMinimal)"));
-  EXPECT_THAT(out, HasSubstr("END_EVENT_MAP()"));
+  EXPECT_THAT(out, HasSubstr("->OnEvtX("));
 }
 
 TEST(RoundtripClient, VersionPropagated) {

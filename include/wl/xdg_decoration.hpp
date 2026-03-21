@@ -162,13 +162,9 @@ namespace wl {
 /// XDG decoration manager handler — event-less proxy.
 ///
 /// The manager interface has no events; this handler provides the required
-/// ProcessEvent stub so it can be stored in a WlPtr.
 class XdgDecorationManagerHandler
     : public xdg_decoration_unstable_v1::client::CZxdgDecorationManagerV1<
-          XdgDecorationManagerHandler> {
- public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
-};
+          XdgDecorationManagerHandler> {};
 
 /// XDG toplevel decoration handler — delegates configure to App.
 ///

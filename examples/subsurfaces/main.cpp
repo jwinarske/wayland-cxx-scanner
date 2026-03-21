@@ -255,13 +255,11 @@ class App;
 
 // ── WlCompositorHandler
 // ─────────────────────────────────────────────────────── wl_compositor has no
-// events — provide the required ProcessEvent stub and use WlPtr::Attach() (not
 // _SetProxy) so no listener table is needed.
 
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlSubcompositorHandler
@@ -271,7 +269,6 @@ class WlCompositorHandler
 class WlSubcompositorHandler
     : public wayland::client::CWlSubcompositor<WlSubcompositorHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlSubsurfaceHandler
@@ -281,7 +278,6 @@ class WlSubcompositorHandler
 class WlSubsurfaceHandler
     : public wayland::client::CWlSubsurface<WlSubsurfaceHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlShmPoolHandler
@@ -290,7 +286,6 @@ class WlSubsurfaceHandler
 
 class WlShmPoolHandler : public wayland::client::CWlShmPool<WlShmPoolHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlShmHandler

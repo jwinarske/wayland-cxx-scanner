@@ -310,14 +310,12 @@ class WlCallbackHandler
 };
 
 // ── WlCompositorHandler ──────────────────────────────────────────────────────
-// wl_compositor has no events.  Provide the required ProcessEvent stub so the
 // class is concrete.  We attach via WlPtr::Attach() rather than _SetProxy() so
 // no listener table is needed.
 
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {
  public:
-  bool ProcessEvent(uint32_t, void**) override { return false; }
 };
 
 // ── WlSurfaceHandler ─────────────────────────────────────────────────────────

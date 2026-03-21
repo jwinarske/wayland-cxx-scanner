@@ -37,11 +37,6 @@ struct FakeClient : wl::CProxyImpl<FakeClient, FakeClientTraits> {
   // Required by _SetProxy: wl_proxy_add_listener reads s_listener_table_.
   // An array of one null pointer is sufficient for null-path tests.
   static const void* s_listener_table_[];
-
-  // CEventMap::ProcessEvent is pure virtual; provide a no-op implementation.
-  bool ProcessEvent(uint32_t /*opcode*/, void** /*args*/) override {
-    return false;
-  }
 };
 const void* FakeClient::s_listener_table_[] = {nullptr};
 

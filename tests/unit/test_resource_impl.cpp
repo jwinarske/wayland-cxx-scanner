@@ -46,7 +46,5 @@ TEST(CResourceImpl, GetResourceReturnsNull) {
   EXPECT_EQ(r.GetResource(), nullptr);
 }
 
-TEST(CResourceImpl, ProcessRequestDefaultReturnsFalse) {
-  FakeResource r;
-  EXPECT_FALSE(r.ProcessRequest(0, nullptr, nullptr, nullptr));
-}
+// ProcessRequest has been removed — generated code uses direct dispatch.
+// This test verified the old default-returns-false behavior.

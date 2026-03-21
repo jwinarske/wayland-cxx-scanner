@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 #pragma once
-#include <wl/event_map.hpp>
 #include <wl/proxy.hpp>
 
 extern "C" {
@@ -13,7 +12,7 @@ namespace wl {
 /// CRTP base for generated server-side resource handler classes.
 ///
 /// Wraps a wl_resource* and provides _PostEvent for sending events to the
-/// client, and the BEGIN_REQUEST_MAP / REQUEST_HANDLER machinery for dispatch.
+/// client.  Generated classes use direct-dispatch static callbacks.
 ///
 /// Generated server classes inherit from this:
 ///
@@ -49,14 +48,6 @@ class CResourceImpl {
     if (m_resource)
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
       wl_resource_post_event(m_resource, opcode, args...);
-  }
-
-  /// Default request dispatcher (override with BEGIN_REQUEST_MAP).
-  bool ProcessRequest(uint32_t /*opcode*/,
-                      wl_client* /*client*/,
-                      wl_resource* /*resource*/,
-                      void** /*args*/) {
-    return false;
   }
 
  protected:

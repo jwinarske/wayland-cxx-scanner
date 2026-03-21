@@ -127,26 +127,6 @@ void emit_traits(std::ostringstream& os,
   os << "};\n\n";
 }
 
-void emit_crack_event(std::ostringstream& os, const Message& evt) {
-  os << "    template <typename T, typename Fn>\n";
-  os << "    static void _CrackEvent_" << evt.opcode
-     << "(T* self, void** args, Fn fn) {\n";
-  if (evt.args.empty()) {
-    os << "        (void)args;\n";
-    os << "        (self->*fn)();\n";
-  } else {
-    os << "        (self->*fn)(";
-    for (std::size_t i = 0; i < evt.args.size(); ++i) {
-      if (i > 0)
-        os << ", ";
-      os << "*reinterpret_cast<" << cpp_arg_type(evt.args.at(i)) << "*>(args["
-         << i << "])";
-    }
-    os << ");\n";
-  }
-  os << "    }\n\n";
-}
-
 void emit_client_class(std::ostringstream& os,
                        const Interface& iface,
                        CppStd std,
@@ -235,9 +215,7 @@ void emit_client_class(std::ostringstream& os,
     }
   }
 
-  for (const auto& e : iface.events)
-    emit_crack_event(os, e);
-
+  // Virtual event handlers — users override these in their Derived class.
   for (const auto& e : iface.events) {
     os << "    virtual void On" << snake_to_pascal(e.name) << "(";
     for (std::size_t i = 0; i < e.args.size(); ++i) {
@@ -250,39 +228,30 @@ void emit_client_class(std::ostringstream& os,
   }
 
   if (!iface.events.empty()) {
-    os << "\n    BEGIN_EVENT_MAP(" << cls_name << ")\n";
-    for (const auto& e : iface.events) {
-      // Use the raw integer opcode so the EVENT_HANDLER macro's ## token-paste
-      // produces a valid C++ identifier (_CrackEvent_<N>).
-      os << "        EVENT_HANDLER(" << e.opcode << ", On"
-         << snake_to_pascal(e.name) << ")\n";
-    }
-    os << "    END_EVENT_MAP()\n\n";
-
-    os << "private:\n";
-    // Allow the CRTP base to access the private vtable.
+    os << "\nprivate:\n";
+    // Allow the CRTP base to access the private listener table.
     os << "    friend class wl::CProxyImpl<Derived, " << traits_name
        << ">;\n\n";
+
+    // Direct-dispatch static callbacks — the Wayland C library already
+    // dispatches by opcode via the listener table, so we call the virtual
+    // handler directly without an intermediate ProcessEvent / opcode scan.
     for (const auto& e : iface.events) {
       os << "    static void _Evt" << snake_to_pascal(e.name)
          << "(void* data, wl_proxy* /*proxy*/";
       for (const auto& a : e.args)
         os << ", " << cpp_arg_type(a) << " " << a.name;
       os << ") {\n";
-
-      if (e.args.empty()) {
-        os << "        void* args[] = {nullptr};\n";
-      } else {
-        os << "        void* args[] = {";
-        for (std::size_t i = 0; i < e.args.size(); ++i) {
-          if (i > 0)
-            os << ", ";
-          os << "&" << e.args.at(i).name;
-        }
-        os << "};\n";
+      os << "        static_cast<" << cls_name << "*>(data)->On"
+         << snake_to_pascal(e.name) << "(";
+      bool first = true;
+      for (const auto& a : e.args) {
+        if (!first)
+          os << ", ";
+        os << a.name;
+        first = false;
       }
-      os << "        static_cast<" << cls_name << "*>(data)->ProcessEvent("
-         << traits_name << "::Evt::" << snake_to_pascal(e.name) << ", args);\n";
+      os << ");\n";
       os << "    }\n";
     }
     // reinterpret_cast is not a constant expression, so we cannot use
@@ -326,7 +295,7 @@ std::string generate_client_cxx_header(const Protocol& proto, CppStd std) {
   os << "// Target: " << cpp_label << "\n";
   os << "#pragma once\n\n";
   os << "#include <wl/proxy_impl.hpp>\n";
-  os << "#include <wl/event_map.hpp>\n\n";
+  os << "\n";
   os << "#include <cstdint>\n";
   os << "#include <string_view>\n";
   // <type_traits> is needed for the std::is_class_v requires-constraint
