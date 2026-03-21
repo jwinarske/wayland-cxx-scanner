@@ -1,0 +1,43 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'include/**'
+      - 'src/**'
+      - 'Doxyfile.in'
+      - '.readthedocs.yaml'
+      - 'README.md'
+      - 'ARCHITECTURE.md'
+
+permissions: {}
+
+jobs:
+  trigger-rtd:
+    name: Trigger Read the Docs build
+    runs-on: ubuntu-latest
+    # Only run if RTD_WEBHOOK_URL is configured.
+    if: vars.RTD_WEBHOOK_URL != ''
+    permissions: {}
+    steps:
+      - name: Trigger build
+        env:
+          RTD_WEBHOOK_URL: ${{ vars.RTD_WEBHOOK_URL }}
+          RTD_WEBHOOK_SECRET: ${{ secrets.RTD_WEBHOOK_SECRET }}
+        run: |
+          # Read the Docs generic webhook — triggers a build for the
+          # default branch.  Configure the URL and secret in GitHub
+          # repository settings (Settings → Secrets and variables →
+          # Actions).
+          #
+          # To set up:
+          # 1. Import the project at https://readthedocs.org
+          # 2. Go to Admin → Integrations → Add integration → Generic API incoming webhook
+          # 3. Copy the webhook URL → add as RTD_WEBHOOK_URL (Actions variable)
+          # 4. Copy the secret → add as RTD_WEBHOOK_SECRET (Actions secret)
+          curl -fsSL -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"token\": \"${RTD_WEBHOOK_SECRET}\"}" \
+            "${RTD_WEBHOOK_URL}"

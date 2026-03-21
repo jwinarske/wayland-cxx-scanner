@@ -7,6 +7,7 @@ wayland-cxx-scanner
 
    readme
    architecture
+   api
 
 .. _indices:
 

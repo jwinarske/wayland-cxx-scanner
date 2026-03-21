@@ -1,9 +1,11 @@
 # wayland-cxx-scanner
 
+[![Documentation Status](https://readthedocs.org/projects/wayland-cxx-scanner/badge/?version=latest)](https://wayland-cxx-scanner.readthedocs.io/en/latest/?badge=latest)
+
 A code-generation tool and companion C++23 framework for the
 [Wayland](https://wayland.freedesktop.org/) display protocol. Given a Wayland
 XML protocol definition it produces type-safe, zero-overhead C++23 headers that
-replace the hand-written C bindings normally provided by `wayland-scanner`.
+replace the handwritten C bindings normally provided by `wayland-scanner`.
 
 ## Features
 

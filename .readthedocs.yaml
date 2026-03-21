@@ -7,6 +7,24 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.12"
+  apt_packages:
+    - doxygen
+    - graphviz
+  commands:
+    # Generate Doxygen XML for Breathe before Sphinx runs.
+    # Create a concrete Doxyfile from the Meson template by replacing
+    # the @PLACEHOLDER@ tokens with values suitable for the RTD build.
+    - >-
+      sed
+      -e 's|@VERSION@|0.1.0|g'
+      -e "s|@SOURCE_ROOT@|$READTHEDOCS_REPOSITORY_PATH|g"
+      -e "s|@OUTPUT_DIR@|$READTHEDOCS_REPOSITORY_PATH/_doxygen|g"
+      -e 's|@HAVE_DOT@|YES|g'
+      Doxyfile.in > Doxyfile
+    # Enable XML output for Breathe (the template has GENERATE_XML = NO).
+    - echo "GENERATE_XML = YES" >> Doxyfile
+    - echo "XML_OUTPUT = xml" >> Doxyfile
+    - doxygen Doxyfile
 
 sphinx:
   configuration: docs/conf.py
