@@ -80,6 +80,7 @@ install_headers(
 # IME backend implementations (header-only wrappers over generated proxies).
 install_headers(
     'include/wl/ime/backends/text_input_v1.hpp',
+    'include/wl/ime/backends/text_input_v3.hpp',
     subdir: 'wl/ime/backends',
 )
 

@@ -5,10 +5,10 @@
 # wl::ime::ITextInputReceiver facade (the build-selected backend) and renders
 # the committed + preedit text the compositor's IME sends back.
 
-# Built only for the text-input-v1 backend (the v3 backend is not implemented
-# yet).  backend.hpp resolves to the text-input-v1 wrapper, which includes the
-# generated text_input_v1_client.hpp produced below.
-if get_option('ime_backend') != 'text-input-v1'
+# Built for the text-input receiver backends.  backend.hpp resolves to the
+# selected wrapper, which includes the matching generated header produced below.
+ime_backend = get_option('ime_backend')
+if ime_backend not in ['text-input-v1', 'text-input-v3']
     subdir_done()
 endif
 
@@ -22,7 +22,14 @@ endif
 
 wayland_xml   = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
 xdg_shell_xml = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
-text_input_v1_xml = wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v1.xml'
+
+if ime_backend == 'text-input-v3'
+    ti_xml = wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v3.xml'
+    ti_out = 'text_input_v3_client.hpp'
+else
+    ti_xml = wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v1.xml'
+    ti_out = 'text_input_v1_client.hpp'
+endif
 
 wayland_client_hdr = custom_target(
     'text-input-wayland-client-header',
@@ -38,12 +45,12 @@ xdg_shell_client_hdr = custom_target(
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
 )
 
-# The backend header includes this by the fixed name text_input_v1_client.hpp;
+# The backend header includes this by a fixed name (text_input_v{1,3}_client.hpp);
 # --emit-interface-tables makes it self-contained (defines wl_iface()).
-text_input_v1_client_hdr = custom_target(
-    'text-input-v1-client-header',
-    input:   text_input_v1_xml,
-    output:  'text_input_v1_client.hpp',
+text_input_client_hdr = custom_target(
+    'text-input-client-header',
+    input:   ti_xml,
+    output:  ti_out,
     command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
               '@INPUT@', '@OUTPUT@'],
 )
@@ -56,7 +63,7 @@ executable(
         'main.cpp',
         wayland_client_hdr,
         xdg_shell_client_hdr,
-        text_input_v1_client_hdr,
+        text_input_client_hdr,
     ],
     include_directories: [
         include_directories('../../include'),

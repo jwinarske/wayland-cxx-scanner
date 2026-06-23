@@ -180,29 +180,36 @@ if ime_backend == 'none'
     )
 endif
 
-# ── text-input-v1 backend test (ime_backend=text-input-v1) ────────────────────
-# Generates the v1 client header with inline interface tables and compiles the
-# backend (via backend.hpp) against the ITextInputReceiver facade.
+# ── text-input receiver backend test (text-input-v1 / text-input-v3) ──────────
+# Generates the selected protocol's client header with inline interface tables
+# and compiles the backend (via backend.hpp) against the ITextInputReceiver
+# facade.
 _ti_wp_dep = dependency('wayland-protocols', required: false)
-if ime_backend == 'text-input-v1' and _ti_wp_dep.found() and wayland_client_dep.found()
-    _ti_v1_xml = _ti_wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v1.xml'
-    text_input_v1_client_hdr = custom_target(
-        'test-text-input-v1-client-header',
-        input:   _ti_v1_xml,
-        output:  'text_input_v1_client.hpp',
+if ime_backend in ['text-input-v1', 'text-input-v3'] and _ti_wp_dep.found() and wayland_client_dep.found()
+    if ime_backend == 'text-input-v3'
+        _ti_xml = _ti_wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v3.xml'
+        _ti_out = 'text_input_v3_client.hpp'
+    else
+        _ti_xml = _ti_wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v1.xml'
+        _ti_out = 'text_input_v1_client.hpp'
+    endif
+    text_input_client_hdr = custom_target(
+        'test-text-input-client-header',
+        input:   _ti_xml,
+        output:  _ti_out,
         command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
                   '@INPUT@', '@OUTPUT@'],
     )
 
-    _test_ti_v1_exe = executable(
-        'test_text_input_v1_backend',
-        ['integration/test_text_input_v1_backend.cpp', text_input_v1_client_hdr],
+    _test_ti_exe = executable(
+        'test_text_input_backend',
+        ['integration/test_text_input_backend.cpp', text_input_client_hdr],
         include_directories: _inc,
         dependencies: _deps + [gtest_main_dep],
     )
-    test('text_input_v1_backend', _test_ti_v1_exe,
+    test('text_input_backend', _test_ti_exe,
         args: [
-            '--gtest_output=xml:results/test_text_input_v1_backend.xml',
+            '--gtest_output=xml:results/test_text_input_backend.xml',
             '--gtest_color=yes',
         ],
         timeout: 30,
