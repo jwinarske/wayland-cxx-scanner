@@ -43,6 +43,9 @@ extern "C" {
 // ── shadertoy-cxx (platform-agnostic renderer) ───────────────────────────────
 #include <shadertoy/gl_renderer.hpp>
 #include <shadertoy/inputs.hpp>
+#include <shadertoy/loader.hpp>
+#include <shadertoy/playlist.hpp>
+#include <shadertoy/program.hpp>
 
 // ── Standard library ─────────────────────────────────────────────────────────
 #include <algorithm>
@@ -54,6 +57,8 @@ extern "C" {
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <utility>
+#include <vector>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() definitions for the core interfaces this example touches.
@@ -122,8 +127,8 @@ class PointerSeat : public wayland::client::CWlSeat<PointerSeat> {
 // ══════════════════════════════════════════════════════════════════════════════
 class App {
  public:
-  explicit App(std::string shader_path)
-      : shader_path_(std::move(shader_path)) {}
+  App(std::vector<std::string> shaders, int cycle_seconds)
+      : shaders_(std::move(shaders)), cycle_seconds_(cycle_seconds) {}
   ~App();
 
   int Run();
@@ -182,7 +187,9 @@ class App {
   // Renderer + shader state (from shadertoy-cxx).
   shadertoy::GlRenderer renderer_;
   shadertoy::ShaderInputs inputs_;
-  std::string shader_path_;
+  shadertoy::Playlist playlist_;
+  std::vector<std::string> shaders_;  // shader paths from the CLI
+  int cycle_seconds_ = 0;             // auto-advance interval (0 = off)
 
   bool running_ = true;
   bool configured_ = false;
@@ -197,6 +204,8 @@ class App {
   using Clock = std::chrono::steady_clock;
   Clock::time_point start_{};
   Clock::time_point last_frame_{};
+  Clock::time_point
+      program_start_{};  // when the current shader began (cycling)
 
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
@@ -212,6 +221,9 @@ class App {
 
   void RequestFrameCallback() noexcept;
   void RenderFrame() noexcept;
+  void SwitchProgram() noexcept;
+  void Next() noexcept;
+  void Prev() noexcept;
   void UpdateInputs() noexcept;
 };
 
@@ -472,24 +484,55 @@ bool App::InitEgl() {
 }
 
 bool App::InitRenderer() {
-  std::string src;
-  if (!shader_path_.empty()) {
-    src = shadertoy::LoadShaderFile(shader_path_);
-    if (src.empty()) {
-      std::fprintf(stderr, "shadertoy-egl: cannot read %s; using default\n",
-                   shader_path_.c_str());
-    }
+  // Build the playlist: CLI shaders (.json multi-pass / .frag single), else the
+  // installed bundled set, else the built-in default.
+  std::string err;
+  for (const std::string& s : shaders_) {
+    if (!playlist_.AddFile(s, &err))
+      std::fprintf(stderr, "shadertoy-egl: %s: %s\n", s.c_str(), err.c_str());
   }
-  if (src.empty())
-    src = shadertoy::DefaultImageShader();
+  if (playlist_.empty())
+    playlist_.AddDirectory(shadertoy::DefaultShaderDir());
+  if (playlist_.empty())
+    playlist_.Add(
+        shadertoy::MakeSinglePass(shadertoy::DefaultImageShader(), "default"));
 
-  if (!renderer_.Init(src)) {
-    std::fprintf(stderr, "shadertoy-egl: shader failed to compile\n");
+  if (!renderer_.SetProgram(playlist_.current())) {
+    std::fprintf(stderr, "shadertoy-egl: shader failed to load\n");
     return false;
   }
+  std::printf(
+      "shadertoy-egl: %zu shader(s) [%s]; cycle=%ds "
+      "(SPACE/→ next, ← prev)\n",
+      playlist_.size(), playlist_.current().name.c_str(), cycle_seconds_);
   start_ = Clock::now();
   last_frame_ = start_;
+  program_start_ = start_;
   return true;
+}
+
+void App::SwitchProgram() noexcept {
+  if (!renderer_.SetProgram(playlist_.current()))
+    std::fprintf(stderr, "shadertoy-egl: failed to switch shader\n");
+  const auto now = Clock::now();
+  start_ = now;  // restart iTime for the new shader
+  last_frame_ = now;
+  program_start_ = now;
+  inputs_.frame = 0;
+}
+
+void App::Next() noexcept {
+  if (playlist_.size() > 1) {
+    playlist_.next();
+    SwitchProgram();
+  }
+}
+
+void App::Prev() noexcept {
+  if (playlist_.size() > 1) {
+    playlist_.prev();
+    SwitchProgram();
+  }
 }
 
 bool App::MainLoop() {
@@ -530,6 +573,13 @@ void App::UpdateInputs() noexcept {
 }
 
 void App::RenderFrame() noexcept {
+  // Auto-advance the playlist after cycle_seconds_ on the current shader.
+  if (cycle_seconds_ > 0 && playlist_.size() > 1) {
+    const float since =
+        std::chrono::duration<float>(Clock::now() - program_start_).count();
+    if (since >= static_cast<float>(cycle_seconds_))
+      Next();
+  }
   UpdateInputs();
   renderer_.Render(inputs_);
   eglSwapBuffers(egl_.display, egl_.surface);
@@ -574,8 +624,22 @@ void App::OnToplevelClose() {
 }
 
 void App::OnKey(const uint32_t key, const uint32_t state) {
-  if (key == KEY_ESC && state == WL_KEYBOARD_KEY_STATE_PRESSED)
-    running_ = false;
+  if (state != WL_KEYBOARD_KEY_STATE_PRESSED)
+    return;
+  switch (key) {
+    case KEY_ESC:
+      running_ = false;
+      break;
+    case KEY_SPACE:
+    case KEY_RIGHT:
+      Next();
+      break;
+    case KEY_LEFT:
+      Prev();
+      break;
+    default:
+      break;
+  }
 }
 
 void App::OnPointerMotion(wl_fixed_t x, wl_fixed_t y) noexcept {
@@ -597,7 +661,29 @@ void App::OnPointerButton(uint32_t button, uint32_t state) noexcept {
 
 int main(int argc, char** argv) {
   std::signal(SIGPIPE, SIG_IGN);
-  std::string shader_path = (argc > 1) ? argv[1] : std::string();
-  App app(std::move(shader_path));
+
+  // CLI:  shadertoy_egl [--cycle N] [shader ...]
+  //   shader  — a Shadertoy export .json (multi-pass) or bare Image .frag.
+  //   --cycle N — auto-advance every N seconds (default 0 = off). With several
+  //               shaders and no --cycle, use SPACE/→/← to switch.
+  int cycle_seconds = 0;
+  std::vector<std::string> shaders;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--cycle" && i + 1 < argc) {
+      cycle_seconds = std::atoi(argv[++i]);
+    } else if (arg == "--help" || arg == "-h") {
+      std::printf("usage: %s [--cycle N] [shader.json|shader.frag ...]\n",
+                  argv[0]);
+      return EXIT_SUCCESS;
+    } else {
+      shaders.push_back(arg);
+    }
+  }
+  // Default to cycling the bundled set when run with no arguments.
+  if (shaders.empty() && cycle_seconds == 0)
+    cycle_seconds = 12;
+
+  App app(std::move(shaders), cycle_seconds);
   return app.Run();
 }
