@@ -10,7 +10,7 @@
 // agnostic shadertoy-cxx library (shadertoy::VkRenderer); this file only
 // supplies the Wayland window, input, and the VkSurfaceKHR.
 //
-// Usage:  shadertoy_vulkan [shader.frag]
+// Usage:  shadertoy_vulkan [shader.frag]   (mouse/touch drag → iMouse)
 //
 // Build requirements: wayland-client, vulkan (VK_KHR_wayland_surface),
 //                     wayland-protocols, xkbcommon, shadertoy-cxx.
@@ -66,6 +66,9 @@ const wl_interface& wl_surface_traits::wl_iface() noexcept {
 const wl_interface& wl_pointer_traits::wl_iface() noexcept {
   return wl_pointer_interface;
 }
+const wl_interface& wl_touch_traits::wl_iface() noexcept {
+  return wl_touch_interface;
+}
 }  // namespace wayland::client
 
 class App;
@@ -87,6 +90,19 @@ class PointerHandler : public wayland::client::CWlPointer<PointerHandler> {
                 uint32_t time,
                 uint32_t button,
                 uint32_t state) override;
+};
+
+class TouchHandler : public wayland::client::CWlTouch<TouchHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnDown(uint32_t serial,
+              uint32_t time,
+              wl_proxy* surface,
+              int32_t id,
+              wl_fixed_t x,
+              wl_fixed_t y) override;
+  void OnUp(uint32_t serial, uint32_t time, int32_t id) override;
+  void OnMotion(uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y) override;
 };
 
 class PointerSeat : public wayland::client::CWlSeat<PointerSeat> {
@@ -115,6 +131,10 @@ class App {
   void CreatePointer();
   void OnPointerMotion(wl_fixed_t x, wl_fixed_t y) noexcept;
   void OnPointerButton(uint32_t button, uint32_t state) noexcept;
+  void CreateTouch();
+  void OnTouchDown(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept;
+  void OnTouchMotion(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept;
+  void OnTouchUp(int32_t id) noexcept;
 
  private:
   wl::DisplayHandle display_;
@@ -128,6 +148,7 @@ class App {
   wl::SeatManager<App> seat_;
   wl::WlPtr<PointerSeat> pointer_seat_;
   wl::WlPtr<PointerHandler> pointer_;
+  wl::WlPtr<TouchHandler> touch_;
 
   // Renderer lives in shadertoy-cxx; created once the surface exists.
   std::unique_ptr<shadertoy::VkRenderer> renderer_;
@@ -142,6 +163,7 @@ class App {
   float mouse_cur_x_ = 0.0f, mouse_cur_y_ = 0.0f;
   float mouse_click_x_ = 0.0f, mouse_click_y_ = 0.0f;
   bool mouse_down_ = false;
+  int32_t touch_id_ = -1;  // active touch point id, -1 = none
 
   using Clock = std::chrono::steady_clock;
   Clock::time_point start_{};
@@ -177,9 +199,28 @@ void PointerHandler::OnButton(uint32_t /*serial*/,
                               uint32_t state) {
   app_->OnPointerButton(button, state);
 }
+void TouchHandler::OnDown(uint32_t /*serial*/,
+                          uint32_t /*time*/,
+                          wl_proxy* /*surface*/,
+                          int32_t id,
+                          wl_fixed_t x,
+                          wl_fixed_t y) {
+  app_->OnTouchDown(id, x, y);
+}
+void TouchHandler::OnUp(uint32_t /*serial*/, uint32_t /*time*/, int32_t id) {
+  app_->OnTouchUp(id);
+}
+void TouchHandler::OnMotion(uint32_t /*time*/,
+                            int32_t id,
+                            wl_fixed_t x,
+                            wl_fixed_t y) {
+  app_->OnTouchMotion(id, x, y);
+}
 void PointerSeat::OnCapabilities(uint32_t caps) {
   if ((caps & WL_SEAT_CAPABILITY_POINTER) != 0u)
     app_->CreatePointer();
+  if ((caps & WL_SEAT_CAPABILITY_TOUCH) != 0u)
+    app_->CreateTouch();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -187,6 +228,12 @@ App::~App() {
   // Destroy the renderer (and its VkSurfaceKHR) before the wl_surface proxy.
   renderer_.reset();
   seat_.Release();
+  if (!touch_.IsNull()) {
+    using T = wayland::client::wl_touch_traits;
+    if (seat_ver_ >= T::Op::Since::Release)
+      touch_.Get()->Release();
+    touch_.Reset();
+  }
   if (!pointer_.IsNull()) {
     using P = wayland::client::wl_pointer_traits;
     if (seat_ver_ >= P::Op::Since::Release)
@@ -293,6 +340,44 @@ void App::CreatePointer() {
               *pointer_seat_.Get()))) {
     pointer_.Get()->app_ = this;
   }
+}
+
+void App::CreateTouch() {
+  if (!touch_.IsNull() || pointer_seat_.IsNull())
+    return;
+  using namespace wayland::client;
+  if (wl::SetupHandler(
+          touch_, wl::construct<wl_touch_traits, wl_seat_traits::Op::GetTouch>(
+                      *pointer_seat_.Get()))) {
+    touch_.Get()->app_ = this;
+  }
+}
+
+void App::OnTouchDown(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept {
+  if (touch_id_ != -1)
+    return;  // track only the first active point
+  touch_id_ = id;
+  mouse_cur_x_ = static_cast<float>(wl_fixed_to_double(x));
+  mouse_cur_y_ =
+      static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+  mouse_click_x_ = mouse_cur_x_;
+  mouse_click_y_ = mouse_cur_y_;
+  mouse_down_ = true;
+}
+
+void App::OnTouchMotion(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept {
+  if (id != touch_id_)
+    return;
+  mouse_cur_x_ = static_cast<float>(wl_fixed_to_double(x));
+  mouse_cur_y_ =
+      static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+}
+
+void App::OnTouchUp(int32_t id) noexcept {
+  if (id != touch_id_)
+    return;
+  touch_id_ = -1;
+  mouse_down_ = false;
 }
 
 bool App::CreateSurfaces() {
