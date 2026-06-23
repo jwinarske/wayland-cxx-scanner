@@ -16,7 +16,7 @@ permissions: {}
 
 jobs:
   ubuntu:
-    name: Ubuntu (${{ matrix.compiler }})
+    name: Ubuntu (${{ matrix.compiler }}, ${{ matrix.std }})
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -24,6 +24,8 @@ jobs:
       fail-fast: false
       matrix:
         compiler: [gcc, clang]
+        # C++17 is the project floor; C++20/C++23 must keep building too.
+        std: [c++17, c++20, c++23]
         include:
           - compiler: gcc
             CC: gcc
@@ -55,6 +57,7 @@ jobs:
           meson setup builddir \
             -Dtests=true \
             -Dexamples=true \
+            -Dcpp_std=${{ matrix.std }} \
             --wrap-mode=forcefallback
 
       - name: Build
@@ -67,7 +70,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-ubuntu-${{ matrix.compiler }}
+          name: test-results-ubuntu-${{ matrix.compiler }}-${{ matrix.std }}
           path: builddir/meson-logs/
 
   fedora:

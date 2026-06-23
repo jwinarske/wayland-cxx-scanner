@@ -94,19 +94,19 @@ int run_client() {
     bool found = false;
   } reg_data;
 
+  // Positional init (field order: global, global_remove) — designated
+  // initializers are C++20; the project targets a C++17 floor.
   constexpr wl_registry_listener registry_listener = {
-      .global =
-          [](void* udata, wl_registry* /*reg*/, uint32_t name,
-             const char* iface, const uint32_t ver) {
-            if (std::string_view(iface) == "wl_minimal") {
-              auto* d = static_cast<RegistryData*>(udata);
-              d->name = name;
-              d->version = ver;
-              d->found = true;
-            }
-          },
-      .global_remove = [](void* /*udata*/, wl_registry* /*reg*/,
-                          uint32_t /*name*/) {},
+      [](void* udata, wl_registry* /*reg*/, uint32_t name, const char* iface,
+         const uint32_t ver) {
+        if (std::string_view(iface) == "wl_minimal") {
+          auto* d = static_cast<RegistryData*>(udata);
+          d->name = name;
+          d->version = ver;
+          d->found = true;
+        }
+      },
+      [](void* /*udata*/, wl_registry* /*reg*/, uint32_t /*name*/) {},
   };
 
   wl_registry_add_listener(registry, &registry_listener, &reg_data);

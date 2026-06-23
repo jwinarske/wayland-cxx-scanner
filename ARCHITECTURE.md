@@ -2,9 +2,9 @@
 
 ## Overview
 
-`wayland-cxx-scanner` is a code-generation tool and companion C++23 framework
+`wayland-cxx-scanner` is a code-generation tool and companion C++17 framework
 for the [Wayland](https://wayland.freedesktop.org/) display protocol.  Given a
-Wayland XML protocol definition it produces type-safe, zero-overhead C++23
+Wayland XML protocol definition it produces type-safe, zero-overhead C++
 headers that replace the handwritten C bindings normally provided by
 `wayland-scanner`.
 
@@ -13,7 +13,7 @@ The project has two distinct deliverables:
 | Deliverable                              | Description                                                        |
 |------------------------------------------|--------------------------------------------------------------------|
 | **Scanner tool** (`wayland-cxx-scanner`) | Reads a `.xml` protocol file and writes a `.hpp` header.           |
-| **Framework library** (`wayland-cxx`)    | A header-only C++23 base library installed to `${includedir}/wl/`. |
+| **Framework library** (`wayland-cxx`)    | A header-only C++17 base library installed to `${includedir}/wl/`. |
 
 ---
 
@@ -103,8 +103,8 @@ Utility functions that convert Wayland `snake_case` identifiers into C++
 
 | Module               | Generates                                                           | Entry point                    |
 |----------------------|---------------------------------------------------------------------|--------------------------------|
-| `codegen_client_cxx` | C++23 client proxy headers (CRTP, direct dispatch)                  | `generate_client_cxx_header()` |
-| `codegen_server_cxx` | C++23 server resource headers (CRTP, direct dispatch)               | `generate_server_cxx_header()` |
+| `codegen_client_cxx` | C++ client proxy headers (CRTP, direct dispatch)                    | `generate_client_cxx_header()` |
+| `codegen_server_cxx` | C++ server resource headers (CRTP, direct dispatch)                 | `generate_server_cxx_header()` |
 | `codegen_c`          | C-style protocol headers (compatible with `wayland-scanner` output) | `generate_c_header()`          |
 
 All three generators accept a `CppStd` enum (`Cpp17`, `Cpp20`, `Cpp23`) that
@@ -220,7 +220,7 @@ scanner themselves for these common protocols.
 
 ## Build System (Meson)
 
-The project uses [Meson](https://mesonbuild.com/) ≥ 1.1 with C++23.
+The project uses [Meson](https://mesonbuild.com/) ≥ 1.1 with C++17.
 
 ### Build Options
 

@@ -11,8 +11,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <span>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -27,11 +27,11 @@ void print_usage(const std::string_view argv0) {
       "  c-header        Generate C-style protocol header\n"
       "\n"
       "C++ standards (for client-header and server-header):\n"
-      "  c++17           ISO C++17 — CRTP without requires-expressions\n"
+      "  c++17           ISO C++17 — CRTP without requires-expressions "
+      "(default)\n"
       "  c++20           ISO C++20 — adds requires-constraints and "
       "[[nodiscard(\"reason\")]]\n"
-      "  c++23           ISO C++23 — adds explicit-object parameters "
-      "(default)\n"
+      "  c++23           ISO C++23 — adds explicit-object parameters\n"
       "\n"
       "If <output.hpp> is omitted, the output is written to stdout.\n",
       argv0.data());
@@ -39,21 +39,25 @@ void print_usage(const std::string_view argv0) {
 
 enum class Mode { ClientHeader, ServerHeader, CHeader };
 
+// C++17 substitute for std::string_view::starts_with (C++20).
+bool starts_with(std::string_view s, std::string_view prefix) {
+  return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+}
+
 }  // anonymous namespace
 
 int main(int argc, char** argv) {
-  // Wrap argv in std::span to avoid pointer-arithmetic warnings.
+  // Collect argv into a vector to avoid raw pointer-arithmetic at call sites.
   // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  auto const args =
-      std::span<char* const>(argv, static_cast<std::size_t>(argc));
+  const std::vector<char*> args(argv, argv + argc);
 
   auto mode = Mode::ClientHeader;
-  auto cpp_std = wl::scanner::CppStd::Cpp23;
+  auto cpp_std = wl::scanner::CppStd::Cpp17;
   const char* input_path = nullptr;
   const char* output_path = nullptr;
 
   for (std::size_t i = 1; i < args.size(); ++i) {
-    if (std::string_view arg{args[i]}; arg.starts_with("--mode=")) {
+    if (std::string_view arg{args[i]}; starts_with(arg, "--mode=")) {
       std::string_view m = arg.substr(7);
       if (m == "client-header")
         mode = Mode::ClientHeader;
@@ -66,7 +70,7 @@ int main(int argc, char** argv) {
         print_usage(args[0]);
         return EXIT_FAILURE;
       }
-    } else if (arg.starts_with("--std=")) {
+    } else if (starts_with(arg, "--std=")) {
       std::string_view s = arg.substr(6);
       if (s == "c++17")
         cpp_std = wl::scanner::CppStd::Cpp17;

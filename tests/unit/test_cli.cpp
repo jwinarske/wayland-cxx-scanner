@@ -124,12 +124,13 @@ TEST(CppStd, ClientHeaderCpp23HasDeducingThis) {
   EXPECT_THAT(out, HasSubstr("using Base = wl::CProxyImpl<Derived"));
 }
 
-// C++23 is the default when no standard is specified.
-TEST(CppStd, ClientHeaderDefaultIsCpp23) {
+// C++17 is the default when no standard is specified (matches the project's
+// C++17 floor).
+TEST(CppStd, ClientHeaderDefaultIsCpp17) {
   auto proto = parse_protocol_from_string(fixture_xml());
   auto out_default = generate_client_cxx_header(proto);
-  auto out_cpp23 = generate_client_cxx_header(proto, CppStd::Cpp23);
-  EXPECT_EQ(out_default, out_cpp23);
+  auto out_cpp17 = generate_client_cxx_header(proto, CppStd::Cpp17);
+  EXPECT_EQ(out_default, out_cpp17);
 }
 
 // Server header: C++17 has no requires, C++20+ has requires, C++23 uses

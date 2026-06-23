@@ -13,7 +13,6 @@
 #include <cstring>
 #include <fstream>
 #include <pugixml.hpp>
-#include <ranges>
 #include <string>
 
 namespace wl::scanner {
@@ -33,7 +32,7 @@ bool is_valid_identifier(std::string_view s) noexcept {
   if (s[0] != '_' && !(s[0] >= 'A' && s[0] <= 'Z') &&
       !(s[0] >= 'a' && s[0] <= 'z'))
     return false;
-  return std::ranges::all_of(s, [](char c) {
+  return std::all_of(s.begin(), s.end(), [](char c) {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
            (c >= '0' && c <= '9') || c == '_';
   });
@@ -169,8 +168,9 @@ Enum parse_enum(const pugi::xml_node node) {
     // wl_output.transform); the C++ codegens prefix such names with '_'
     // to produce a valid identifier.  Reject anything with other characters
     // to guard against injection through crafted XML.
+    const std::string_view ename_sv(ename);
     const bool body_ok =
-        std::ranges::all_of(std::string_view(ename), [](char c) {
+        std::all_of(ename_sv.begin(), ename_sv.end(), [](char c) {
           return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
         });
     if (!body_ok) {

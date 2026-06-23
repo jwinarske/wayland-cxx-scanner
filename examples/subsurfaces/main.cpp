@@ -74,7 +74,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <span>
+#include <wl/span.hpp>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // OpenGL ES 2 triangle — shader sources and helpers
@@ -820,8 +820,8 @@ bool App::ReallocBuffers() noexcept {
   // Paint solid colors via a span to avoid raw pointer arithmetic.
   const std::size_t main_px = main_size / sizeof(uint32_t);
   const std::size_t blue_px = blue_size / sizeof(uint32_t);
-  const std::span<uint32_t> all{static_cast<uint32_t*>(shm_mem_.data),
-                                main_px + blue_px};
+  const wl::span<uint32_t> all{static_cast<uint32_t*>(shm_mem_.data),
+                               main_px + blue_px};
   std::fill(all.first(main_px).begin(), all.first(main_px).end(),
             0x0000CC00u);  // Green: XRGB
   std::fill(all.last(blue_px).begin(), all.last(blue_px).end(),

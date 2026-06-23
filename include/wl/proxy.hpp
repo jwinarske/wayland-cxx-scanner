@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 #pragma once
-#include <concepts>
 #include <cstdint>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 extern "C" {
@@ -12,29 +12,42 @@ extern "C" {
 
 namespace wl {
 
-/// Concept satisfied by any Wayland interface traits struct.
-/// Traits must provide:
+namespace detail {
+
+/// Detection trait backing WlProxyTraits (C++17 substitute for a concept).
+template <typename T, typename = void>
+struct is_wl_proxy_traits : std::false_type {};
+
+template <typename T>
+struct is_wl_proxy_traits<T,
+                          std::void_t<decltype(T::interface_name),
+                                      decltype(T::version),
+                                      decltype(T::wl_iface())>>
+    : std::bool_constant<
+          std::is_convertible_v<decltype(T::interface_name),
+                                std::string_view> &&
+          std::is_convertible_v<decltype(T::version), uint32_t> &&
+          std::is_same_v<decltype(T::wl_iface()), const wl_interface&>> {};
+
+}  // namespace detail
+
+/// True for any Wayland interface traits struct.  C++17 substitute for the
+/// former C++20 concept; semantics unchanged.  Traits must provide:
 ///   - static constexpr std::string_view interface_name
 ///   - static constexpr uint32_t         version
 ///   - static const wl_interface& wl_iface() noexcept
 template <typename T>
-concept WlProxyTraits = requires {
-  {
-    T::interface_name
-  } -> std::convertible_to<std::string_view>;
-  {
-    T::version
-  } -> std::convertible_to<uint32_t>;
-  {
-    T::wl_iface()
-  } -> std::same_as<const wl_interface&>;
-};
+inline constexpr bool WlProxyTraits = detail::is_wl_proxy_traits<T>::value;
 
 /// Non-owning, type-safe handle wrapper for a wl_proxy* (≈ WTL CWindow).
 ///
 /// @tparam Traits  An interface traits struct satisfying WlProxyTraits.
 template <typename Traits>
-requires WlProxyTraits<Traits> class CProxy {
+class CProxy {
+  static_assert(WlProxyTraits<Traits>,
+                "Traits must satisfy wl::WlProxyTraits "
+                "(interface_name, version, wl_iface())");
+
  public:
   CProxy() noexcept = default;
 

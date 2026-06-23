@@ -8,7 +8,7 @@ project(
     license: 'MIT',
     meson_version: '>= 1.1',
     default_options: [
-        'cpp_std=c++23',
+        'cpp_std=c++17',
         'warning_level=3',
         'werror=true',
         'b_ndebug=if-release',
@@ -39,6 +39,7 @@ install_headers(
     'include/wl/linux_dmabuf.hpp',
     'include/wl/raii.hpp',
     'include/wl/event_map.hpp',
+    'include/wl/span.hpp',
     'include/wl/proxy.hpp',
     'include/wl/proxy_impl.hpp',
     'include/wl/wl_ptr.hpp',
@@ -57,7 +58,7 @@ install_headers(
 pkg = import('pkgconfig')
 pkg.generate(
     name: 'wayland-cxx',
-    description: 'WTL-patterned C++23 Wayland framework headers',
+    description: 'WTL-patterned C++17 Wayland framework headers',
     version: meson.project_version(),
     requires: [],      # header-only; consumers link wayland-client/server themselves
 )
