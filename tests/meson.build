@@ -29,6 +29,7 @@ foreach suite : [
     ['codegen_c',         'unit/test_codegen_c.cpp',                     30],
     ['codegen_client',    'unit/test_codegen_client_cxx.cpp',            30],
     ['codegen_server',    'unit/test_codegen_server_cxx.cpp',            30],
+    ['codegen_interface_tables', 'unit/test_codegen_interface_tables.cpp', 30],
     ['event_map',         'unit/test_event_map.cpp',                     15],
     ['proxy',             'unit/test_proxy.cpp',                         15],
     ['resource_impl',     'unit/test_resource_impl.cpp',                 15],
@@ -125,6 +126,38 @@ if _wp_dep.found() and _wl_scanner_dep.found()
     )
 else
     warning('wayland-protocols or wayland-scanner not found — skipping test_xdg_shell')
+endif
+
+# ── interface-table emission test ────────────────────────────────────────────
+# Generates a client header with inline wl_interface tables (--emit-interface-
+# tables) from a fixture and validates the tables at runtime, including pointer
+# identity with the libwayland wl_surface_interface external reference.
+if wayland_client_dep.found()
+    iface_test_client_hdr = custom_target(
+        'test-iface-test-client-header',
+        input:   'fixtures/minimal_interfaces.xml',
+        output:  'iface_test_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+
+    _test_iface_tables_exe = executable(
+        'test_interface_tables',
+        ['integration/test_interface_tables.cpp', iface_test_client_hdr],
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('interface_tables', _test_iface_tables_exe,
+        args: [
+            '--gtest_output=xml:results/test_interface_tables.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 30,
+        suite: 'unit',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
+else
+    warning('wayland-client not found — skipping test_interface_tables')
 endif
 
 # ── seat/keyboard handler test ───────────────────────────────────────────────

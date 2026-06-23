@@ -7,6 +7,7 @@ scanner_lib_sources = files(
     'codegen_c.cpp',
     'codegen_client_cxx.cpp',
     'codegen_server_cxx.cpp',
+    'codegen_interface_tables.cpp',
 )
 
 scanner_lib = static_library(

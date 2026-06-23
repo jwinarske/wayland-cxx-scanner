@@ -40,7 +40,7 @@ TEST(CodegenServerCxx, ContainsServerTraitsStruct) {
   const auto out = generate_server_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("xdg_wm_base_server_traits"));
   EXPECT_THAT(out, HasSubstr("\"xdg_wm_base\""));
-  EXPECT_THAT(out, HasSubstr("version        = 6"));
+  EXPECT_THAT(out, HasSubstr("version = 6"));
 }
 
 TEST(CodegenServerCxx, ContainsOpcodeConstants) {

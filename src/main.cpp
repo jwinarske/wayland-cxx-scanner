@@ -33,6 +33,14 @@ void print_usage(const std::string_view argv0) {
       "[[nodiscard(\"reason\")]]\n"
       "  c++23           ISO C++23 — adds explicit-object parameters\n"
       "\n"
+      "Options:\n"
+      "  --emit-interface-tables   For client-header / server-header, also "
+      "emit\n"
+      "                            inline wl_interface tables and define\n"
+      "                            wl_iface() in the header (self-contained "
+      "for\n"
+      "                            extension protocols).\n"
+      "\n"
       "If <output.hpp> is omitted, the output is written to stdout.\n",
       argv0.data());
 }
@@ -53,6 +61,7 @@ int main(int argc, char** argv) {
 
   auto mode = Mode::ClientHeader;
   auto cpp_std = wl::scanner::CppStd::Cpp17;
+  bool emit_interface_tables = false;
   const char* input_path = nullptr;
   const char* output_path = nullptr;
 
@@ -83,6 +92,8 @@ int main(int argc, char** argv) {
         print_usage(args[0]);
         return EXIT_FAILURE;
       }
+    } else if (arg == "--emit-interface-tables") {
+      emit_interface_tables = true;
     } else if (arg == "--help" || arg == "-h") {
       print_usage(args[0]);
       return EXIT_SUCCESS;
@@ -118,10 +129,12 @@ int main(int argc, char** argv) {
     std::string output;
     switch (mode) {
       case Mode::ClientHeader:
-        output = wl::scanner::generate_client_cxx_header(proto, cpp_std);
+        output = wl::scanner::generate_client_cxx_header(proto, cpp_std,
+                                                         emit_interface_tables);
         break;
       case Mode::ServerHeader:
-        output = wl::scanner::generate_server_cxx_header(proto, cpp_std);
+        output = wl::scanner::generate_server_cxx_header(proto, cpp_std,
+                                                         emit_interface_tables);
         break;
       case Mode::CHeader:
         output = wl::scanner::generate_c_header(proto);

@@ -44,7 +44,7 @@ TEST(RoundtripServer, VersionPropagated) {
   <interface name="wl_ver" version="5"/>
 </protocol>)");
   auto out = generate_server_cxx_header(proto);
-  EXPECT_THAT(out, HasSubstr("version        = 5"));
+  EXPECT_THAT(out, HasSubstr("version = 5"));
 }
 
 TEST(RoundtripServer, DestructorRequestPresent) {
