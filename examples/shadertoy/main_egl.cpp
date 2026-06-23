@@ -9,7 +9,11 @@
 // provided by the platform-agnostic shadertoy-cxx library (shadertoy::Gl-
 // Renderer), so the exact same renderer drives the DRM/KMS host in drm-cxx.
 //
-// Usage:  shadertoy_egl [shader.frag]
+// Usage:  shadertoy_egl [--cycle N] [shader ...]
+//   shader        Shadertoy export .json (multi-pass) or bare Image .frag; with
+//                 none, cycle the installed bundled set. SPACE/→ next, ← prev,
+//                 mouse/touch drag → iMouse, touch tap → next.
+//   --cycle N     Auto-advance every N seconds.
 //
 // Build requirements: wayland-client, wayland-egl, EGL, GLESv2, shadertoy-cxx.
 // Runtime requirement: a Wayland compositor with xdg-shell support.
@@ -51,6 +55,7 @@ extern "C" {
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -76,6 +81,9 @@ const wl_interface& wl_surface_traits::wl_iface() noexcept {
 }
 const wl_interface& wl_pointer_traits::wl_iface() noexcept {
   return wl_pointer_interface;
+}
+const wl_interface& wl_touch_traits::wl_iface() noexcept {
+  return wl_touch_interface;
 }
 }  // namespace wayland::client
 
@@ -112,9 +120,23 @@ class PointerHandler : public wayland::client::CWlPointer<PointerHandler> {
                 uint32_t state) override;
 };
 
-// A second wl_seat bound solely to obtain the pointer, leaving the keyboard to
-// wl::SeatManager.  Binding a global more than once is part of the standard
-// registry model and is supported by every compositor.
+// ── Touch → iMouse (and tap-to-advance) ──────────────────────────────────────
+class TouchHandler : public wayland::client::CWlTouch<TouchHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnDown(uint32_t serial,
+              uint32_t time,
+              wl_proxy* surface,
+              int32_t id,
+              wl_fixed_t x,
+              wl_fixed_t y) override;
+  void OnUp(uint32_t serial, uint32_t time, int32_t id) override;
+  void OnMotion(uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y) override;
+};
+
+// A second wl_seat bound solely to obtain the pointer and touch devices,
+// leaving the keyboard to wl::SeatManager.  Binding a global more than once is
+// part of the standard registry model and is supported by every compositor.
 class PointerSeat : public wayland::client::CWlSeat<PointerSeat> {
  public:
   App* app_ = nullptr;
@@ -140,10 +162,14 @@ class App {
   void OnKey(uint32_t key, uint32_t state);
   void OnFrameReady(uint32_t time_ms) noexcept;
 
-  // Pointer callbacks (called by PointerHandler / PointerSeat).
+  // Pointer / touch callbacks (called by the input handlers / PointerSeat).
   void CreatePointer();
   void OnPointerMotion(wl_fixed_t x, wl_fixed_t y) noexcept;
   void OnPointerButton(uint32_t button, uint32_t state) noexcept;
+  void CreateTouch();
+  void OnTouchDown(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept;
+  void OnTouchMotion(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept;
+  void OnTouchUp(int32_t id) noexcept;
 
  private:
   wl::DisplayHandle display_;
@@ -179,8 +205,9 @@ class App {
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
   wl::SeatManager<App> seat_;            // keyboard (ESC)
-  wl::WlPtr<PointerSeat> pointer_seat_;  // pointer (iMouse)
+  wl::WlPtr<PointerSeat> pointer_seat_;  // pointer + touch (iMouse)
   wl::WlPtr<PointerHandler> pointer_;
+  wl::WlPtr<TouchHandler> touch_;
 
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
@@ -196,10 +223,12 @@ class App {
   int width_ = 800;
   int height_ = 600;
 
-  // Mouse tracking (pixels, Shadertoy bottom-left origin).
+  // Mouse/touch tracking (pixels, Shadertoy bottom-left origin).
   float mouse_cur_x_ = 0.0f, mouse_cur_y_ = 0.0f;
   float mouse_click_x_ = 0.0f, mouse_click_y_ = 0.0f;
   bool mouse_down_ = false;
+  int32_t touch_id_ = -1;     // active touch point id, -1 = none
+  float touch_moved_ = 0.0f;  // travel since touch-down (for tap detection)
 
   using Clock = std::chrono::steady_clock;
   Clock::time_point start_{};
@@ -247,9 +276,28 @@ void PointerHandler::OnButton(uint32_t /*serial*/,
                               uint32_t state) {
   app_->OnPointerButton(button, state);
 }
+void TouchHandler::OnDown(uint32_t /*serial*/,
+                          uint32_t /*time*/,
+                          wl_proxy* /*surface*/,
+                          int32_t id,
+                          wl_fixed_t x,
+                          wl_fixed_t y) {
+  app_->OnTouchDown(id, x, y);
+}
+void TouchHandler::OnUp(uint32_t /*serial*/, uint32_t /*time*/, int32_t id) {
+  app_->OnTouchUp(id);
+}
+void TouchHandler::OnMotion(uint32_t /*time*/,
+                            int32_t id,
+                            wl_fixed_t x,
+                            wl_fixed_t y) {
+  app_->OnTouchMotion(id, x, y);
+}
 void PointerSeat::OnCapabilities(uint32_t caps) {
   if ((caps & WL_SEAT_CAPABILITY_POINTER) != 0u)
     app_->CreatePointer();
+  if ((caps & WL_SEAT_CAPABILITY_TOUCH) != 0u)
+    app_->CreateTouch();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -257,6 +305,12 @@ void PointerSeat::OnCapabilities(uint32_t caps) {
 // ══════════════════════════════════════════════════════════════════════════════
 App::~App() {
   seat_.Release();
+  if (!touch_.IsNull()) {
+    using T = wayland::client::wl_touch_traits;
+    if (seat_ver_ >= T::Op::Since::Release)
+      touch_.Get()->Release();
+    touch_.Reset();
+  }
   if (!pointer_.IsNull()) {
     using P = wayland::client::wl_pointer_traits;
     if (seat_ver_ >= P::Op::Since::Release)
@@ -367,6 +421,50 @@ void App::CreatePointer() {
               *pointer_seat_.Get()))) {
     pointer_.Get()->app_ = this;
   }
+}
+
+void App::CreateTouch() {
+  if (!touch_.IsNull() || pointer_seat_.IsNull())
+    return;
+  using namespace wayland::client;
+  if (wl::SetupHandler(
+          touch_, wl::construct<wl_touch_traits, wl_seat_traits::Op::GetTouch>(
+                      *pointer_seat_.Get()))) {
+    touch_.Get()->app_ = this;
+  }
+}
+
+void App::OnTouchDown(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept {
+  if (touch_id_ != -1)
+    return;  // track only the first active point
+  touch_id_ = id;
+  touch_moved_ = 0.0f;
+  mouse_cur_x_ = static_cast<float>(wl_fixed_to_double(x));
+  mouse_cur_y_ =
+      static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+  mouse_click_x_ = mouse_cur_x_;
+  mouse_click_y_ = mouse_cur_y_;
+  mouse_down_ = true;
+}
+
+void App::OnTouchMotion(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept {
+  if (id != touch_id_)
+    return;
+  const float nx = static_cast<float>(wl_fixed_to_double(x));
+  const float ny =
+      static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+  touch_moved_ += std::abs(nx - mouse_cur_x_) + std::abs(ny - mouse_cur_y_);
+  mouse_cur_x_ = nx;
+  mouse_cur_y_ = ny;
+}
+
+void App::OnTouchUp(int32_t id) noexcept {
+  if (id != touch_id_)
+    return;
+  touch_id_ = -1;
+  mouse_down_ = false;
+  if (touch_moved_ < 16.0f)  // a tap (little travel) advances the playlist
+    Next();
 }
 
 bool App::CreateSurfaces() {
