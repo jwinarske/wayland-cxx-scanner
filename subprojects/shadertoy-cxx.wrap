@@ -1,0 +1,12 @@
+[wrap-git]
+directory = shadertoy-cxx
+url = https://github.com/jwinarske/shadertoy-cxx.git
+revision = main
+depth = 1
+
+# For local development against a sibling checkout instead of cloning, run:
+#   meson subprojects download
+# or symlink ../shadertoy-cxx into subprojects/shadertoy-cxx.
+
+[provide]
+shadertoy-cxx = shadertoy_dep

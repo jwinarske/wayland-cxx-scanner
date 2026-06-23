@@ -23,3 +23,6 @@ subdir('xdg-csd')
 subdir('xdg-simple-dmabuf-vulkan')
 # sdl3-presentation-shm uses subdir_done() internally if SDL3/wayland-protocols absent.
 subdir('sdl3-presentation-shm')
+# shadertoy uses subdir_done() internally if wayland-protocols/scanner/xkbcommon
+# or the shadertoy-cxx dependency are absent.
+subdir('shadertoy')
