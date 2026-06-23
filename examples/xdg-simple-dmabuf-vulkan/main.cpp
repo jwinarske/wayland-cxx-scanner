@@ -860,9 +860,10 @@ bool App::InitVulkan() {
     return false;
   constexpr std::string_view kExtFd = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
   const bool has_ext_fd =
-      std::ranges::any_of(ext_rv.value, [&](const vk::ExtensionProperties& e) {
-        return std::string_view{e.extensionName.data()} == kExtFd;
-      });
+      std::any_of(ext_rv.value.begin(), ext_rv.value.end(),
+                  [&](const vk::ExtensionProperties& e) {
+                    return std::string_view{e.extensionName.data()} == kExtFd;
+                  });
   if (!has_ext_fd) {
     std::fprintf(stderr,
                  "xdg-simple-dmabuf-vulkan: device missing extension %.*s\n",

@@ -99,9 +99,11 @@ class CRegistry {
       self->m_on_remove(*self, name);
   }
 
+  // Positional init (field order: global, global_remove) — designated
+  // initializers are C++20; the framework targets a C++17 floor.
   static constexpr wl_registry_listener s_listener_ = {
-      .global = _OnGlobal,
-      .global_remove = _OnGlobalRemove,
+      _OnGlobal,
+      _OnGlobalRemove,
   };
 };
 

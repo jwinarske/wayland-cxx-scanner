@@ -9,7 +9,7 @@
 # ---------------------------------------------------------------------------
 PROJECT_NAME           = "wayland-cxx-scanner"
 PROJECT_NUMBER         = @VERSION@
-PROJECT_BRIEF          = "Wayland Scanner that outputs C++23"
+PROJECT_BRIEF          = "Wayland Scanner that outputs C++ (C++17 floor)"
 PROJECT_LOGO           =
 
 # ---------------------------------------------------------------------------

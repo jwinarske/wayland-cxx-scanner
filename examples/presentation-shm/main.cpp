@@ -60,9 +60,9 @@ extern "C" {
 #include <iterator>
 #include <list>
 #include <memory>
-#include <span>
 #include <string_view>
 #include <vector>
+#include <wl/span.hpp>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
@@ -243,7 +243,7 @@ static int64_t timespec_diff_us(const timespec& a, const timespec& b) noexcept {
 
 /// Paint an animated spinning color wheel into the @p image (XRGB8888).
 /// @p Phase drives the rotation; call with increasing values for animation.
-static void paint_pixels(std::span<uint32_t> buf,
+static void paint_pixels(wl::span<uint32_t> buf,
                          int width,
                          int height,
                          const uint32_t phase) noexcept {
@@ -411,7 +411,7 @@ struct BufferPool {
   [[nodiscard]] bool Create(int w, int h, WlShmHandler& shm) noexcept;
 
   // Returns the mapped pixel data for buffer index i.
-  [[nodiscard]] std::span<uint32_t> PixelData(int i) const noexcept {
+  [[nodiscard]] wl::span<uint32_t> PixelData(int i) const noexcept {
     const std::size_t npixels =
         static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     const std::size_t byte_offset =
@@ -859,8 +859,9 @@ bool App::PreRender() {
 void App::EmulateRendering() const noexcept {
   if (commit_delay_ms_ <= 0)
     return;
-  const timespec delay{.tv_sec = commit_delay_ms_ / 1000,
-                       .tv_nsec = (commit_delay_ms_ % 1000) * 1'000'000L};
+  timespec delay{};
+  delay.tv_sec = commit_delay_ms_ / 1000;
+  delay.tv_nsec = (commit_delay_ms_ % 1000) * 1'000'000L;
   nanosleep(&delay, nullptr);
 }
 
@@ -951,8 +952,8 @@ void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
 
 std::unique_ptr<WpPresentationFeedbackHandler> App::ExtractFeedback(
     const WpPresentationFeedbackHandler& fb) {
-  auto it = std::ranges::find_if(
-      feedback_list_, [&fb](const auto& p) { return p.get() == &fb; });
+  auto it = std::find_if(feedback_list_.begin(), feedback_list_.end(),
+                         [&fb](const auto& p) { return p.get() == &fb; });
   if (it == feedback_list_.end())
     return nullptr;
   auto ptr = std::move(*it);

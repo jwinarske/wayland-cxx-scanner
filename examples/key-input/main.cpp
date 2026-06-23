@@ -51,9 +51,9 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <span>
 #include <string>
 #include <utility>
+#include <wl/span.hpp>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() definitions — core Wayland interfaces
@@ -440,7 +440,7 @@ static constexpr uint32_t kColBarBg = 0xFF2E3440;     // status-bar background
 static constexpr uint32_t kColBarFg = 0xFFD8DEE9;     // status-bar text
 
 /// Fill a rectangle in the pixel buffer with a solid color.
-static void FillRect(std::span<uint32_t> pixels,
+static void FillRect(wl::span<uint32_t> pixels,
                      int pitch,
                      int x,
                      int y,
@@ -454,7 +454,7 @@ static void FillRect(std::span<uint32_t> pixels,
 
 /// Render one 8×8 glyph at pixel position (x, y).
 /// @p c must be a printable ASCII character (0x20–0x7E); others are skipped.
-static void DrawGlyph(std::span<uint32_t> pixels,
+static void DrawGlyph(wl::span<uint32_t> pixels,
                       int pitch,
                       int x,
                       int y,
@@ -477,7 +477,7 @@ static void DrawGlyph(std::span<uint32_t> pixels,
 
 /// Render a NUL-terminated string into the pixel buffer starting at (x, y).
 /// Characters that would extend beyond @p max_x are not drawn.
-static void DrawString(std::span<uint32_t> pixels,
+static void DrawString(wl::span<uint32_t> pixels,
                        int pitch,
                        int max_x,
                        int x,
@@ -495,7 +495,7 @@ static void DrawString(std::span<uint32_t> pixels,
 /// @param w       Buffer width in pixels (== stride / 4).
 /// @param h       Buffer height in pixels.
 /// @param buf     Text buffer to render.
-static void RenderFrame(std::span<uint32_t> pixels,
+static void RenderFrame(wl::span<uint32_t> pixels,
                         int w,
                         int h,
                         const TextBuffer& buf) noexcept {

@@ -24,11 +24,11 @@ wayland_xml = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
 
 wp_dep = dependency('wayland-protocols', required: false)
 
-# ── Generate C++23 client header from wayland.xml ─────────────────────────────
+# ── Generate C++17 client header from wayland.xml ─────────────────────────────
 #
-# --std=c++23 enables explicit-object parameters (P0847R7 deducing-this) and
-# std::is_class_v requires-constraints in the generated code, matching the
-# project-wide -std=c++23 default_option.
+# --std=c++17 matches the project-wide C++17 floor (default_option cpp_std),
+# so the generated proxies use the CRTP Base:: form (no requires-constraints
+# or deducing-this).
 
 wayland_client_hdr = custom_target(
     'wayland-info-wayland-client-header',
@@ -37,7 +37,7 @@ wayland_client_hdr = custom_target(
     command: [
         scanner_exe,
         '--mode=client-header',
-        '--std=c++23',
+        '--std=c++17',
         '@INPUT@',
         '@OUTPUT@',
     ],
@@ -59,7 +59,7 @@ if wp_dep.found()
         command: [
             scanner_exe,
             '--mode=client-header',
-            '--std=c++23',
+            '--std=c++17',
             '@INPUT@',
             '@OUTPUT@',
         ],
@@ -73,7 +73,7 @@ if wp_dep.found()
         command: [
             scanner_exe,
             '--mode=client-header',
-            '--std=c++23',
+            '--std=c++17',
             '@INPUT@',
             '@OUTPUT@',
         ],
@@ -98,7 +98,7 @@ executable(
     sources: ['wayland-info.cpp', wayland_client_hdr] + extra_sources,
     include_directories: [framework_inc, generated_inc],
     dependencies: [wayland_client_dep],
-    # The generated C++23 headers use /* param */ comment-suppression for the
+    # The generated headers use /* param */ comment-suppression for the
     # default-empty virtual-method overrides, but -Wunused-parameter (part of
     # -Wall / -Wextra) can still trigger on some compiler versions under
     # -Werror.  Suppress only that warning to keep the rest of -Werror clean.

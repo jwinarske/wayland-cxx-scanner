@@ -10,9 +10,9 @@ namespace wl::scanner {
 /// Generate a server-side header (CRTP resources, traits, request maps).
 /// @param proto  The parsed protocol IR.
 /// @param std    Target C++ standard; controls which language features are
-///               emitted in the generated header (default: C++23).
+///               emitted in the generated header (default: C++17).
 [[nodiscard]] std::string generate_server_cxx_header(
     const ir::Protocol& proto,
-    CppStd std = CppStd::Cpp23);
+    CppStd std = CppStd::Cpp17);
 
 }  // namespace wl::scanner

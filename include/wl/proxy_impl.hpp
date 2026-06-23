@@ -21,7 +21,7 @@ namespace wl {
 /// @tparam Derived  The most-derived class (CRTP).
 /// @tparam Traits   Interface traits struct satisfying WlProxyTraits.
 template <typename Derived, typename Traits>
-requires WlProxyTraits<Traits> class CProxyImpl : public CProxy<Traits> {
+class CProxyImpl : public CProxy<Traits> {
   using Base = CProxy<Traits>;
 
  public:
@@ -104,9 +104,10 @@ template <typename ChildTraits,
           typename Derived,
           typename ParentTraits,
           typename... Args>
-requires WlProxyTraits<ChildTraits> [[nodiscard]] wl_proxy* construct(
-    CProxyImpl<Derived, ParentTraits>& proxy,
-    Args... args) noexcept {
+[[nodiscard]] wl_proxy* construct(CProxyImpl<Derived, ParentTraits>& proxy,
+                                  Args... args) noexcept {
+  static_assert(WlProxyTraits<ChildTraits>,
+                "ChildTraits must satisfy wl::WlProxyTraits");
   return proxy._MarshalNew(Opcode, &ChildTraits::wl_iface(), nullptr, args...);
 }
 
@@ -132,9 +133,11 @@ template <typename ChildTraits,
           typename Derived,
           typename ParentTraits,
           typename... Args>
-requires WlProxyTraits<ChildTraits> [[nodiscard]] wl_proxy* construct_at_end(
+[[nodiscard]] wl_proxy* construct_at_end(
     CProxyImpl<Derived, ParentTraits>& proxy,
     Args... args) noexcept {
+  static_assert(WlProxyTraits<ChildTraits>,
+                "ChildTraits must satisfy wl::WlProxyTraits");
   return proxy._MarshalNew(Opcode, &ChildTraits::wl_iface(), args..., nullptr);
 }
 

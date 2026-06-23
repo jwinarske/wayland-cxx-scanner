@@ -45,6 +45,7 @@ extern "C" {
 #include <SDL3/SDL.h>
 
 // ── Standard library ────────────────────────────────────────────────────────
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cinttypes>
@@ -54,10 +55,10 @@ extern "C" {
 #include <cstdlib>
 #include <list>
 #include <memory>
-#include <numbers>
-#include <span>
 #include <string_view>
 #include <vector>
+
+#include <wl/span.hpp>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Run mode
@@ -156,15 +157,15 @@ static int64_t timespec_diff_us(const timespec& a, const timespec& b) noexcept {
 // Pixel painting — spinning color wheel (identical to presentation-shm)
 // ══════════════════════════════════════════════════════════════════════════════
 
-static void paint_pixels(std::span<uint32_t> buf,
+static void paint_pixels(wl::span<uint32_t> buf,
                          const int width,
                          const int height,
                          const uint32_t phase) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
 
-  const double ang =
-      std::numbers::pi * 2.0 / 1'000'000.0 * static_cast<double>(phase);
+  constexpr double kPi = 3.14159265358979323846;
+  const double ang = kPi * 2.0 / 1'000'000.0 * static_cast<double>(phase);
   const double s = std::sin(ang);
   const double c = std::cos(ang);
 
@@ -524,8 +525,8 @@ void App::EmulateRendering() const noexcept {
 
 std::unique_ptr<WpPresentationFeedbackHandler> App::ExtractFeedback(
     const WpPresentationFeedbackHandler& fb) {
-  const auto it = std::ranges::find_if(
-      feedback_list_, [&fb](const auto& p) { return p.get() == &fb; });
+  const auto it = std::find_if(feedback_list_.begin(), feedback_list_.end(),
+                               [&fb](const auto& p) { return p.get() == &fb; });
   if (it == feedback_list_.end())
     return nullptr;
   auto ptr = std::move(*it);

@@ -78,9 +78,9 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
-#include <span>
 #include <string_view>
 #include <vector>
+#include <wl/span.hpp>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
@@ -356,7 +356,7 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Paint the content area only (no decorations — SSD mode).
-static void paint_ssd_frame(std::span<uint32_t> buf,
+static void paint_ssd_frame(wl::span<uint32_t> buf,
                             int width,
                             int height,
                             uint32_t time) noexcept {

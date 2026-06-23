@@ -2,10 +2,11 @@
 
 [![Documentation Status](https://readthedocs.org/projects/wayland-cxx-scanner/badge/?version=latest)](https://wayland-cxx-scanner.readthedocs.io/en/latest/?badge=latest)
 
-A code-generation tool and companion C++23 framework for the
+A code-generation tool and companion C++17 framework for the
 [Wayland](https://wayland.freedesktop.org/) display protocol. Given a Wayland
-XML protocol definition it produces type-safe, zero-overhead C++23 headers that
+XML protocol definition it produces type-safe, zero-overhead C++ headers that
 replace the handwritten C bindings normally provided by `wayland-scanner`.
+The framework targets a C++17 floor and also compiles cleanly at C++20/C++23.
 
 ## Features
 
@@ -39,7 +40,7 @@ replace the handwritten C bindings normally provided by `wayland-scanner`.
 | Tool / Library                                                                | Minimum             | Notes                                          |
 |-------------------------------------------------------------------------------|---------------------|------------------------------------------------|
 | [Meson](https://mesonbuild.com/)                                              | 1.1                 | Build system                                   |
-| C++23 compiler                                                                | GCC 13+ / Clang 17+ | `c++23` is the default standard                |
+| C++17 compiler                                                                | GCC 7+ / Clang 5+   | `c++17` is the default standard; C++20/23 also supported |
 | [pugixml](https://pugixml.org/)                                               | —                   | Auto-fetched via Meson wrap if missing         |
 | wayland-client / wayland-server                                               | —                   | Optional; required for examples                |
 | [wayland-protocols](https://gitlab.freedesktop.org/wayland/wayland-protocols) | —                   | Optional; required for some tests and examples |
@@ -124,7 +125,7 @@ wayland-cxx-scanner [--mode=<mode>] [--std=<std>] <protocol.xml> [<output.hpp>]
 | Flag     | Values                                       | Default         | Description                |
 |----------|----------------------------------------------|-----------------|----------------------------|
 | `--mode` | `client-header`, `server-header`, `c-header` | `client-header` | Kind of header to generate |
-| `--std`  | `c++17`, `c++20`, `c++23`                    | `c++23`         | Target C++ standard        |
+| `--std`  | `c++17`, `c++20`, `c++23`                    | `c++17`         | Target C++ standard        |
 
 If `<output.hpp>` is omitted the generated code is written to `stdout`.
 

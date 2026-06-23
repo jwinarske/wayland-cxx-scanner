@@ -53,9 +53,9 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
-#include <span>
 #include <string_view>
 #include <vector>
+#include <wl/span.hpp>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
@@ -190,7 +190,7 @@ struct ShmMapping {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Fill @p image (XRGB8888) with an animated color wheel.
-static void paint_pixels(std::span<uint32_t> buf,
+static void paint_pixels(wl::span<uint32_t> buf,
                          int width,
                          int height,
                          uint32_t phase) noexcept {
