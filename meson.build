@@ -77,6 +77,12 @@ install_headers(
     subdir: 'wl/ime',
 )
 
+# IME backend implementations (header-only wrappers over generated proxies).
+install_headers(
+    'include/wl/ime/backends/text_input_v1.hpp',
+    subdir: 'wl/ime/backends',
+)
+
 # ── pkg-config for downstream consumers of the framework headers ──────────────
 
 pkg = import('pkgconfig')
