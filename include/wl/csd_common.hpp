@@ -167,7 +167,7 @@ inline void CairoSetRgba32(cairo_t* cr, uint32_t argb) noexcept {
 /// Render a soft shadow around a window rectangle using a pre-blurred tile.
 ///
 /// The tile is split into a nine-patch: four corners are painted 1 : 1,
-/// the four edges are horizontally or vertically stretched, and the centre
+/// the four edges are horizontally or vertically stretched, and the center
 /// is left empty (the window content).  The tile is used as both source
 /// and mask via @c cairo_mask so that the shadow alpha composites correctly.
 ///

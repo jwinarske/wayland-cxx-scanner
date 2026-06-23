@@ -35,7 +35,7 @@ TEST(Parser, OpcodeNumberingIndependent) {
   EXPECT_EQ(i.events[1].opcode, 1u);
 }
 
-TEST(Parser, AllArgTypesRecognised) {
+TEST(Parser, AllArgTypesRecognized) {
   auto p = parse_protocol_from_string(R"(
 <protocol name="t">
   <interface name="wl_t" version="1">

@@ -9,7 +9,7 @@
 // decorations with colored window-control buttons and line-art symbols.
 //
 // The title bar, button colors, and symbol style are taken from the
-// libdecor-cairo defaults.  Title text is rendered with Pango and centred
+// libdecor-cairo defaults.  Title text is rendered with Pango and centered
 // in the available space.
 //
 // ── Include order

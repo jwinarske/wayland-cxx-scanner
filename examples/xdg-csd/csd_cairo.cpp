@@ -5,7 +5,7 @@
 //
 // Uses Cairo and Pango to render libdecor-cairo style window decorations:
 // a near-black title bar with colored button backgrounds, line-art
-// symbols (close ×, maximize □/⧉, minimize ─), and centred Pango title
+// symbols (close ×, maximize □/⧉, minimize ─), and centered Pango title
 // text.
 //
 // Following the plugin pattern from libdecor's Cairo plugin:
@@ -192,7 +192,7 @@ static void DrawMinimizeSymbol(cairo_t* cr,
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// Render title text using Pango into the XRGB8888 buffer with alpha
-/// compositing.  The text is centred horizontally and vertically within
+/// compositing.  The text is centered horizontally and vertically within
 /// the given rectangle.
 static void DrawTitleText(uint32_t* buf,
                           int buf_w,
@@ -229,7 +229,7 @@ static void DrawTitleText(uint32_t* buf,
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
   pango_layout_set_alignment(layout, PANGO_ALIGN_CENTER);
 
-  // Centre vertically.
+  // Center vertically.
   int text_w = 0;
   int text_h = 0;
   pango_layout_get_pixel_size(layout, &text_w, &text_h);
@@ -329,7 +329,7 @@ void CairoCsdPlugin::RenderFrame(uint32_t* buffer,
     cairo_surface_destroy(surf);
   }
 
-  // ── Title text (Pango, centred) ────────────────────────────────────────
+  // ── Title text (Pango, centered) ────────────────────────────────────────
   constexpr int kTextPad = 8;
   const int text_x = bw + kTextPad;
   const int text_y = bw;

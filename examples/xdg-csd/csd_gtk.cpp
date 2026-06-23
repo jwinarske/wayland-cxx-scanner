@@ -267,7 +267,7 @@ static void RenderTitle(uint32_t* buf,
   pango_layout_set_width(layout, max_w * PANGO_SCALE);
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
 
-  // Centre vertically.
+  // Center vertically.
   int text_w = 0;
   int text_h = 0;
   pango_layout_get_pixel_size(layout, &text_w, &text_h);
