@@ -3,7 +3,7 @@
 //
 // key-input — text-editor keyboard-repeat demonstration
 //
-// Exercises wl::KeyboardHandler keyboard repeat, modelled after
+// Exercises wl::KeyboardHandler keyboard repeat, modeled after
 // weston/clients/editor.c: text buffer with cursor, printable-character
 // insertion via xkb_keysym_to_utf32, backspace/delete, arrow keys (with
 // keyboard repeat), Home, End, Enter.

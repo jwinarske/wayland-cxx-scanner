@@ -160,7 +160,7 @@ class SeatManager {
     ReleaseSeat();
   }
 
-  /// Returns the read end of the self-pipe used for key-repeat signalling.
+  /// Returns the read end of the self-pipe used for key-repeat signaling.
   ///
   /// Returns -1 when no keyboard is bound or when repeat setup failed.
   /// Pass this fd to RunEventLoop (or your own poll loop) alongside the

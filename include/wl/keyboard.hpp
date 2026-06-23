@@ -307,7 +307,7 @@ class KeyboardHandler
 
   // ── Keyboard repeat integration ───────────────────────────────────────────
 
-  /// Returns the read end of the self-pipe used for key-repeat signalling.
+  /// Returns the read end of the self-pipe used for key-repeat signaling.
   ///
   /// Returns -1 if the self-pipe could not be created (pipe2 failed) or if
   /// the repeat timer setup failed.  When ≥ 0, pass this fd to RunEventLoop
@@ -377,7 +377,7 @@ class KeyboardHandler
   ///
   /// it_value is the initial delay; it_interval is the repeat period derived
   /// from the repeat rate (characters per second → nanoseconds per character).
-  /// Both timespec fields are normalised so tv_nsec is always in [0,
+  /// Both timespec fields are normalized so tv_nsec is always in [0,
   /// 999999999].
   void ArmRepeat() noexcept {
     if (!repeat_.timer_valid || repeat_.rate <= 0)
@@ -385,7 +385,7 @@ class KeyboardHandler
     itimerspec in{};
     in.it_value.tv_sec = repeat_.delay / 1000;
     in.it_value.tv_nsec = static_cast<long>(repeat_.delay % 1000) * 1000000L;
-    // interval = 1 second / rate (chars-per-second), normalised into sec+nsec.
+    // interval = 1 second / rate (chars-per-second), normalized into sec+nsec.
     const long interval_ns = 1000000000L / repeat_.rate;
     in.it_interval.tv_sec = interval_ns / 1000000000L;
     in.it_interval.tv_nsec = interval_ns % 1000000000L;
