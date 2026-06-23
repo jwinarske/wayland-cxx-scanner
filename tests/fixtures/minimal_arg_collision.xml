@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Argument names that deliberately collide with the fixed parameters of the
+     generated dispatch callbacks (client/resource/self for requests, data for
+     events). The generated code must still compile: forwarded arguments are
+     emitted positionally so they never clash. -->
+<protocol name="collide_test">
+  <interface name="wl_collide" version="1">
+    <request name="do_it">
+      <arg name="client" type="uint"/>
+      <arg name="resource" type="object" interface="wl_collide"/>
+      <arg name="self" type="uint"/>
+      <arg name="data" type="uint"/>
+    </request>
+    <event name="happened">
+      <arg name="data" type="uint"/>
+      <arg name="proxy" type="object" interface="wl_collide"/>
+    </event>
+  </interface>
+</protocol>

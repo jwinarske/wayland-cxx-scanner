@@ -194,18 +194,21 @@ void emit_server_class(std::ostringstream& os,
     for (const auto& r : iface.requests) {
       // R5: generated dispatch functions null-check the user_data pointer
       // before dereferencing, guarding against uninitialized resources.
+      // Forwarded arguments use positional names (a0, a1, ...) so they can
+      // never collide with the fixed `client` / `resource` / `self` names,
+      // regardless of the protocol's argument names.
       os << "  static void _Req" << snake_to_pascal(r.name)
          << "(wl_client* client, wl_resource* resource";
-      for (const auto& a : r.args)
-        os << ", " << cpp_server_arg_type(a) << " " << a.name;
+      for (std::size_t i = 0; i < r.args.size(); ++i)
+        os << ", " << cpp_server_arg_type(r.args.at(i)) << " a" << i;
       os << ") {\n";
       os << "    auto* self = static_cast<" << cls_name
          << "*>(wl_resource_get_user_data(resource));\n";
       os << "    if (!self)\n      return;  // R5: guard against uninitialized "
             "resource\n";
       os << "    self->On" << snake_to_pascal(r.name) << "(client, resource";
-      for (const auto& a : r.args)
-        os << ", " << a.name;
+      for (std::size_t i = 0; i < r.args.size(); ++i)
+        os << ", a" << i;
       os << ");\n";
       os << "  }\n";
     }

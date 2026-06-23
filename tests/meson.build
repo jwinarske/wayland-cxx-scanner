@@ -160,6 +160,43 @@ else
     warning('wayland-client not found — skipping test_interface_tables')
 endif
 
+# ── dispatch argument-name collision test ────────────────────────────────────
+# Generates client + server headers from a fixture whose argument names collide
+# with the dispatch callbacks' fixed parameters; the test only needs to compile.
+if wayland_client_dep.found() and wayland_server_dep.found()
+    collide_client_hdr = custom_target(
+        'test-collide-client-header',
+        input:   'fixtures/minimal_arg_collision.xml',
+        output:  'collide_test_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    )
+    collide_server_hdr = custom_target(
+        'test-collide-server-header',
+        input:   'fixtures/minimal_arg_collision.xml',
+        output:  'collide_test_server.hpp',
+        command: [scanner_exe, '--mode=server-header', '@INPUT@', '@OUTPUT@'],
+    )
+
+    _test_arg_collision_exe = executable(
+        'test_arg_collision',
+        ['integration/test_arg_collision.cpp', collide_client_hdr,
+         collide_server_hdr],
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('arg_collision', _test_arg_collision_exe,
+        args: [
+            '--gtest_output=xml:results/test_arg_collision.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 30,
+        suite: 'unit',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
+else
+    warning('wayland-client/server not found — skipping test_arg_collision')
+endif
+
 # ── seat/keyboard handler test ───────────────────────────────────────────────
 # Requires wayland-scanner (for wayland.xml) and xkbcommon.
 _xkbcommon_dep = dependency('xkbcommon', required: false)
