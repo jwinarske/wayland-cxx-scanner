@@ -30,7 +30,6 @@ foreach suite : [
     ['codegen_client',    'unit/test_codegen_client_cxx.cpp',            30],
     ['codegen_server',    'unit/test_codegen_server_cxx.cpp',            30],
     ['codegen_interface_tables', 'unit/test_codegen_interface_tables.cpp', 30],
-    ['ime_facades',       'unit/test_ime_facades.cpp',                   15],
     ['event_map',         'unit/test_event_map.cpp',                     15],
     ['proxy',             'unit/test_proxy.cpp',                         15],
     ['resource_impl',     'unit/test_resource_impl.cpp',                 15],
@@ -159,6 +158,57 @@ if wayland_client_dep.found()
     )
 else
     warning('wayland-client not found — skipping test_interface_tables')
+endif
+
+# ── IME facade contract test (ime_backend=none) ──────────────────────────────
+# Includes backend.hpp, which only resolves cleanly without a selected backend.
+if ime_backend == 'none'
+    _test_ime_facades_exe = executable(
+        'test_ime_facades',
+        'unit/test_ime_facades.cpp',
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('ime_facades', _test_ime_facades_exe,
+        args: [
+            '--gtest_output=xml:results/test_ime_facades.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 15,
+        suite: 'unit',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
+endif
+
+# ── text-input-v1 backend test (ime_backend=text-input-v1) ────────────────────
+# Generates the v1 client header with inline interface tables and compiles the
+# backend (via backend.hpp) against the ITextInputReceiver facade.
+_ti_wp_dep = dependency('wayland-protocols', required: false)
+if ime_backend == 'text-input-v1' and _ti_wp_dep.found() and wayland_client_dep.found()
+    _ti_v1_xml = _ti_wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v1.xml'
+    text_input_v1_client_hdr = custom_target(
+        'test-text-input-v1-client-header',
+        input:   _ti_v1_xml,
+        output:  'text_input_v1_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+
+    _test_ti_v1_exe = executable(
+        'test_text_input_v1_backend',
+        ['integration/test_text_input_v1_backend.cpp', text_input_v1_client_hdr],
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('text_input_v1_backend', _test_ti_v1_exe,
+        args: [
+            '--gtest_output=xml:results/test_text_input_v1_backend.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 30,
+        suite: 'unit',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
 endif
 
 # ── dispatch argument-name collision test ────────────────────────────────────
