@@ -784,8 +784,13 @@ bool App::ScanGlobals() {
     using wl_s = wayland::client::wl_shm_traits;
     using xdg_base = xdg_shell::client::xdg_wm_base_traits;
     using wl_seat = wayland::client::wl_seat_traits;
+#if defined(WL_IME_BACKEND_TEXT_INPUT_V3)
+    using ti_mgr =
+        text_input_unstable_v3::client::zwp_text_input_manager_v3_traits;
+#else
     using ti_mgr =
         text_input_unstable_v1::client::zwp_text_input_manager_v1_traits;
+#endif
 
     if (iface == wl_comp::interface_name) {
       compositor_name_ = name;

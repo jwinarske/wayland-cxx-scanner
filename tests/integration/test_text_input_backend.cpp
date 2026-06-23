@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Built only when -Dime_backend=text-input-v1.  Compiles the text-input-v1
-// backend (via the backend dispatch header) against the ITextInputReceiver
-// facade and exercises every facade method.  Methods are safe no-ops while the
-// backend is unbound, so this needs no live compositor; instantiating the
-// non-template backend forces its whole implementation (bind path, event
-// handler, enum mapping) to compile.
+// Built for the text-input receiver backends (-Dime_backend=text-input-v1 or
+// text-input-v3).  Compiles the selected backend (via the backend dispatch
+// header) against the ITextInputReceiver facade and exercises every facade
+// method.  Methods are safe no-ops while the backend is unbound, so this needs
+// no live compositor; instantiating the non-template backend forces its whole
+// implementation (bind path, event handler, enum mapping) to compile.
 #include <wl/ime/backend.hpp>
 #include <wl/ime/text_input_receiver.hpp>
 
@@ -14,7 +14,7 @@
 
 static_assert(
     std::is_base_of_v<wl::ime::ITextInputReceiver, wl::ime::SelectedTextInput>,
-    "the text-input-v1 backend must implement ITextInputReceiver");
+    "the selected text-input backend must implement ITextInputReceiver");
 
 namespace {
 struct FakeListener : wl::ime::TextInputListener {
@@ -26,7 +26,7 @@ struct FakeListener : wl::ime::TextInputListener {
 };
 }  // namespace
 
-TEST(TextInputV1Backend, FacadeMethodsSafeWhenUnbound) {
+TEST(TextInputBackend, FacadeMethodsSafeWhenUnbound) {
   wl::ime::SelectedTextInput ti;
   wl::ime::ITextInputReceiver& r = ti;
   r.Activate();

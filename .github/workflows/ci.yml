@@ -82,7 +82,7 @@ jobs:
       fail-fast: false
       matrix:
         # One build per implemented IME backend (extended as backends land).
-        ime_backend: [text-input-v1]
+        ime_backend: [text-input-v1, text-input-v3]
 
     env:
       CC: gcc
