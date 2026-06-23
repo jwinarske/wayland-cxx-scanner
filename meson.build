@@ -15,6 +15,21 @@ project(
     ],
 )
 
+# ── IME backend selection ─────────────────────────────────────────────────────
+# Maps the single-valued ime_backend option to a compile define consumed by
+# include/wl/ime/backend.hpp.  Exactly one backend is active per build.
+
+ime_backend = get_option('ime_backend')
+ime_defines = {
+    'none'                : '-DWL_IME_BACKEND_NONE',
+    'text-input-v1'       : '-DWL_IME_BACKEND_TEXT_INPUT_V1',
+    'text-input-v3'       : '-DWL_IME_BACKEND_TEXT_INPUT_V3',
+    'input-method-v1'     : '-DWL_IME_BACKEND_INPUT_METHOD_V1',
+    'input-method-v2'     : '-DWL_IME_BACKEND_INPUT_METHOD_V2',
+    'virtual-keyboard-v1' : '-DWL_IME_BACKEND_VIRTUAL_KEYBOARD_V1',
+}
+add_project_arguments(ime_defines[ime_backend], language: 'cpp')
+
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
 wayland_client_dep = dependency('wayland-client', required: false)
@@ -51,6 +66,15 @@ install_headers(
     'include/wl/keyboard.hpp',
     'include/wl/seat.hpp',
     subdir: 'wl',
+)
+
+# IME role facade interfaces + backend dispatch header.
+install_headers(
+    'include/wl/ime/text_input_receiver.hpp',
+    'include/wl/ime/input_method.hpp',
+    'include/wl/ime/virtual_keyboard.hpp',
+    'include/wl/ime/backend.hpp',
+    subdir: 'wl/ime',
 )
 
 # ── pkg-config for downstream consumers of the framework headers ──────────────

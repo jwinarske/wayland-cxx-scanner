@@ -30,6 +30,7 @@ foreach suite : [
     ['codegen_client',    'unit/test_codegen_client_cxx.cpp',            30],
     ['codegen_server',    'unit/test_codegen_server_cxx.cpp',            30],
     ['codegen_interface_tables', 'unit/test_codegen_interface_tables.cpp', 30],
+    ['ime_facades',       'unit/test_ime_facades.cpp',                   15],
     ['event_map',         'unit/test_event_map.cpp',                     15],
     ['proxy',             'unit/test_proxy.cpp',                         15],
     ['resource_impl',     'unit/test_resource_impl.cpp',                 15],
