@@ -5,5 +5,5 @@ option('docs',     type: 'boolean', value: false, description: 'Generate Doxygen
 option('ime_backend', type: 'combo',
     choices: ['none', 'text-input-v1', 'text-input-v3',
               'input-method-v1', 'input-method-v2', 'virtual-keyboard-v1'],
-    value: 'none',
-    description: 'IME protocol backend to generate, wrap, build and test (exactly one). Backends are added incrementally; only "none" is implemented so far.')
+    value: 'text-input-v1',
+    description: 'IME protocol backend to generate, wrap, build and test (exactly one). Implemented: none, text-input-v1.')
