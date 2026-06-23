@@ -211,19 +211,20 @@ void emit_client_class(std::ostringstream& os,
     // dispatches by opcode via the listener table, so we call the virtual
     // handler directly without an intermediate ProcessEvent / opcode scan.
     for (const auto& e : iface.events) {
+      // Forwarded arguments use positional names (a0, a1, ...) so they can
+      // never collide with the fixed `data` parameter, regardless of the
+      // protocol's argument names.
       os << "  static void _Evt" << snake_to_pascal(e.name)
          << "(void* data, wl_proxy* /*proxy*/";
-      for (const auto& a : e.args)
-        os << ", " << cpp_arg_type(a) << " " << a.name;
+      for (std::size_t i = 0; i < e.args.size(); ++i)
+        os << ", " << cpp_arg_type(e.args.at(i)) << " a" << i;
       os << ") {\n";
       os << "    static_cast<" << cls_name << "*>(data)->On"
          << snake_to_pascal(e.name) << "(";
-      bool first = true;
-      for (const auto& a : e.args) {
-        if (!first)
+      for (std::size_t i = 0; i < e.args.size(); ++i) {
+        if (i > 0)
           os << ", ";
-        os << a.name;
-        first = false;
+        os << "a" << i;
       }
       os << ");\n";
       os << "  }\n";
