@@ -2,6 +2,7 @@
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 #include "codegen_server_cxx.hpp"
 
+#include "codegen_interface_tables.hpp"
 #include "name_transform.hpp"
 
 #include <cassert>
@@ -51,65 +52,40 @@ void emit_server_traits(std::ostringstream& os,
                         CppStd std,
                         std::string_view traits_name) {
   os << "struct " << traits_name << " {\n";
-  os << "    static constexpr std::string_view interface_name = \""
-     << iface.name << "\";\n";
-  os << "    static constexpr uint32_t         version        = "
-     << iface.version << ";\n";
+  os << "  static constexpr std::string_view interface_name = \"" << iface.name
+     << "\";\n";
+  os << "  static constexpr uint32_t version = " << iface.version << ";\n";
   // C++20+ supports [[nodiscard]] with a reason string.
   if (std >= CppStd::Cpp20)
-    os << "    [[nodiscard(\"required for protocol binding\")]]\n"
-       << "    static const wl_interface& wl_iface() noexcept;\n";
+    os << "  [[nodiscard(\"required for protocol binding\")]]\n"
+       << "  static const wl_interface& wl_iface() noexcept;\n";
   else
-    os << "    [[nodiscard]] static const wl_interface& wl_iface() noexcept;\n";
+    os << "  [[nodiscard]] static const wl_interface& wl_iface() noexcept;\n";
 
   if (!iface.requests.empty()) {
-    os << "    struct Req {\n";
-    os << "        static constexpr uint32_t";
-    bool first = true;
-    for (const auto& r : iface.requests) {
-      if (!first)
-        os << ",";
-      os << "\n            " << snake_to_pascal(r.name) << " = " << r.opcode;
-      first = false;
-    }
-    os << ";\n";
-    os << "        struct Since {\n";
-    os << "            static constexpr uint32_t";
-    bool first_s = true;
-    for (const auto& r : iface.requests) {
-      if (!first_s)
-        os << ",";
-      os << "\n                " << snake_to_pascal(r.name) << " = "
-         << msg_since(r);
-      first_s = false;
-    }
-    os << ";\n        };\n";
+    os << "  struct Req {\n";
+    for (const auto& r : iface.requests)
+      os << "    static constexpr uint32_t " << snake_to_pascal(r.name) << " = "
+         << r.opcode << ";\n";
+    os << "    struct Since {\n";
+    for (const auto& r : iface.requests)
+      os << "      static constexpr uint32_t " << snake_to_pascal(r.name)
+         << " = " << msg_since(r) << ";\n";
     os << "    };\n";
+    os << "  };\n";
   }
 
   if (!iface.events.empty()) {
-    os << "    struct Evt {\n";
-    os << "        static constexpr uint32_t";
-    bool first = true;
-    for (const auto& e : iface.events) {
-      if (!first)
-        os << ",";
-      os << "\n            " << snake_to_pascal(e.name) << " = " << e.opcode;
-      first = false;
-    }
-    os << ";\n";
-    os << "        struct Since {\n";
-    os << "            static constexpr uint32_t";
-    bool first_s = true;
-    for (const auto& e : iface.events) {
-      if (!first_s)
-        os << ",";
-      os << "\n                " << snake_to_pascal(e.name) << " = "
-         << msg_since(e);
-      first_s = false;
-    }
-    os << ";\n        };\n";
+    os << "  struct Evt {\n";
+    for (const auto& e : iface.events)
+      os << "    static constexpr uint32_t " << snake_to_pascal(e.name) << " = "
+         << e.opcode << ";\n";
+    os << "    struct Since {\n";
+    for (const auto& e : iface.events)
+      os << "      static constexpr uint32_t " << snake_to_pascal(e.name)
+         << " = " << msg_since(e) << ";\n";
     os << "    };\n";
+    os << "  };\n";
   }
   os << "};\n\n";
 }
@@ -127,7 +103,7 @@ void emit_server_class(std::ostringstream& os,
   // C++20+ adds a requires-constraint to catch non-class template arguments
   // at instantiation time with a clearer diagnostic.
   if (std >= CppStd::Cpp20)
-    os << "    requires std::is_class_v<Derived>\n";
+    os << "  requires std::is_class_v<Derived>\n";
   os << "class " << cls_name << " : public wl::CResourceImpl<Derived, "
      << traits_name << "> {\n";
 
@@ -140,28 +116,27 @@ void emit_server_class(std::ostringstream& os,
     // Emit a compile-time feature switch so downstream consumers work with
     // both GCC 13 (no deducing-this) and GCC 14+ / Clang 18+ (deducing-this).
     os << "#ifdef __cpp_explicit_this_parameter\n";
-    os << "public:\n";
+    os << " public:\n";
     for (const auto& e : iface.events) {
       std::string method = "Send" + snake_to_pascal(e.name);
       // C++23: explicit-object parameter (P0847R7).
-      os << "    void " << method << "(this Derived& self";
+      os << "  void " << method << "(this Derived& self";
       for (const auto& a : e.args)
         os << ", " << cpp_server_arg_type(a) << " " << a.name;
       os << ") noexcept {\n";
-      os << "        self._PostEvent(" << traits_name
+      os << "    self._PostEvent(" << traits_name
          << "::Evt::" << snake_to_pascal(e.name);
       for (const auto& a : e.args)
         os << ", " << a.name;
-      os << ");\n    }\n\n";
+      os << ");\n  }\n\n";
     }
     os << "#else\n";
-    os << "    using Base = wl::CResourceImpl<Derived, " << traits_name
-       << ">;\n";
-    os << "public:\n";
+    os << "  using Base = wl::CResourceImpl<Derived, " << traits_name << ">;\n";
+    os << "\n public:\n";
     for (const auto& e : iface.events) {
       std::string method = "Send" + snake_to_pascal(e.name);
       // Fallback: traditional Base:: form.
-      os << "    void " << method << "(";
+      os << "  void " << method << "(";
       for (std::size_t i = 0; i < e.args.size(); ++i) {
         if (i > 0)
           os << ", ";
@@ -169,21 +144,21 @@ void emit_server_class(std::ostringstream& os,
         os << cpp_server_arg_type(arg) << " " << arg.name;
       }
       os << ") noexcept {\n";
-      os << "        Base::_PostEvent(" << traits_name
+      os << "    Base::_PostEvent(" << traits_name
          << "::Evt::" << snake_to_pascal(e.name);
       for (const auto& a : e.args)
         os << ", " << a.name;
-      os << ");\n    }\n\n";
+      os << ");\n  }\n\n";
     }
     os << "#endif\n\n";
   } else {
     // C++17/20: traditional form using the Base alias.
-    os << "    using Base = wl::CResourceImpl<Derived, " << traits_name
+    os << "  using Base = wl::CResourceImpl<Derived, " << traits_name
        << ">;\n\n";
-    os << "public:\n";
+    os << " public:\n";
     for (const auto& e : iface.events) {
       std::string method = "Send" + snake_to_pascal(e.name);
-      os << "    void " << method << "(";
+      os << "  void " << method << "(";
       for (std::size_t i = 0; i < e.args.size(); ++i) {
         if (i > 0)
           os << ", ";
@@ -191,17 +166,17 @@ void emit_server_class(std::ostringstream& os,
         os << cpp_server_arg_type(arg) << " " << arg.name;
       }
       os << ") noexcept {\n";
-      os << "        Base::_PostEvent(" << traits_name
+      os << "    Base::_PostEvent(" << traits_name
          << "::Evt::" << snake_to_pascal(e.name);
       for (const auto& a : e.args)
         os << ", " << a.name;
-      os << ");\n    }\n\n";
+      os << ");\n  }\n\n";
     }
   }
 
   // Virtual request handlers — users override these in their Derived class.
   for (const auto& r : iface.requests) {
-    os << "    virtual void On" << snake_to_pascal(r.name)
+    os << "  virtual void On" << snake_to_pascal(r.name)
        << "(wl_client* /*client*/, wl_resource* /*resource*/";
     for (const auto& a : r.args)
       os << ", " << cpp_server_arg_type(a) << " /*" << a.name << "*/";
@@ -209,9 +184,9 @@ void emit_server_class(std::ostringstream& os,
   }
 
   if (!iface.requests.empty()) {
-    os << "\nprivate:\n";
+    os << "\n private:\n";
     // Allow the CRTP base to access the private request vtable.
-    os << "    friend class wl::CResourceImpl<Derived, " << traits_name
+    os << "  friend class wl::CResourceImpl<Derived, " << traits_name
        << ">;\n\n";
 
     // Direct-dispatch static callbacks — call OnFoo directly without
@@ -219,31 +194,30 @@ void emit_server_class(std::ostringstream& os,
     for (const auto& r : iface.requests) {
       // R5: generated dispatch functions null-check the user_data pointer
       // before dereferencing, guarding against uninitialized resources.
-      os << "    static void _Req" << snake_to_pascal(r.name)
+      os << "  static void _Req" << snake_to_pascal(r.name)
          << "(wl_client* client, wl_resource* resource";
       for (const auto& a : r.args)
         os << ", " << cpp_server_arg_type(a) << " " << a.name;
       os << ") {\n";
-      os << "        auto* self = static_cast<" << cls_name
+      os << "    auto* self = static_cast<" << cls_name
          << "*>(wl_resource_get_user_data(resource));\n";
-      os << "        if (!self) return;  // R5: guard against uninitialized "
+      os << "    if (!self)\n      return;  // R5: guard against uninitialized "
             "resource\n";
-      os << "        self->On" << snake_to_pascal(r.name)
-         << "(client, resource";
+      os << "    self->On" << snake_to_pascal(r.name) << "(client, resource";
       for (const auto& a : r.args)
         os << ", " << a.name;
       os << ");\n";
-      os << "    }\n";
+      os << "  }\n";
     }
     // reinterpret_cast is not a constant expression, so we cannot use
     // constexpr here.  The inline keyword makes the definition valid inside
     // the class body for all C++17+.
     // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
-    os << "    inline static const void* s_request_vtable_[] = {\n";
+    os << "  inline static const void* s_request_vtable_[] = {\n";
     for (const auto& r : iface.requests)
-      os << "        reinterpret_cast<const void*>(&_Req"
+      os << "      reinterpret_cast<const void*>(&_Req"
          << snake_to_pascal(r.name) << "),\n";
-    os << "    };\n";
+    os << "  };\n";
   }
 
   os << "};\n\n";
@@ -265,7 +239,9 @@ const char* cpp_std_label(CppStd std) {
 
 }  // anonymous namespace
 
-std::string generate_server_cxx_header(const Protocol& proto, CppStd std) {
+std::string generate_server_cxx_header(const Protocol& proto,
+                                       CppStd std,
+                                       bool emit_interface_tables) {
   // S6: all identifiers validated at parse time; safe to emit directly.
   std::ostringstream os;
 
@@ -274,6 +250,8 @@ std::string generate_server_cxx_header(const Protocol& proto, CppStd std) {
   os << "// SPDX-License-Identifier: MIT\n";
   os << "// AUTO-GENERATED by wayland-cxx-scanner 0.1.0 — DO NOT EDIT\n";
   os << "// Target: " << cpp_label << "\n";
+  // This file is machine-generated; tell clang-format to leave it untouched.
+  os << "// clang-format off\n";
   os << "#pragma once\n\n";
   os << "#include <wl/resource_impl.hpp>\n";
   os << "\n";
@@ -291,7 +269,11 @@ std::string generate_server_cxx_header(const Protocol& proto, CppStd std) {
   for (const auto& iface : proto.interfaces)
     emit_server_class(os, iface, std);
 
+  if (emit_interface_tables)
+    wl::scanner::emit_interface_tables(os, proto, "_server_traits");
+
   os << "}  // namespace " << ns << "\n";
+  os << "// clang-format on\n";
   return std::move(os).str();
 }
 

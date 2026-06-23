@@ -47,7 +47,7 @@ TEST(RoundtripClient, VersionPropagated) {
   <interface name="wl_ver" version="7"/>
 </protocol>)");
   auto out = generate_client_cxx_header(proto);
-  EXPECT_THAT(out, HasSubstr("version        = 7"));
+  EXPECT_THAT(out, HasSubstr("version = 7"));
 }
 
 TEST(RoundtripClient, FdArgTypeInClientHeader) {

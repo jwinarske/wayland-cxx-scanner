@@ -44,7 +44,7 @@ TEST(CodegenClientCxx, ContainsTraitsStruct) {
   EXPECT_THAT(out, HasSubstr("xdg_wm_base_traits"));
   EXPECT_THAT(out, HasSubstr("interface_name"));
   EXPECT_THAT(out, HasSubstr("\"xdg_wm_base\""));
-  EXPECT_THAT(out, HasSubstr("version        = 6"));
+  EXPECT_THAT(out, HasSubstr("version = 6"));
 }
 
 TEST(CodegenClientCxx, ContainsOpcodeConstants) {

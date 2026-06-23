@@ -126,8 +126,22 @@ wayland-cxx-scanner [--mode=<mode>] [--std=<std>] <protocol.xml> [<output.hpp>]
 |----------|----------------------------------------------|-----------------|----------------------------|
 | `--mode` | `client-header`, `server-header`, `c-header` | `client-header` | Kind of header to generate |
 | `--std`  | `c++17`, `c++20`, `c++23`                    | `c++17`         | Target C++ standard        |
+| `--emit-interface-tables` | (flag)                          | off             | Also emit inline `wl_interface` tables and define `wl_iface()` in the generated client/server header |
 
 If `<output.hpp>` is omitted the generated code is written to `stdout`.
+
+#### `--emit-interface-tables`
+
+A generated client/server header normally only *declares* each interface's
+`wl_iface()`; the consumer supplies the `wl_interface` table (returning the
+libwayland symbol for core interfaces, or a hand-written table otherwise). For
+**extension** protocols — which have no libwayland-provided symbol — pass
+`--emit-interface-tables` to have the scanner emit the `wl_interface` /
+`wl_message` tables inline and define `wl_iface()` in the header, making it
+fully self-contained with no companion C translation unit. Object/`new_id`
+arguments that reference an interface from another protocol (e.g. `wl_surface`)
+resolve to that interface's external symbol at link time. Do not use it for core
+`wayland.xml`, whose interfaces must resolve to the libwayland symbols.
 
 ### Example: generate a client header from the XDG shell protocol
 
