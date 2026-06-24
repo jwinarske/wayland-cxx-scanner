@@ -250,7 +250,8 @@ class App {
 
   void RequestFrameCallback() noexcept;
   void RenderFrame() noexcept;
-  void SwitchProgram() noexcept;
+  bool ApplyCurrent() noexcept;     // SetProgram(current) + reset timing
+  bool Advance(int dir) noexcept;   // step in dir, skipping uncompilable shaders
   void Next() noexcept;
   void Prev() noexcept;
   void UpdateInputs() noexcept;
@@ -595,8 +596,9 @@ bool App::InitRenderer() {
     playlist_.Add(
         shadertoy::MakeSinglePass(shadertoy::DefaultImageShader(), "default"));
 
-  if (!renderer_.SetProgram(playlist_.current())) {
-    std::fprintf(stderr, "shadertoy-egl: shader failed to load\n");
+  // Apply the first shader; if it won't compile, skip forward to one that does.
+  if (!ApplyCurrent() && !Advance(+1)) {
+    std::fprintf(stderr, "shadertoy-egl: no shader could be compiled\n");
     return false;
   }
   std::printf(
@@ -609,28 +611,43 @@ bool App::InitRenderer() {
   return true;
 }
 
-void App::SwitchProgram() noexcept {
+bool App::ApplyCurrent() noexcept {
   if (!renderer_.SetProgram(playlist_.current()))
-    std::fprintf(stderr, "shadertoy-egl: failed to switch shader\n");
+    return false;  // compile/link failed; previous program left intact
   const auto now = Clock::now();
   start_ = now;  // restart iTime for the new shader
   last_frame_ = now;
   program_start_ = now;
   inputs_.frame = 0;
+  return true;
+}
+
+// Step through the playlist in @p dir (+1 next, -1 prev), skipping shaders that
+// fail to compile, until one applies.  Bounded by the playlist size, so an
+// all-uncompilable playlist terminates with the previous program still showing.
+bool App::Advance(int dir) noexcept {
+  for (size_t tried = 0, n = playlist_.size(); tried < n; ++tried) {
+    if (dir >= 0)
+      playlist_.next();
+    else
+      playlist_.prev();
+    if (ApplyCurrent())
+      return true;
+    std::fprintf(stderr, "shadertoy-egl: skipping \"%s\" (failed to compile)\n",
+                 playlist_.current().name.c_str());
+  }
+  std::fprintf(stderr, "shadertoy-egl: no compilable shader in playlist\n");
+  return false;
 }
 
 void App::Next() noexcept {
-  if (playlist_.size() > 1) {
-    playlist_.next();
-    SwitchProgram();
-  }
+  if (playlist_.size() > 1)
+    Advance(+1);
 }
 
 void App::Prev() noexcept {
-  if (playlist_.size() > 1) {
-    playlist_.prev();
-    SwitchProgram();
-  }
+  if (playlist_.size() > 1)
+    Advance(-1);
 }
 
 bool App::MainLoop() {
