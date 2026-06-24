@@ -149,7 +149,8 @@ class PointerSeat : public wayland::client::CWlSeat<PointerSeat> {
 // ══════════════════════════════════════════════════════════════════════════════
 class App {
  public:
-  App(std::vector<std::string> shaders, int cycle_seconds,
+  App(std::vector<std::string> shaders,
+      int cycle_seconds,
       std::string media_dir)
       : shaders_(std::move(shaders)),
         cycle_seconds_(cycle_seconds),
@@ -220,7 +221,7 @@ class App {
   shadertoy::Playlist playlist_;
   std::vector<std::string> shaders_;  // shader paths from the CLI
   int cycle_seconds_ = 0;             // auto-advance interval (0 = off)
-  std::string media_dir_;             // dir for Shadertoy media (textures/cubemaps)
+  std::string media_dir_;  // dir for Shadertoy media (textures/cubemaps)
 
   bool running_ = true;
   bool configured_ = false;
@@ -228,7 +229,9 @@ class App {
   int height_ = 600;
 
   // Mouse/touch tracking (pixels, Shadertoy bottom-left origin).
-  float mouse_cur_x_ = 0.0f, mouse_cur_y_ = 0.0f;
+  float mouse_cur_x_ = 0.0f, mouse_cur_y_ = 0.0f;  // iMouse.xy (drag only)
+  float mouse_live_x_ = 0.0f,
+        mouse_live_y_ = 0.0f;  // live pointer (any motion)
   float mouse_click_x_ = 0.0f, mouse_click_y_ = 0.0f;
   bool mouse_down_ = false;
   int32_t touch_id_ = -1;     // active touch point id, -1 = none
@@ -254,8 +257,8 @@ class App {
 
   void RequestFrameCallback() noexcept;
   void RenderFrame() noexcept;
-  bool ApplyCurrent() noexcept;     // SetProgram(current) + reset timing
-  bool Advance(int dir) noexcept;   // step in dir, skipping uncompilable shaders
+  bool ApplyCurrent() noexcept;    // SetProgram(current) + reset timing
+  bool Advance(int dir) noexcept;  // step in dir, skipping uncompilable shaders
   void Next() noexcept;
   void Prev() noexcept;
   void UpdateInputs() noexcept;
@@ -765,10 +768,16 @@ void App::OnKey(const uint32_t key, const uint32_t state) {
 }
 
 void App::OnPointerMotion(wl_fixed_t x, wl_fixed_t y) noexcept {
-  mouse_cur_x_ = static_cast<float>(wl_fixed_to_double(x));
+  mouse_live_x_ = static_cast<float>(wl_fixed_to_double(x));
   // Flip Y to Shadertoy's bottom-left origin.
-  mouse_cur_y_ =
+  mouse_live_y_ =
       static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+  // Shadertoy only moves iMouse.xy while a button is held (a drag); plain
+  // hovering leaves it where the last drag ended.
+  if (mouse_down_) {
+    mouse_cur_x_ = mouse_live_x_;
+    mouse_cur_y_ = mouse_live_y_;
+  }
 }
 
 void App::OnPointerButton(uint32_t button, uint32_t state) noexcept {
@@ -776,8 +785,10 @@ void App::OnPointerButton(uint32_t button, uint32_t state) noexcept {
     return;
   mouse_down_ = (state == WL_POINTER_BUTTON_STATE_PRESSED);
   if (mouse_down_) {
-    mouse_click_x_ = mouse_cur_x_;
-    mouse_click_y_ = mouse_cur_y_;
+    mouse_cur_x_ = mouse_live_x_;  // jump iMouse.xy to the click point
+    mouse_cur_y_ = mouse_live_y_;
+    mouse_click_x_ = mouse_live_x_;
+    mouse_click_y_ = mouse_live_y_;
   }
 }
 
