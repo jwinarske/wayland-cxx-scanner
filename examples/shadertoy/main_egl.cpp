@@ -149,8 +149,11 @@ class PointerSeat : public wayland::client::CWlSeat<PointerSeat> {
 // ══════════════════════════════════════════════════════════════════════════════
 class App {
  public:
-  App(std::vector<std::string> shaders, int cycle_seconds)
-      : shaders_(std::move(shaders)), cycle_seconds_(cycle_seconds) {}
+  App(std::vector<std::string> shaders, int cycle_seconds,
+      std::string media_dir)
+      : shaders_(std::move(shaders)),
+        cycle_seconds_(cycle_seconds),
+        media_dir_(std::move(media_dir)) {}
   ~App();
 
   int Run();
@@ -217,6 +220,7 @@ class App {
   shadertoy::Playlist playlist_;
   std::vector<std::string> shaders_;  // shader paths from the CLI
   int cycle_seconds_ = 0;             // auto-advance interval (0 = off)
+  std::string media_dir_;             // dir for Shadertoy media (textures/cubemaps)
 
   bool running_ = true;
   bool configured_ = false;
@@ -583,6 +587,9 @@ bool App::InitEgl() {
 }
 
 bool App::InitRenderer() {
+  if (!media_dir_.empty())
+    renderer_.SetMediaDir(media_dir_);
+
   // Build the playlist: CLI shaders (.json multi-pass / .frag single), else the
   // installed bundled set, else the built-in default.
   std::string err;
@@ -782,14 +789,20 @@ int main(int argc, char** argv) {
   //   --cycle N — auto-advance every N seconds (default 0 = off). With several
   //               shaders and no --cycle, use SPACE/→/← to switch.
   int cycle_seconds = 0;
+  std::string media_dir;
   std::vector<std::string> shaders;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--cycle" && i + 1 < argc) {
       cycle_seconds = std::atoi(argv[++i]);
+    } else if (arg == "--media" && i + 1 < argc) {
+      media_dir = argv[++i];
     } else if (arg == "--help" || arg == "-h") {
-      std::printf("usage: %s [--cycle N] [shader.json|shader.frag ...]\n",
-                  argv[0]);
+      std::printf(
+          "usage: %s [--cycle N] [--media DIR] [shader.json|shader.frag ...]\n"
+          "  --media DIR  resolve Shadertoy texture/cubemap src under DIR\n"
+          "               (also via $SHADERTOY_MEDIA_DIR)\n",
+          argv[0]);
       return EXIT_SUCCESS;
     } else {
       shaders.push_back(arg);
@@ -799,6 +812,6 @@ int main(int argc, char** argv) {
   if (shaders.empty() && cycle_seconds == 0)
     cycle_seconds = 12;
 
-  App app(std::move(shaders), cycle_seconds);
+  App app(std::move(shaders), cycle_seconds, std::move(media_dir));
   return app.Run();
 }
