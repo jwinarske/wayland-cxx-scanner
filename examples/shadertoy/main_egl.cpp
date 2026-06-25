@@ -149,8 +149,12 @@ class PointerSeat : public wayland::client::CWlSeat<PointerSeat> {
 // ══════════════════════════════════════════════════════════════════════════════
 class App {
  public:
-  App(std::vector<std::string> shaders, int cycle_seconds)
-      : shaders_(std::move(shaders)), cycle_seconds_(cycle_seconds) {}
+  App(std::vector<std::string> shaders,
+      int cycle_seconds,
+      std::string media_dir)
+      : shaders_(std::move(shaders)),
+        cycle_seconds_(cycle_seconds),
+        media_dir_(std::move(media_dir)) {}
   ~App();
 
   int Run();
@@ -217,6 +221,7 @@ class App {
   shadertoy::Playlist playlist_;
   std::vector<std::string> shaders_;  // shader paths from the CLI
   int cycle_seconds_ = 0;             // auto-advance interval (0 = off)
+  std::string media_dir_;  // dir for Shadertoy media (textures/cubemaps)
 
   bool running_ = true;
   bool configured_ = false;
@@ -224,7 +229,9 @@ class App {
   int height_ = 600;
 
   // Mouse/touch tracking (pixels, Shadertoy bottom-left origin).
-  float mouse_cur_x_ = 0.0f, mouse_cur_y_ = 0.0f;
+  float mouse_cur_x_ = 0.0f, mouse_cur_y_ = 0.0f;  // iMouse.xy (drag only)
+  float mouse_live_x_ = 0.0f,
+        mouse_live_y_ = 0.0f;  // live pointer (any motion)
   float mouse_click_x_ = 0.0f, mouse_click_y_ = 0.0f;
   bool mouse_down_ = false;
   int32_t touch_id_ = -1;     // active touch point id, -1 = none
@@ -250,7 +257,8 @@ class App {
 
   void RequestFrameCallback() noexcept;
   void RenderFrame() noexcept;
-  void SwitchProgram() noexcept;
+  bool ApplyCurrent() noexcept;    // SetProgram(current) + reset timing
+  bool Advance(int dir) noexcept;  // step in dir, skipping uncompilable shaders
   void Next() noexcept;
   void Prev() noexcept;
   void UpdateInputs() noexcept;
@@ -582,6 +590,9 @@ bool App::InitEgl() {
 }
 
 bool App::InitRenderer() {
+  if (!media_dir_.empty())
+    renderer_.SetMediaDir(media_dir_);
+
   // Build the playlist: CLI shaders (.json multi-pass / .frag single), else the
   // installed bundled set, else the built-in default.
   std::string err;
@@ -595,8 +606,9 @@ bool App::InitRenderer() {
     playlist_.Add(
         shadertoy::MakeSinglePass(shadertoy::DefaultImageShader(), "default"));
 
-  if (!renderer_.SetProgram(playlist_.current())) {
-    std::fprintf(stderr, "shadertoy-egl: shader failed to load\n");
+  // Apply the first shader; if it won't compile, skip forward to one that does.
+  if (!ApplyCurrent() && !Advance(+1)) {
+    std::fprintf(stderr, "shadertoy-egl: no shader could be compiled\n");
     return false;
   }
   std::printf(
@@ -609,28 +621,43 @@ bool App::InitRenderer() {
   return true;
 }
 
-void App::SwitchProgram() noexcept {
+bool App::ApplyCurrent() noexcept {
   if (!renderer_.SetProgram(playlist_.current()))
-    std::fprintf(stderr, "shadertoy-egl: failed to switch shader\n");
+    return false;  // compile/link failed; previous program left intact
   const auto now = Clock::now();
   start_ = now;  // restart iTime for the new shader
   last_frame_ = now;
   program_start_ = now;
   inputs_.frame = 0;
+  return true;
+}
+
+// Step through the playlist in @p dir (+1 next, -1 prev), skipping shaders that
+// fail to compile, until one applies.  Bounded by the playlist size, so an
+// all-uncompilable playlist terminates with the previous program still showing.
+bool App::Advance(int dir) noexcept {
+  for (size_t tried = 0, n = playlist_.size(); tried < n; ++tried) {
+    if (dir >= 0)
+      playlist_.next();
+    else
+      playlist_.prev();
+    if (ApplyCurrent())
+      return true;
+    std::fprintf(stderr, "shadertoy-egl: skipping \"%s\" (failed to compile)\n",
+                 playlist_.current().name.c_str());
+  }
+  std::fprintf(stderr, "shadertoy-egl: no compilable shader in playlist\n");
+  return false;
 }
 
 void App::Next() noexcept {
-  if (playlist_.size() > 1) {
-    playlist_.next();
-    SwitchProgram();
-  }
+  if (playlist_.size() > 1)
+    Advance(+1);
 }
 
 void App::Prev() noexcept {
-  if (playlist_.size() > 1) {
-    playlist_.prev();
-    SwitchProgram();
-  }
+  if (playlist_.size() > 1)
+    Advance(-1);
 }
 
 bool App::MainLoop() {
@@ -741,10 +768,16 @@ void App::OnKey(const uint32_t key, const uint32_t state) {
 }
 
 void App::OnPointerMotion(wl_fixed_t x, wl_fixed_t y) noexcept {
-  mouse_cur_x_ = static_cast<float>(wl_fixed_to_double(x));
+  mouse_live_x_ = static_cast<float>(wl_fixed_to_double(x));
   // Flip Y to Shadertoy's bottom-left origin.
-  mouse_cur_y_ =
+  mouse_live_y_ =
       static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+  // Shadertoy only moves iMouse.xy while a button is held (a drag); plain
+  // hovering leaves it where the last drag ended.
+  if (mouse_down_) {
+    mouse_cur_x_ = mouse_live_x_;
+    mouse_cur_y_ = mouse_live_y_;
+  }
 }
 
 void App::OnPointerButton(uint32_t button, uint32_t state) noexcept {
@@ -752,8 +785,10 @@ void App::OnPointerButton(uint32_t button, uint32_t state) noexcept {
     return;
   mouse_down_ = (state == WL_POINTER_BUTTON_STATE_PRESSED);
   if (mouse_down_) {
-    mouse_click_x_ = mouse_cur_x_;
-    mouse_click_y_ = mouse_cur_y_;
+    mouse_cur_x_ = mouse_live_x_;  // jump iMouse.xy to the click point
+    mouse_cur_y_ = mouse_live_y_;
+    mouse_click_x_ = mouse_live_x_;
+    mouse_click_y_ = mouse_live_y_;
   }
 }
 
@@ -765,14 +800,20 @@ int main(int argc, char** argv) {
   //   --cycle N — auto-advance every N seconds (default 0 = off). With several
   //               shaders and no --cycle, use SPACE/→/← to switch.
   int cycle_seconds = 0;
+  std::string media_dir;
   std::vector<std::string> shaders;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--cycle" && i + 1 < argc) {
       cycle_seconds = std::atoi(argv[++i]);
+    } else if (arg == "--media" && i + 1 < argc) {
+      media_dir = argv[++i];
     } else if (arg == "--help" || arg == "-h") {
-      std::printf("usage: %s [--cycle N] [shader.json|shader.frag ...]\n",
-                  argv[0]);
+      std::printf(
+          "usage: %s [--cycle N] [--media DIR] [shader.json|shader.frag ...]\n"
+          "  --media DIR  resolve Shadertoy texture/cubemap src under DIR\n"
+          "               (also via $SHADERTOY_MEDIA_DIR)\n",
+          argv[0]);
       return EXIT_SUCCESS;
     } else {
       shaders.push_back(arg);
@@ -782,6 +823,6 @@ int main(int argc, char** argv) {
   if (shaders.empty() && cycle_seconds == 0)
     cycle_seconds = 12;
 
-  App app(std::move(shaders), cycle_seconds);
+  App app(std::move(shaders), cycle_seconds, std::move(media_dir));
   return app.Run();
 }
