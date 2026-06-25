@@ -155,11 +155,13 @@ class App {
   App(std::vector<std::string> shaders,
       int cycle_seconds,
       std::string media_dir,
-      std::string blacklist_path)
+      std::string blacklist_path,
+      bool audio_enabled)
       : shaders_(std::move(shaders)),
         cycle_seconds_(cycle_seconds),
         media_dir_(std::move(media_dir)),
-        blacklist_path_(std::move(blacklist_path)) {}
+        blacklist_path_(std::move(blacklist_path)),
+        audio_enabled_(audio_enabled) {}
   ~App();
 
   int Run();
@@ -228,6 +230,7 @@ class App {
   int cycle_seconds_ = 0;             // auto-advance interval (0 = off)
   std::string media_dir_;       // dir for Shadertoy media (textures/cubemaps)
   std::string blacklist_path_;  // file of shader ids to skip (one per line)
+  bool audio_enabled_ = true;   // capture mic for audio (kAudio) channels
 
   bool running_ = true;
   bool configured_ = false;
@@ -599,6 +602,12 @@ bool App::InitRenderer() {
   if (!media_dir_.empty())
     renderer_.SetMediaDir(media_dir_);
 
+  // Audio (kAudio channels): the renderer captures the default microphone via
+  // the compiled audio back-end (PipeWire or ALSA) when one is available.
+  // --no-audio disables capture, so audio channels read a silent (black)
+  // texture. Must be set before the first program is loaded.
+  renderer_.SetAudioEnabled(audio_enabled_);
+
   // Optional blacklist of shader ids to skip (one id per line, '#' comments) —
   // e.g. produced by gen_blacklist.sh to keep GPU-hanging shaders out of a run.
   std::unordered_set<std::string> blacklist;
@@ -847,6 +856,7 @@ int main(int argc, char** argv) {
   int cycle_seconds = 0;
   std::string media_dir;
   std::string blacklist_path;
+  bool audio_enabled = true;
   std::vector<std::string> shaders;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -856,13 +866,21 @@ int main(int argc, char** argv) {
       media_dir = argv[++i];
     } else if (arg == "--blacklist" && i + 1 < argc) {
       blacklist_path = argv[++i];
+    } else if (arg == "--audio") {
+      audio_enabled = true;
+    } else if (arg == "--no-audio") {
+      audio_enabled = false;
     } else if (arg == "--help" || arg == "-h") {
       std::printf(
           "usage: %s [--cycle N] [--media DIR] [--blacklist FILE] "
-          "[shader.json|shader.frag ...]\n"
+          "[--audio|--no-audio] [shader.json|shader.frag ...]\n"
           "  --media DIR      resolve Shadertoy texture/cubemap src under DIR\n"
           "                   (also via $SHADERTOY_MEDIA_DIR)\n"
-          "  --blacklist FILE skip shader ids listed in FILE (one per line)\n",
+          "  --blacklist FILE skip shader ids listed in FILE (one per line)\n"
+          "  --audio          capture the microphone for audio channels "
+          "(default)\n"
+          "  --no-audio       disable mic capture (audio channels read "
+          "silence)\n",
           argv[0]);
       return EXIT_SUCCESS;
     } else {
@@ -874,6 +892,6 @@ int main(int argc, char** argv) {
     cycle_seconds = 12;
 
   App app(std::move(shaders), cycle_seconds, std::move(media_dir),
-          std::move(blacklist_path));
+          std::move(blacklist_path), audio_enabled);
   return app.Run();
 }
