@@ -5,6 +5,11 @@ _build/
 _doxygen/
 docs/_build/
 
+# emb cross-build workspace (toolchain/sysroot cache, downloads) + lock
+.config/
+.cache/
+emb.lock
+
 # Meson private
 .mesonpy/
 meson-private/
@@ -14,6 +19,7 @@ subprojects/packagecache/
 subprojects/pugixml-*/
 subprojects/googletest-*/
 subprojects/gtest-*/
+subprojects/shadertoy-cxx/
 subprojects/.wraplock
 
 # Editor / IDE artifacts

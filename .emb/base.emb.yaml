@@ -1,0 +1,32 @@
+# Shared base for the wayland-cxx-scanner board manifests in this .emb/ dir.
+#
+# emb (emb_cli) auto-discovers `.emb/` when you run `emb cross` from the project
+# root and deep-merges each <board>.emb.yaml over this base. Build from the repo
+# root (the directory that holds meson.build), which is what emb uses as the
+# Meson source:
+#
+#   emb cross . --list-targets
+#   emb cross . --target rpi5-trixie --build        # cross-build the examples
+#   emb cross . --target rpi5-trixie --build --deb  # ... and package a .deb
+#   emb cross . --build                             # native host build
+#
+# `base.emb.yaml` is the reserved base filename and is never itself a target.
+id: wayland-cxx-scanner
+type: app
+supported_archs: [arm64, x86_64]
+supported_host_types: [fedora, ubuntu]
+
+cross:
+  # `provider` is required only to parse this block; it is ignored for the
+  # native (`--target local`, the default) build, which uses the host toolchain.
+  # Every board target overrides it with its own provider.
+  provider: arm-gnu
+  # This project builds with Meson; the cross target generator defaults to
+  # cmake, so select meson explicitly (otherwise emb looks for CMakeLists.txt).
+  generator: meson
+  # One Meson build. Backend map entries become `-D<key>=<value>` project
+  # options. Examples are off by default (meson.options), so enable them — that
+  # is what builds shadertoy_egl (and the other example clients).
+  backends:
+    egl:
+      examples: 'true'
