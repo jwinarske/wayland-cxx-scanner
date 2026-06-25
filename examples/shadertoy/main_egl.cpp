@@ -61,7 +61,10 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -151,10 +154,12 @@ class App {
  public:
   App(std::vector<std::string> shaders,
       int cycle_seconds,
-      std::string media_dir)
+      std::string media_dir,
+      std::string blacklist_path)
       : shaders_(std::move(shaders)),
         cycle_seconds_(cycle_seconds),
-        media_dir_(std::move(media_dir)) {}
+        media_dir_(std::move(media_dir)),
+        blacklist_path_(std::move(blacklist_path)) {}
   ~App();
 
   int Run();
@@ -221,7 +226,8 @@ class App {
   shadertoy::Playlist playlist_;
   std::vector<std::string> shaders_;  // shader paths from the CLI
   int cycle_seconds_ = 0;             // auto-advance interval (0 = off)
-  std::string media_dir_;  // dir for Shadertoy media (textures/cubemaps)
+  std::string media_dir_;       // dir for Shadertoy media (textures/cubemaps)
+  std::string blacklist_path_;  // file of shader ids to skip (one per line)
 
   bool running_ = true;
   bool configured_ = false;
@@ -593,15 +599,54 @@ bool App::InitRenderer() {
   if (!media_dir_.empty())
     renderer_.SetMediaDir(media_dir_);
 
+  // Optional blacklist of shader ids to skip (one id per line, '#' comments) —
+  // e.g. produced by gen_blacklist.sh to keep GPU-hanging shaders out of a run.
+  std::unordered_set<std::string> blacklist;
+  if (!blacklist_path_.empty()) {
+    std::ifstream bf(blacklist_path_);
+    if (!bf)
+      std::fprintf(stderr, "shadertoy-egl: cannot open blacklist %s\n",
+                   blacklist_path_.c_str());
+    for (std::string line; std::getline(bf, line);) {
+      const auto a = line.find_first_not_of(" \t\r\n");
+      if (a == std::string::npos || line[a] == '#')
+        continue;
+      const auto b = line.find_last_not_of(" \t\r\n");
+      blacklist.insert(line.substr(a, b - a + 1));
+    }
+  }
+  const auto blacklisted = [&blacklist](const std::string& path) {
+    return blacklist.count(std::filesystem::path(path).stem().string()) != 0;
+  };
+
   // Build the playlist: CLI shaders (.json multi-pass / .frag single), else the
-  // installed bundled set, else the built-in default.
+  // installed bundled set, else the built-in default.  Blacklisted ids skipped.
   std::string err;
   for (const std::string& s : shaders_) {
+    if (blacklisted(s))
+      continue;
     if (!playlist_.AddFile(s, &err))
       std::fprintf(stderr, "shadertoy-egl: %s: %s\n", s.c_str(), err.c_str());
   }
-  if (playlist_.empty())
-    playlist_.AddDirectory(shadertoy::DefaultShaderDir());
+  if (playlist_.empty()) {
+    const std::string dir = shadertoy::DefaultShaderDir();
+    if (blacklist.empty()) {
+      playlist_.AddDirectory(dir);
+    } else {
+      namespace fs = std::filesystem;
+      std::error_code ec;
+      std::vector<std::string> files;
+      for (const auto& e : fs::directory_iterator(dir, ec)) {
+        const std::string ext = e.path().extension().string();
+        if ((ext == ".json" || ext == ".frag" || ext == ".glsl") &&
+            !blacklisted(e.path().string()))
+          files.push_back(e.path().string());
+      }
+      std::sort(files.begin(), files.end());
+      for (const std::string& f : files)
+        playlist_.AddFile(f, nullptr);
+    }
+  }
   if (playlist_.empty())
     playlist_.Add(
         shadertoy::MakeSinglePass(shadertoy::DefaultImageShader(), "default"));
@@ -801,6 +846,7 @@ int main(int argc, char** argv) {
   //               shaders and no --cycle, use SPACE/→/← to switch.
   int cycle_seconds = 0;
   std::string media_dir;
+  std::string blacklist_path;
   std::vector<std::string> shaders;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
@@ -808,11 +854,15 @@ int main(int argc, char** argv) {
       cycle_seconds = std::atoi(argv[++i]);
     } else if (arg == "--media" && i + 1 < argc) {
       media_dir = argv[++i];
+    } else if (arg == "--blacklist" && i + 1 < argc) {
+      blacklist_path = argv[++i];
     } else if (arg == "--help" || arg == "-h") {
       std::printf(
-          "usage: %s [--cycle N] [--media DIR] [shader.json|shader.frag ...]\n"
-          "  --media DIR  resolve Shadertoy texture/cubemap src under DIR\n"
-          "               (also via $SHADERTOY_MEDIA_DIR)\n",
+          "usage: %s [--cycle N] [--media DIR] [--blacklist FILE] "
+          "[shader.json|shader.frag ...]\n"
+          "  --media DIR      resolve Shadertoy texture/cubemap src under DIR\n"
+          "                   (also via $SHADERTOY_MEDIA_DIR)\n"
+          "  --blacklist FILE skip shader ids listed in FILE (one per line)\n",
           argv[0]);
       return EXIT_SUCCESS;
     } else {
@@ -823,6 +873,7 @@ int main(int argc, char** argv) {
   if (shaders.empty() && cycle_seconds == 0)
     cycle_seconds = 12;
 
-  App app(std::move(shaders), cycle_seconds, std::move(media_dir));
+  App app(std::move(shaders), cycle_seconds, std::move(media_dir),
+          std::move(blacklist_path));
   return app.Run();
 }
