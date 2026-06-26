@@ -14,6 +14,9 @@ subdir('presentation-shm')
 subdir('agl-presentation-shm')
 # ivi-shell uses subdir_done() internally if wayland-scanner/xkbcommon absent.
 subdir('ivi-presentation-shm')
+# simple-shell-egl uses subdir_done() internally if EGL/GLES/wayland-egl/
+# wayland-scanner/xkbcommon deps are absent.
+subdir('simple-shell-egl')
 # key-input uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.
 subdir('key-input')
 # text-input uses subdir_done() internally unless ime_backend=text-input-v1 and

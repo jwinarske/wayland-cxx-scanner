@@ -20,6 +20,7 @@ set(XDG_DECORATION_XML     "${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-decoration/xdg
 set(LINUX_DMABUF_XML       "${WAYLAND_PROTOCOLS_DIR}/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml")
 set(AGL_SHELL_XML          "${PROJECT_SOURCE_DIR}/protocols/agl-shell.xml")
 set(IVI_APPLICATION_XML    "${PROJECT_SOURCE_DIR}/protocols/ivi-application.xml")
+set(SIMPLE_SHELL_XML       "${PROJECT_SOURCE_DIR}/protocols/simpleshell.xml")
 
 # Optional dependency imported targets (PkgConfig::<name> when present).
 foreach(_m wayland-client wayland-server xkbcommon egl glesv2 wayland-egl
@@ -127,6 +128,16 @@ if (WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
     target_link_libraries(ivi_shell PRIVATE PkgConfig::wayland_client PkgConfig::xkbcommon)
     wlcxx_gen(ivi_shell ivi-presentation-shm wayland_client.hpp         ${WAYLAND_XML})
     wlcxx_gen(ivi_shell ivi-presentation-shm ivi_application_client.hpp ${IVI_APPLICATION_XML})
+endif ()
+
+# ── simple-shell-egl ─────────────────────────────────────────────────────────
+if (TARGET PkgConfig::egl AND TARGET PkgConfig::glesv2 AND TARGET PkgConfig::wayland_egl
+    AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
+    wlcxx_example(simple_shell_egl simple-shell-egl/main.cpp)
+    target_link_libraries(simple_shell_egl PRIVATE PkgConfig::wayland_client
+        PkgConfig::egl PkgConfig::glesv2 PkgConfig::wayland_egl PkgConfig::xkbcommon)
+    wlcxx_gen(simple_shell_egl simple-shell-egl wayland_client.hpp      ${WAYLAND_XML})
+    wlcxx_gen(simple_shell_egl simple-shell-egl simple_shell_client.hpp ${SIMPLE_SHELL_XML})
 endif ()
 
 # ── key-input ────────────────────────────────────────────────────────────────

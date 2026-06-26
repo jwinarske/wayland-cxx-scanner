@@ -219,6 +219,7 @@ wayland-cxx-scanner/
 | `xdg_decoration.hpp` | XDG decoration protocol support                                                   |
 | `linux_dmabuf.hpp`   | Linux DMA-BUF protocol support                                                    |
 | `agl_shell.hpp`      | AGL (Automotive Grade Linux) shell protocol support                               |
+| `simple_shell.hpp`   | RDK / Westeros `wl_simple_shell` protocol support                                 |
 | `csd_plugin.hpp`     | Client-side decoration plugin interface                                           |
 | `csd_fallback.hpp`   | Fallback CSD implementation                                                       |
 | `csd_cairo.hpp`      | Cairo-based CSD implementation                                                    |
@@ -241,6 +242,7 @@ passed to `meson setup` (requires `wayland-client` and `wayland-server`).
 | [sdl3-presentation-shm](examples/sdl3-presentation-shm)       | SDL3 window with `wp_presentation` frame-timing  | SDL3, wayland-protocols      |
 | [agl-presentation-shm](examples/agl-presentation-shm)         | AGL compositor integration                       | wayland-protocols            |
 | [ivi-presentation-shm](examples/ivi-presentation-shm)         | IVI shell integration                            | wayland-protocols            |
+| [simple-shell-egl](examples/simple-shell-egl)                 | RDK/Westeros `wl_simple_shell` layout via EGL    | EGL, GLESv2                  |
 | [xdg-csd](examples/xdg-csd)                                   | Client-side decorations (Cairo / GTK back-ends)  | cairo or gtk+-3.0            |
 | [xdg-simple-dmabuf-vulkan](examples/xdg-simple-dmabuf-vulkan) | Vulkan rendering with DMA-BUF export             | Vulkan                       |
 
