@@ -1,0 +1,27 @@
+@PACKAGE_INIT@
+
+# wayland-cxx-scanner package config — yields the same wayland_cxx_generate()
+# API as the add_subdirectory consumption path (see docs/cmake_plan.md §4/§5).
+
+include("${CMAKE_CURRENT_LIST_DIR}/wayland-cxx-scanner-targets.cmake" OPTIONAL)
+include("${CMAKE_CURRENT_LIST_DIR}/WaylandCxxScanner.cmake")
+
+# Resolve the build-time codegen tool. The codegen ordering target is always
+# empty for an installed package (the scanner is a prebuilt binary, not an
+# in-build target), so generation orders against the XML only.
+set(WAYLAND_CXX_SCANNER_CODEGEN_TARGET "" CACHE INTERNAL "codegen ordering target")
+
+if (NOT WAYLAND_CXX_SCANNER_EXECUTABLE)
+    if (CMAKE_CROSSCOMPILING)
+        # nativesdk / cross consumer: the installed exe (if any) is target-arch
+        # and cannot run on the build host. Prefer a host scanner on PATH, or an
+        # explicit -DWAYLAND_CXX_SCANNER_EXECUTABLE=/path override.
+        find_program(WAYLAND_CXX_SCANNER_EXECUTABLE NAMES wayland-cxx-scanner)
+    elseif (TARGET wayland-cxx::wayland-cxx-scanner)
+        # Native install: use the host binary shipped with this package.
+        set(WAYLAND_CXX_SCANNER_EXECUTABLE
+            "$<TARGET_FILE:wayland-cxx::wayland-cxx-scanner>")
+    endif ()
+endif ()
+
+check_required_components(wayland-cxx-scanner)

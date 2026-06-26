@@ -7,7 +7,7 @@
 // (the build-selected backend, e.g. text-input-v1).  It activates text-input on
 // the window's surface and renders the committed and preedit strings the IME
 // sends back.  This is the reference consumer of ITextInputReceiver and the
-// closest mirror of an application such as ivi-homescreen.
+// closest mirror of a production Wayland shell application.
 //
 // Rendering uses wl_shm (XRGB8888) with an inline 8×8 bitmap pixel font; no
 // EGL/Mesa/GPU dependency.  App structure mirrors the other shm examples:

@@ -1,0 +1,296 @@
+name: CMake
+
+# CMake build, maintained in PARALLEL with the Meson CI (ci.yml) — not a
+# replacement. Proves the native build + the §4 cross host-tool story.
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - "copilot/**"
+  pull_request:
+    branches:
+      - main
+      - master
+
+# Deny all permissions at the workflow level; each job grants only what it needs.
+permissions: {}
+
+jobs:
+  native:
+    name: CMake native (${{ matrix.compiler }}, C++${{ matrix.std }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        # C++17 is the project floor; C++20/C++23 must keep building too.
+        std: [17, 20, 23]
+        include:
+          - compiler: gcc
+            CC: gcc
+            CXX: g++
+          - compiler: clang
+            CC: clang-19
+            CXX: clang++-19
+
+    env:
+      CC: ${{ matrix.CC }}
+      CXX: ${{ matrix.CXX }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            cmake ninja-build \
+            gcc g++ clang-19 \
+            libwayland-dev \
+            wayland-protocols \
+            libpugixml-dev \
+            libgtest-dev libgmock-dev \
+            libxkbcommon-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=${{ matrix.std }} \
+            -DWAYLAND_CXX_SCANNER_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-test-results-${{ matrix.compiler }}-cxx${{ matrix.std }}
+          path: build/Testing/
+
+  examples:
+    name: CMake examples (host build)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Example dependency surface (EGL/GLES/Vulkan/DRM/GTK/Cairo/xkbcommon).
+      # SDL3 and shadertoy-cxx are not in noble — those examples self-skip.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            cmake ninja-build g++ \
+            libwayland-dev wayland-protocols libpugixml-dev \
+            libxkbcommon-dev \
+            libegl-dev libgles-dev \
+            libvulkan-dev libdrm-dev \
+            libgtk-3-dev libcairo2-dev libpango1.0-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON
+
+      # Examples need a live compositor to RUN; CI only proves they build (the
+      # minimal client/server roundtrip example also runs as a CTest test).
+      - name: Build examples
+        run: cmake --build build
+
+      - name: Run the roundtrip example test
+        run: ctest --test-dir build --output-on-failure
+
+  ime-backends:
+    name: CMake IME backend (${{ matrix.ime_backend }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        ime_backend: [none, text-input-v1, text-input-v3]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            cmake ninja-build g++ \
+            libwayland-dev wayland-protocols libpugixml-dev \
+            libgtest-dev libgmock-dev libxkbcommon-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DWAYLAND_CXX_SCANNER_BUILD_TESTS=ON \
+            -DWAYLAND_CXX_IME_BACKEND=${{ matrix.ime_backend }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  fedora:
+    name: CMake Fedora (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        include:
+          - compiler: gcc
+            CC: gcc
+            CXX: g++
+          - compiler: clang
+            CC: clang
+            CXX: clang++
+
+    container:
+      image: fedora:latest
+
+    env:
+      CC: ${{ matrix.CC }}
+      CXX: ${{ matrix.CXX }}
+
+    steps:
+      # Fedora ships CMake config packages for pugixml AND GoogleTest, so this
+      # job exercises the find_package(CONFIG) resolution path (Ubuntu jobs
+      # cover the pkg-config path).
+      - name: Install dependencies
+        run: |
+          dnf install -y \
+            git \
+            cmake ninja-build \
+            gcc gcc-c++ clang \
+            wayland-devel wayland-protocols-devel \
+            pugixml-devel \
+            gtest-devel gmock-devel \
+            libxkbcommon-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DWAYLAND_CXX_SCANNER_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  cross-aarch64:
+    name: CMake cross-compile (aarch64, examples vs host scanner)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host build deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            cmake ninja-build g++ \
+            g++-aarch64-linux-gnu \
+            libpugixml-dev \
+            pkg-config
+
+      - name: Enable arm64 multiarch + install target -dev libs
+        run: |
+          set -eux
+          sudo dpkg --add-architecture arm64
+          # Restrict the default (amd64) deb822 sources so apt does not try to
+          # fetch arm64 from the amd64 archive, then add the arm64 ports source.
+          # printf (not a heredoc) avoids YAML block-scalar indentation mangling.
+          sudo sed -i 's/^Components: \(.*\)$/Architectures: amd64\nComponents: \1/' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: http://ports.ubuntu.com/ubuntu-ports/' \
+            'Suites: noble noble-updates noble-backports' \
+            'Components: main universe' \
+            'Architectures: arm64' \
+            'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+            | sudo tee /etc/apt/sources.list.d/arm64-ports.sources >/dev/null
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libwayland-dev:arm64 \
+            libxkbcommon-dev:arm64 \
+            wayland-protocols
+
+      - name: 'Negative gate: examples ON with NO host scanner must FAIL at configure (§9.3)'
+        run: |
+          if cmake -S . -B build-neg -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+              -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON ; then
+            echo "::error::cross configure unexpectedly succeeded without a host scanner"
+            exit 1
+          fi
+          echo "OK: configure failed fast with no scanner on PATH"
+
+      - name: Build + install the native (host) scanner, put on PATH
+        run: |
+          cmake -S . -B build-native -G Ninja \
+            -DWAYLAND_CXX_SCANNER_TOOL_ONLY=ON \
+            -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+          cmake --build build-native
+          cmake --install build-native
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: 'Positive: cross-configure examples against the host scanner'
+        run: |
+          command -v wayland-cxx-scanner
+          cmake -S . -B build-cross -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake \
+            -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON
+
+      - name: Cross-build examples (target arch — compiled, not run)
+        run: cmake --build build-cross
+
+      - name: Assert the scanner was never built target-side
+        run: |
+          if [ -e build-cross/src/wayland-cxx-scanner ]; then
+            echo "::error::a target-arch scanner was built and must not drive codegen"
+            exit 1
+          fi
+          echo "OK: codegen used the host scanner; no target-arch scanner built"
+
+  dual-build-sync:
+    name: Dual-build sync gate (Meson <-> CMake)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            meson ninja-build cmake g++ \
+            libwayland-dev wayland-protocols libpugixml-dev pkg-config
+
+      # Asserts both builds install the same headers + wayland-cxx.pc, both
+      # install the exe, and map every ime_backend to the same compile define.
+      - name: Run dual-build sync gate
+        run: ./scripts/dual-build-sync.sh

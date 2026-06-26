@@ -4,7 +4,7 @@
 // ITextInputReceiver — the application end of the text-input protocol family:
 // receive committed/preedit text from the compositor's IME and drive the
 // per-version request/commit bookkeeping behind a single version-agnostic
-// interface. This is the role a client such as ivi-homescreen needs.
+// interface. This is the role a downstream shell application needs.
 //
 // Header-only contract only; a concrete backend (text-input-v1 / -v3) selected
 // at build time implements ITextInputReceiver. See <wl/ime/backend.hpp>.

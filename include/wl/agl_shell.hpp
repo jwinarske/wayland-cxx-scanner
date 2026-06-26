@@ -48,10 +48,8 @@ extern "C" {
 //
 // agl_shell is not part of wayland-protocols and has no pre-built system
 // symbol (unlike wl_compositor or xdg_wm_base).  We define the wl_interface
-// inline here to match the upstream protocol from
-// toyota-connected/ivi-homescreen v1.0:
-//   https://github.com/toyota-connected/ivi-homescreen/blob/v1.0/
-//           third_party/agl/protocol/agl-shell.xml
+// inline here to match the upstream agl-shell protocol (agl-compositor,
+// protocol/agl-shell.xml), vendored in this repo as protocols/agl-shell.xml.
 //
 // Protocol layout (version 4):
 //   Requests (6): ready(0), set_background(1), set_panel(2), activate_app(3),

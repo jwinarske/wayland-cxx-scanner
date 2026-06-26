@@ -1,0 +1,7 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: wayland-cxx
+Description: WTL-patterned C++17 Wayland framework headers
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}

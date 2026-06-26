@@ -4,7 +4,7 @@
 // agl-compositor — C++23 AGL shell background client example
 //
 // Demonstrates the correct pattern for an AGL compositor client as used
-// by toyota-connected/ivi-homescreen:
+// by a production AGL shell client:
 //
 //   1. Bind both xdg_wm_base and agl_shell from the registry.
 //   2. Wait for agl_shell.bound_ok / bound_fail (v2+).
@@ -625,8 +625,8 @@ bool App::BindGlobals() {
 // ── SetupShell
 // ────────────────────────────────────────────────────────────────
 //
-// Implements the canonical xdg + agl_shell surface setup sequence from
-// toyota-connected/ivi-homescreen (shell/wayland/window.cc).
+// Implements the canonical xdg + agl_shell surface setup sequence used by a
+// production AGL shell client.
 //
 // Critical ordering (crash root-cause if violated):
 //  1. wl_surface + xdg_surface + xdg_toplevel creation
@@ -683,7 +683,7 @@ bool App::SetupShell() {
   surface_.Get()->Commit();
 
   // 4. Register this surface as the background for the first output.
-  //    Called AFTER the commit, exactly as in ivi-homescreen window.cc.
+  //    Called AFTER the commit, exactly as a production AGL shell client does.
   agl_shell_.Get()->SetBackground(surface_.Get()->GetProxy(),
                                   output_.Get()->GetProxy());
   std::printf("agl-compositor: background surface registered with agl_shell\n");
@@ -703,8 +703,8 @@ bool App::SetupShell() {
               height_);
 
   // 6. Signal the compositor that the shell client is fully initialized.
-  //    Called after configure is acknowledged, matching the ivi-homescreen flow
-  //    where AglShellDoReady() is called after all windows finish their
+  //    Called after configure is acknowledged, matching the typical AGL shell
+  //    flow where the ready signal is sent after all windows finish their
   //    `configure` wait.
   agl_shell_.Get()->Ready();
   std::printf("agl-compositor: agl_shell.ready sent\n");
