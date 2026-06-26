@@ -2,8 +2,10 @@
 option('tests',    type: 'boolean', value: false, description: 'Build and run unit/integration tests')
 option('examples', type: 'boolean', value: false, description: 'Build example applications')
 option('docs',     type: 'boolean', value: false, description: 'Generate Doxygen HTML documentation')
+# Parity with CMake's WAYLAND_CXX_SCANNER_INSTALL_TOOL — gate installing the exe.
+option('install_tool', type: 'boolean', value: true, description: 'Install the scanner executable')
 option('ime_backend', type: 'combo',
     choices: ['none', 'text-input-v1', 'text-input-v3',
               'input-method-v1', 'input-method-v2', 'virtual-keyboard-v1'],
     value: 'text-input-v1',
-    description: 'IME protocol backend to generate, wrap, build and test (exactly one). Implemented: none, text-input-v1.')
+    description: 'IME protocol backend to generate, wrap, build and test (exactly one). Implemented: none, text-input-v1, text-input-v3.')

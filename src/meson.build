@@ -28,5 +28,5 @@ scanner_exe = executable(
     'wayland-cxx-scanner',
     'main.cpp',
     dependencies: [scanner_lib_dep],
-    install: true,
+    install: get_option('install_tool'),
 )
