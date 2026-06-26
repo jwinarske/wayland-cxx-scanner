@@ -1,0 +1,60 @@
+# wayland-cxx-scanner on Raspberry Pi (PiOS aarch64) — the project layer.
+#
+# Hardware/OS facts (toolchain, sysroot image, partition, cpu tuning, base
+# DRM/input/EGL/Wayland stack) come from emb's shipped board library
+# (boards/raspberry-pi.emb.yaml); each target `extends` a board and overlays
+# only what this project adds on top:
+#
+#   emb cross raspberry-pi.emb.yaml --list-targets
+#   emb cross raspberry-pi.emb.yaml --target rpi5-trixie --build --deb
+#
+# The example clients (shadertoy_egl etc.) link wayland-client/-egl, EGL,
+# GLESv2 and xkbcommon — all already in the board's base sysroot stack, so no
+# extra dev_packages are needed here. The shadertoy-cxx renderer is pulled in as
+# a Meson subproject (subprojects/shadertoy-cxx) and cross-built with the app.
+#
+# Build-time codegen note: the meson build runs the freshly-built scanner
+# (custom_target) to turn protocol XML into headers. emb's generated meson cross
+# file sets a qemu-user `exe_wrapper`, so that target binary runs on the build
+# host during the cross build.
+id: wayland-cxx-scanner
+type: app
+supported_archs: [arm64]
+supported_host_types: [ubuntu, fedora]
+
+build:
+  app_path: .
+  archs: [arm64]
+  modes: [release]
+  output: bundles
+
+cross:
+  package:
+    name: wayland-cxx-scanner
+    version: 0.1.0
+    maintainer: "Joel Winarske <joel.winarske@gmail.com>"
+    description: "WTL-patterned C++17 Wayland framework + example clients, cross-built by emb"
+    section: utils
+    bin: examples/shadertoy/shadertoy_egl   # relative to the meson build dir
+    install_dir: /usr/bin
+
+  targets:
+    # -- Raspberry Pi 5 (Cortex-A76) — PiOS trixie ------------------------
+    # libasound2-dev pulls in the ALSA mic-capture back-end (works headless,
+    # no PipeWire daemon needed) so audio (kAudio) channels get live input.
+    rpi5-trixie:
+      extends: rpi5-trixie
+      sysroot:
+        dev_packages:
+          - libasound2-dev
+    rpi5-bookworm:
+      extends: rpi5-bookworm
+      sysroot:
+        dev_packages:
+          - libasound2-dev
+
+    # -- Raspberry Pi 4 (Cortex-A72) --------------------------------------
+    rpi4-trixie:
+      extends: rpi4-trixie
+    rpi4-bookworm:
+      extends: rpi4-bookworm
