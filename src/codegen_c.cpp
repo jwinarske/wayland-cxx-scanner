@@ -4,8 +4,6 @@
 
 #include "name_transform.hpp"
 
-#include <algorithm>
-#include <cctype>
 #include <sstream>
 
 namespace wl::scanner {
@@ -13,14 +11,6 @@ namespace wl::scanner {
 using namespace ir;
 
 namespace {
-
-std::string to_upper(std::string_view s) {
-  std::string out(s);
-  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-    return static_cast<char>(std::toupper(c));
-  });
-  return out;
-}
 
 void emit_enum(std::ostringstream& os, const Interface& iface, const Enum& en) {
   // e.g.  WL_FOO_ERROR_ROLE = 0,

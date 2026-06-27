@@ -82,6 +82,29 @@ TEST(CodegenClientCxx, SinceVersionReflectsXmlAttribute) {
   EXPECT_THAT(out, HasSubstr("BoundFail = 2"));
 }
 
+TEST(CodegenClientCxx, EmitsSinceVersionMacros) {
+  const auto proto = parse_protocol_from_string(R"(
+<protocol name="agl">
+  <interface name="agl_shell" version="3">
+    <request name="open_window"/>
+    <request name="set_ready" since="2"/>
+    <event name="bound_ok"/>
+    <event name="bound_fail" since="2"/>
+  </interface>
+</protocol>)");
+  const auto out = generate_client_cxx_header(proto);
+  // Preprocessor since-version macros (mirrors wayland-scanner): the interface
+  // version plus one macro per request/event, value from the XML since
+  // attribute (defaulting to 1). These let consumers gate version-dependent
+  // handlers/requests with the preprocessor, which the constexpr Since
+  // constants cannot.
+  EXPECT_THAT(out, HasSubstr("#define AGL_SHELL_INTERFACE_VERSION 3"));
+  EXPECT_THAT(out, HasSubstr("#define AGL_SHELL_OPEN_WINDOW_SINCE_VERSION 1"));
+  EXPECT_THAT(out, HasSubstr("#define AGL_SHELL_SET_READY_SINCE_VERSION 2"));
+  EXPECT_THAT(out, HasSubstr("#define AGL_SHELL_BOUND_OK_SINCE_VERSION 1"));
+  EXPECT_THAT(out, HasSubstr("#define AGL_SHELL_BOUND_FAIL_SINCE_VERSION 2"));
+}
+
 TEST(CodegenClientCxx, ContainsCRTPClass) {
   const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("template <class Derived>"));

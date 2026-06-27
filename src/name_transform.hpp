@@ -6,6 +6,10 @@
 
 namespace wl::scanner {
 
+/// Uppercase an ASCII identifier, for preprocessor macro names.
+/// Example: "xdg_toplevel" → "XDG_TOPLEVEL"
+[[nodiscard]] std::string to_upper(std::string_view s);
+
 /// Convert a snake_case identifier to PascalCase.
 /// Example: "xdg_wm_base" → "XdgWmBase"
 [[nodiscard]] std::string snake_to_pascal(std::string_view s);

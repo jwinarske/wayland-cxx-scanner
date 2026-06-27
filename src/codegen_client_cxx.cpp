@@ -19,6 +19,25 @@ uint32_t msg_since(const Message& m) {
   return m.since.empty() ? 1u : static_cast<uint32_t>(std::stoul(m.since));
 }
 
+/// Emit the preprocessor since-version macros for one interface (mirrors the C
+/// output in codegen_c.cpp): IFACE_INTERFACE_VERSION and, per request/event,
+/// IFACE_<MSG>_SINCE_VERSION. These let a consumer gate version-dependent code
+/// with the preprocessor — `#ifdef <IFACE>_<EVENT>_SINCE_VERSION` to override
+/// an event only on builds whose XML carries it, and `<bound> >=
+/// <...>_SINCE_VERSION` to gate a version-added request — which the constexpr
+/// Since constants below cannot do.
+void emit_since_versions(std::ostringstream& os, const Interface& iface) {
+  const std::string prefix = to_upper(iface.name) + "_";
+  os << "#define " << prefix << "INTERFACE_VERSION " << iface.version << "\n";
+  for (const auto& r : iface.requests)
+    os << "#define " << prefix << to_upper(r.name) << "_SINCE_VERSION "
+       << msg_since(r) << "\n";
+  for (const auto& e : iface.events)
+    os << "#define " << prefix << to_upper(e.name) << "_SINCE_VERSION "
+       << msg_since(e) << "\n";
+  os << "\n";
+}
+
 /// Map ArgType to a C++ parameter type string.
 /// M3: every ArgType value is explicitly listed; the default branch is
 /// unreachable (asserts in debug, returns void* in release as a last resort
@@ -282,6 +301,11 @@ std::string generate_client_cxx_header(const Protocol& proto,
   if (std >= CppStd::Cpp20)
     os << "#include <type_traits>\n";
   os << "\n";
+
+  // Since-version macros at file scope (before the namespace) so consumers can
+  // gate version-dependent handlers/requests with the preprocessor.
+  for (const auto& iface : proto.interfaces)
+    emit_since_versions(os, iface);
 
   std::string ns = proto.name + "::client";
   os << "namespace " << ns << " {\n\n";
