@@ -21,6 +21,8 @@ subdir('key-input')
 subdir('text-input')
 # xdg-csd uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.
 subdir('xdg-csd')
+# xdg-ssd uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.
+subdir('xdg-ssd')
 # xdg-simple-dmabuf-vulkan uses subdir_done() internally if
 # vulkan/libdrm/wayland-protocols/xkbcommon deps are absent.
 subdir('xdg-simple-dmabuf-vulkan')

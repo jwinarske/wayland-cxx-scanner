@@ -182,6 +182,15 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     wlcxx_gen(xdg_csd xdg-csd xdg_decoration_unstable_v1_client.hpp ${XDG_DECORATION_XML})
 endif ()
 
+# ── xdg-ssd — server-side decorations; compositor draws the frame (Weston) ────
+if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
+    wlcxx_example(xdg_ssd xdg-ssd/main.cpp)
+    target_link_libraries(xdg_ssd PRIVATE PkgConfig::wayland_client PkgConfig::xkbcommon)
+    wlcxx_gen(xdg_ssd xdg-ssd wayland_client.hpp                     ${WAYLAND_XML})
+    wlcxx_gen(xdg_ssd xdg-ssd xdg_shell_client.hpp                  ${XDG_SHELL_XML})
+    wlcxx_gen(xdg_ssd xdg-ssd xdg_decoration_unstable_v1_client.hpp ${XDG_DECORATION_XML})
+endif ()
+
 # ── xdg-simple-dmabuf-vulkan ─────────────────────────────────────────────────
 if (TARGET PkgConfig::vulkan AND TARGET PkgConfig::libdrm
     AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
