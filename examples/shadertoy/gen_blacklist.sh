@@ -44,9 +44,9 @@
 #       --install      install+start a systemd user service (auto-resumes)
 #       --watchdog     with --install: add a root reboot-on-hard-hang service
 #       --stall N      watchdog stall threshold in seconds (default: 90)
-#       --render-check N  sample on-screen rendering every N ok shaders to catch
-#                      a frozen display (loop alive but GPU stuck); 0 disables.
-#                      Needs grim + cage; flags the watchdog to reboot (default 30)
+#       --reboot-every N  preventive reboot every N shaders to bound an
+#                      undetectable display-freeze (loop alive, screen dead);
+#                      0 disables. Requires --watchdog to do the reboot (default 200)
 #       --uninstall    stop and remove the service(s)
 #   -h, --help         this help
 
@@ -67,7 +67,7 @@ if [ "${1:-}" = "__watchdog" ]; then
   user="${4:-}"                    # user whose scan service this guards
   scan_unit="shadertoy-blacklist.service"
   beat="${cur%.cur}.beat"          # heartbeat the scan touches every iteration
-  dead="${cur%.cur}.render-dead"   # sentinel the scan drops when rendering froze
+  dead="${cur%.cur}.render-dead"   # sentinel the scan drops to request a reboot
   wd_start=$(date +%s)             # only trust a heartbeat refreshed after this
   { echo 1 > /proc/sys/kernel/sysrq; } 2>/dev/null || true   # allow sysrq reboot
   wd_reboot() {
@@ -78,7 +78,7 @@ if [ "${1:-}" = "__watchdog" ]; then
     exit 0
   }
   # True only when we can confirm the scan service is NOT running. A .cur or
-  # render-dead flag left by a stopped/SIGKILLed scan must not reboot a Pi that
+  # .render-dead flag left by a stopped/SIGKILLed scan must not reboot a Pi that
   # is meant to be idle — otherwise it boot-loops. Querying systemd (not pgrep)
   # is reliable even during a GPU wedge, where pgrep itself can hang.
   scan_stopped() {
@@ -94,9 +94,9 @@ if [ "${1:-}" = "__watchdog" ]; then
   iv=$((stall / 3)); [ "$iv" -ge 1 ] || iv=1
   while :; do
     reason=""
-    # (1) render-freeze: loop advancing but the GPU stopped putting new frames on
-    # screen (display/KMS wedged) — the scan flags this since progress can't.
-    [ -f "$dead" ] && reason="scan reported a frozen display"
+    # (1) reboot requested by the scan — a preventive reboot (bounding an
+    # undetectable display-freeze) or any other scan-initiated recovery.
+    [ -f "$dead" ] && reason="scan requested a reboot"
     # (2) stall: the scan stopped making progress (heartbeat not refreshed) for
     # too long — a hard hang it cannot move past, anywhere in the iteration
     # (including the render-check, where .cur is empty, which the old .cur-only
@@ -126,7 +126,8 @@ do_install=0
 do_uninstall=0
 do_watchdog=0
 stall_secs=90
-render_check_every=30   # sample on-screen rendering every N ok shaders (0=off)
+reboot_every=200   # preventive reboot every N scanned shaders (0=off) — bounds
+                   # an undetectable display-freeze (loop alive, screen dead)
 
 self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 unit="shadertoy-blacklist.service"
@@ -150,7 +151,7 @@ while [ $# -gt 0 ]; do
     --uninstall)     do_uninstall=1; shift ;;
     --watchdog)      do_watchdog=1; shift ;;
     --stall)         stall_secs="${2:?}"; shift 2 ;;
-    --render-check)  render_check_every="${2:?}"; shift 2 ;;
+    --reboot-every)  reboot_every="${2:?}"; shift 2 ;;
     -h|--help)       sed -n '2,/^$/{/^# /s/^# \?//p}' "$0"; exit 0 ;;
     *)               die "unknown argument: $1 (try --help)" ;;
   esac
@@ -200,7 +201,7 @@ install_service() {
   local exec="$self --out $(printf %q "$out_abs") --dir $(printf %q "$dir")"
   exec="$exec --bin $(printf %q "$bin") --secs $(printf %q "$secs")"
   exec="$exec --kill-after $(printf %q "$kill_after")"
-  exec="$exec --render-check $(printf %q "$render_check_every")"
+  exec="$exec --reboot-every $(printf %q "$reboot_every")"
   [ -n "$media" ] && exec="$exec --media $(printf %q "$media")"
   # Carry the binary's shared-library path into the unit so the service-launched
   # shadertoy_egl resolves its libs (e.g. libshadertoy.so); otherwise every
@@ -325,45 +326,6 @@ resets() {
     'ring [^ ]+ timeout|job timed out|gpu hang|gpu reset|hangcheck|MMU error|device wedged|\*ERROR\* .*reset'
 }
 
-# Run shader $1 under the chosen compositor with a timeout; set `rc`.
-#
-# On a render checkpoint (render sampling on, and N ok shaders since the last
-# one) it ALSO captures a liveness frame from this shader's OWN cage run — no
-# extra cage start — into `cap_hash`: the run is backgrounded with a slightly
-# longer timeout, grim grabs a frame once the shader has had time to render,
-# then the run is reaped. The caller compares cap_hash across checkpoints: two
-# *different* shaders yielding the same frame means the display is stuck on a
-# stale frame (grim reads the compositor buffer, which stops changing once
-# cage's present blocks on a wedged KMS pipe). cap_hash is empty on a
-# non-checkpoint shader or if the capture fails.
-run_shader() {
-  local f="$1" cmd
-  cap_hash=""
-  cmd=("${launch_prefix[@]}" "$bin")
-  [ -n "$media" ] && cmd+=(--media "$media")
-  cmd+=("$f")
-
-  if [ "$render_on" = 1 ] && [ "$since_check" -ge "$render_check_every" ]; then
-    since_check=0
-    local rt before after sock grab lim runpid
-    rt="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-    grab=$((secs + 1)); lim=$((secs + 3))   # render past startup, then capture
-    before="$(ls "$rt"/wayland-* 2>/dev/null | grep -E 'wayland-[0-9]+$' | sort)"
-    timeout --kill-after="$kill_after" "$lim" "${cmd[@]}" >/dev/null 2>&1 &
-    runpid=$!
-    sleep "$grab"
-    after="$(ls "$rt"/wayland-* 2>/dev/null | grep -E 'wayland-[0-9]+$' | sort)"
-    sock="$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -1)"
-    [ -n "$sock" ] &&
-      cap_hash="$(WAYLAND_DISPLAY="$sock" grim - 2>/dev/null | cksum 2>/dev/null | cut -d' ' -f1)"
-    wait "$runpid"; rc=$?
-  else
-    [ "$render_on" = 1 ] && since_check=$((since_check + 1))
-    timeout --kill-after="$kill_after" "$secs" "${cmd[@]}" >/dev/null 2>&1
-    rc=$?
-  fi
-}
-
 # ── Resume: a leftover marker means the previous run's shader killed us ────────
 if [ -s "$cur" ]; then
   victim="$(cat "$cur")"
@@ -371,17 +333,15 @@ if [ -s "$cur" ]; then
   printf 'resuming: "%s" took down the previous run — blacklisted\n' "$victim"
   : > "$cur"
 fi
-# Clear any render-frozen flag from a prior boot so the watchdog starts clean
+# Clear any reboot-request flag from a prior boot so the watchdog starts clean
 # (otherwise it would reboot immediately after the resume → boot loop).
 rm -f "$out.render-dead"
 : > "$beat"   # fresh heartbeat before the loop so the watchdog trusts it
 
-# Render-liveness sampling is only meaningful when we host shaders ourselves
-# (cage) and grim is available; off for an ambient compositor or without grim.
-render_on=0
-if [ "$render_check_every" -gt 0 ] && [ "${#launch_prefix[@]}" -gt 0 ] &&
-   command -v grim >/dev/null; then render_on=1; fi
-prev_rhash=""; since_check=0
+# Shaders processed this boot. The preventive reboot trips after reboot_every of
+# them, bounding a display-freeze the watchdog can't see (loop alive, screen
+# dead) — far more reliable here than trying to detect the freeze.
+n_since_start=0
 
 # Set of ids already decided (resume skip).
 declare -A done=()
@@ -432,7 +392,14 @@ for f in "${files[@]}"; do
   printf '%s' "$id" > "$cur"          # in-flight marker (crash-survivable)
   before="$(resets)"
 
-  run_shader "$f"                     # sets rc; on a checkpoint also cap_hash
+  if [ -n "$media" ]; then
+    timeout --kill-after="$kill_after" "$secs" \
+      "${launch_prefix[@]}" "$bin" --media "$media" "$f" >/dev/null 2>&1
+  else
+    timeout --kill-after="$kill_after" "$secs" \
+      "${launch_prefix[@]}" "$bin" "$f" >/dev/null 2>&1
+  fi
+  rc=$?
 
   sync; after="$(resets)"            # let the journal flush the timeout line
   : > "$cur"
@@ -447,23 +414,22 @@ for f in "${files[@]}"; do
   done["$id"]=1
   write_blacklist
 
-  # Render-liveness: on a checkpoint, run_shader captured a frame (cap_hash) from
-  # this shader's own cage run (no extra run). Two *different* shaders yielding
-  # the same frame means the display is wedged (stuck on a stale frame) while the
-  # loop keeps advancing — which progress/heartbeat can't see. Flag the watchdog.
-  if [ -n "$cap_hash" ]; then
-    if [ "$cap_hash" = "$prev_rhash" ]; then
-      printf '\nrender frozen: identical frames across shaders — display wedged\n' >&2
-      : > "$cur"                 # do not blame a specific shader
-      : > "$out.render-dead"     # signal the watchdog to reboot
+  # Preventive reboot. A display-freeze (loop alive, screen dead) can't be
+  # detected reliably on this hardware, so instead of trying, bound it: after
+  # reboot_every shaders this boot, ask the watchdog to reboot. This clears any
+  # silent GPU/display degradation and the scan resumes from the ledger. It
+  # rarely fires in practice (hard hangs already reboot first), but caps how
+  # many shaders a missed freeze can waste. Needs the watchdog to do the reboot.
+  if [ "$reboot_every" -gt 0 ]; then
+    n_since_start=$((n_since_start + 1))
+    if [ "$n_since_start" -ge "$reboot_every" ] && [ -f "$wd_unit_path" ]; then
+      printf '\npreventive reboot after %d shaders this boot\n' "$n_since_start" >&2
+      : > "$cur"               # nothing to blame
+      : > "$out.render-dead"   # ask the watchdog to reboot (existing sentinel)
       write_blacklist
-      if [ -f "$wd_unit_path" ]; then
-        printf 'waiting for the watchdog to reboot...\n' >&2
-        while :; do sleep 5; done   # hold so a restart can't clear the flag first
-      fi
-      exit 1
+      printf 'waiting for the watchdog to reboot...\n' >&2
+      while :; do sleep 5; done   # hold until the reboot lands
     fi
-    prev_rhash="$cap_hash"
   fi
 done
 
