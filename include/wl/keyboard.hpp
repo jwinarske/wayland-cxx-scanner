@@ -217,9 +217,15 @@ class KeyboardHandler
   /// Stops key-repeat when the keyboard focus leaves the surface.
   ///
   /// The Wayland protocol requires clients to stop any ongoing key-repeat
-  /// when a wl_keyboard.leave event is received.
+  /// when a wl_keyboard.leave event is received. The optional
+  /// App::OnKeyboardLeave() hook (detected via SFINAE) lets a consumer react to
+  /// keyboard focus loss. It is deliberately named distinctly from the IME
+  /// wl::ime::TextInputListener::OnLeave() so a class that is both a keyboard
+  /// consumer and a text-input listener does not conflate the two.
   void OnLeave(uint32_t /*serial*/, wl_proxy* /*surface*/) override {
     StopRepeat();
+    if (app_)
+      CallOnKeyboardLeave(0);
   }
 
   /// Translates the evdev scancode to a keysym + modifier mask and delivers a
@@ -388,6 +394,23 @@ class KeyboardHandler
   }
   // Fallback: OnKeymap not present — do nothing.
   void CallOnKeymap(...) noexcept {}
+
+  // ── SFINAE optional keyboard-leave hook ───────────────────────────────────
+
+  // Call app_->OnKeyboardLeave() if the method exists.  The hook takes no
+  // arguments, so an int/long priority tag disambiguates: a plain
+  // overload-vs-variadic pair would tie on a zero-argument call and overload
+  // resolution would then prefer the non-template fallback.  The present
+  // overload takes an int and the fallback a long; the call passes 0 (int), so
+  // the present overload wins whenever its SFINAE is satisfied.
+  template <typename A = App>
+  auto CallOnKeyboardLeave(int)
+      -> decltype(std::declval<A&>().OnKeyboardLeave(), void()) {
+    app_->OnKeyboardLeave();
+  }
+  // Fallback: OnKeyboardLeave not present — do nothing.
+  template <typename A = App>
+  void CallOnKeyboardLeave(long) noexcept {}
 };
 
 }  // namespace wl
