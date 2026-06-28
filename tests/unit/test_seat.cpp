@@ -46,6 +46,7 @@ struct FakeSeatAppWithKeySym {
   uint32_t last_state = 0;
   xkb_keysym_t last_sym = XKB_KEY_NoSymbol;
   xkb_keymap* last_keymap = nullptr;
+  bool keyboard_left = false;
 
   void OnKey(const wl::KeyEvent& ev) {
     last_key = ev.key;
@@ -53,6 +54,7 @@ struct FakeSeatAppWithKeySym {
     last_sym = ev.keysym;
   }
   void OnKeymap(xkb_keymap* keymap) { last_keymap = keymap; }
+  void OnKeyboardLeave() { keyboard_left = true; }
 };
 
 // ── KeyboardHandler tests
@@ -131,7 +133,19 @@ TEST(KeyboardHandler, OnEnterIsNoOp) {
 
 TEST(KeyboardHandler, OnLeaveIsNoOp) {
   wl::KeyboardHandler<FakeSeatApp> kbd;
-  kbd.OnLeave(0u, nullptr);  // must not crash
+  kbd.OnLeave(0u, nullptr);  // must not crash (App has no OnKeyboardLeave)
+}
+
+TEST(KeyboardHandler, OnLeaveFiresOptionalKeyboardLeaveHook) {
+  // When the App provides OnKeyboardLeave(), the wl_keyboard.leave event must
+  // invoke it via the SFINAE hook. The name is distinct from the IME
+  // wl::ime::TextInputListener::OnLeave() so the two never collide.
+  wl::KeyboardHandler<FakeSeatAppWithKeySym> kbd;
+  FakeSeatAppWithKeySym app;
+  kbd.app_ = &app;
+  EXPECT_FALSE(app.keyboard_left);
+  kbd.OnLeave(0u, nullptr);
+  EXPECT_TRUE(app.keyboard_left);
 }
 
 TEST(KeyboardHandler, OnRepeatInfoIsNoOp) {
