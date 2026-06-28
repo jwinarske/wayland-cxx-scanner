@@ -339,7 +339,7 @@ class App {
   void OnToplevelConfigure(int32_t width, int32_t height);
   void OnToplevelClose();
   void OnDecorationConfigure(uint32_t mode);
-  void OnKey(uint32_t key, uint32_t state);
+  void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(uint32_t stamp_ms) noexcept;
 
  private:
@@ -635,8 +635,8 @@ void App::OnDecorationConfigure(uint32_t mode) {
                server_side ? "" : " (request declined)");
 }
 
-void App::OnKey(uint32_t key, uint32_t state) {
-  if (key == KEY_ESC && state == WL_KEYBOARD_KEY_STATE_PRESSED)
+void App::OnKey(const wl::KeyEvent& ev) {
+  if (ev.key == KEY_ESC && ev.state == WL_KEYBOARD_KEY_STATE_PRESSED)
     running_ = false;
 }
 

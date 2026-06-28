@@ -391,7 +391,7 @@ class App {
   void OnXdgSurfaceConfigure(uint32_t serial);
   void OnToplevelConfigure(int32_t w, int32_t h);
   void OnToplevelClose();
-  void OnKey(uint32_t key, uint32_t state);
+  void OnKey(const wl::KeyEvent& ev);
   /// Called by WlCallbackHandler::OnDone — render one frame and arm the next
   /// frame callback.
   void OnFrameReady(uint32_t time_ms) noexcept;
@@ -1645,8 +1645,8 @@ void App::OnToplevelClose() {
   running_ = false;
 }
 
-void App::OnKey(const uint32_t key, const uint32_t state) {
-  if (key == KEY_ESC && state == WL_KEYBOARD_KEY_STATE_PRESSED)
+void App::OnKey(const wl::KeyEvent& ev) {
+  if (ev.key == KEY_ESC && ev.state == WL_KEYBOARD_KEY_STATE_PRESSED)
     running_ = false;
 }
 

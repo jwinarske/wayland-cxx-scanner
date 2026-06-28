@@ -279,7 +279,7 @@ class App {
   ~App();
 
   // ── Callbacks from CRTP handlers ──────────────────────────────────────────
-  void OnKey(uint32_t key, uint32_t state);
+  void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(uint32_t time_ms) noexcept;
 
   /// xdg_surface::configure received (AckConfigure already done by handler).
@@ -859,8 +859,8 @@ void App::OnFrameDone(uint32_t /*time_ms*/) noexcept {
   CommitFrame();
 }
 
-void App::OnKey(const uint32_t key, const uint32_t state) {
-  if (key == KEY_ESC && state == WL_KEYBOARD_KEY_STATE_PRESSED)
+void App::OnKey(const wl::KeyEvent& ev) {
+  if (ev.key == KEY_ESC && ev.state == WL_KEYBOARD_KEY_STATE_PRESSED)
     running_ = false;
 }
 
