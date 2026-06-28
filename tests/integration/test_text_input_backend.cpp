@@ -8,6 +8,7 @@
 #include <wl/ime/backend.hpp>
 #include <wl/ime/text_input_receiver.hpp>
 
+#include <string_view>
 #include <type_traits>
 
 #include <gtest/gtest.h>
@@ -42,3 +43,13 @@ TEST(TextInputBackend, FacadeMethodsSafeWhenUnbound) {
   r.HidePanel();
   SUCCEED();
 }
+
+#if defined(WL_IME_BACKEND_TEXT_INPUT_V3)
+TEST(TextInputBackend, NilPreeditCoalescedToEmpty) {
+  // A nil preedit string is zwp_text_input_v3's "clear preedit" signal: it must
+  // be forwarded as empty, not dropped. Dropping it leaves stale preedit on
+  // screen (e.g. backspace over a one-character composing run does nothing).
+  EXPECT_TRUE(wl::ime::CoalescePreedit(nullptr).empty());
+  EXPECT_EQ(wl::ime::CoalescePreedit("ni"), std::string_view{"ni"});
+}
+#endif

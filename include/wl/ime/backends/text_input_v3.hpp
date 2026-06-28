@@ -27,6 +27,16 @@
 
 namespace wl::ime {
 
+/// Coalesce a nullable zwp_text_input_v3 preedit string to a view.
+///
+/// A nil @p text is the protocol's "no preedit" signal: it clears any active
+/// preedit (e.g. backspace over a one-character composing run). It must be
+/// forwarded to the consumer as an empty string so the consumer can end its
+/// composing run — dropping the event leaves stale preedit on screen.
+inline std::string_view CoalescePreedit(const char* text) noexcept {
+  return text ? std::string_view{text} : std::string_view{};
+}
+
 /// Concrete ITextInputReceiver backed by zwp_text_input_v3.
 class TextInputV3Backend : public ITextInputReceiver {
  public:
@@ -146,8 +156,12 @@ class TextInputV3Backend : public ITextInputReceiver {
     void OnPreeditString(const char* text,
                          int32_t cursor_begin,
                          int32_t cursor_end) override {
-      if (backend_->listener_ && text)
-        backend_->listener_->OnPreeditString(text, cursor_begin, cursor_end);
+      // A nil text clears the preedit; forward it as empty (see
+      // CoalescePreedit) rather than dropping it, so stale preedit does not
+      // linger on screen.
+      if (backend_->listener_)
+        backend_->listener_->OnPreeditString(CoalescePreedit(text),
+                                             cursor_begin, cursor_end);
     }
     void OnCommitString(const char* text) override {
       if (backend_->listener_ && text)
