@@ -29,11 +29,11 @@
 //   capability-change handling, and versioned protocol teardown.
 //   The App class needs only:
 //
-//     void OnKey(uint32_t key, uint32_t state);
+//     void OnKey(const wl::KeyEvent& ev);
 //
-//   Optionally (when WL_HAS_XKBCOMMON is defined):
+//   Optionally:
 //
-//     void OnKeySym(xkb_keysym_t sym, uint32_t key, uint32_t state);
+//     void OnKeymap(xkb_keymap* keymap);
 //
 //   Typical usage:
 //

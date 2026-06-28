@@ -9,8 +9,11 @@ extern "C" {
 }
 
 #include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <initializer_list>
 #include <string_view>
 #include <utility>
 
@@ -305,6 +308,120 @@ template <typename StopFn, typename RepeatFdFn, typename RepeatFn>
     // ── Keyboard repeat ────────────────────────────────────────────────────
     if (rep_fd >= 0 && (pfds[1].revents & POLLIN))
       on_repeat();
+
+    // ── Wayland events ─────────────────────────────────────────────────────
+    if (pfds[0].revents & POLLIN) {
+      if (wl_display_dispatch(display) < 0) {
+        LogWlError(display, "dispatch", prefix);
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/// An auxiliary event source multiplexed alongside the Wayland fd by the
+/// generalized RunEventLoop.
+///
+/// `fd` is re-evaluated once per loop iteration, so a source can come and go at
+/// runtime — return -1 to skip it this iteration (e.g. a keyboard repeat fd
+/// before a keyboard is bound).  `on_readable` runs on the loop thread whenever
+/// the fd has POLLIN, before the Wayland fd is dispatched.
+struct FdSource {
+  std::function<int()> fd;            ///< current fd, or -1 to skip
+  std::function<void()> on_readable;  ///< called when the fd is readable
+};
+
+/// Generalized Wayland client event loop: multiplexes the Wayland display fd
+/// and an arbitrary set of auxiliary fd sources on a single thread.
+///
+/// This is the N-source generalization of the keyboard-repeat overload above:
+/// instead of one hard-wired repeat fd, the caller registers any number of
+/// `{fd, on_readable}` sources (keyboard repeat, frame/animation timers, an
+/// IME timer, …) and each is polled alongside the Wayland fd.  Each source's
+/// fd is re-evaluated every iteration, so sources may activate / deactivate
+/// dynamically without restructuring the loop.
+///
+/// At most 16 auxiliary sources are polled; any beyond that are ignored.
+///
+/// @tparam StopFn      Callable returning bool.  Loop exits when it returns
+///                     true.  Must not throw.
+/// @param display      A connected wl_display.  Must not be null.
+/// @param should_stop  Called once per iteration; return true to exit cleanly.
+/// @param prefix       Application name for error log messages.
+/// @param sources      Auxiliary fd sources to multiplex with the Wayland fd.
+/// @returns true on a clean exit; false on I/O or protocol error.
+template <typename StopFn>
+[[nodiscard]] inline bool RunEventLoop(
+    wl_display* display,
+    StopFn&& should_stop,
+    std::string_view prefix,
+    std::initializer_list<FdSource> sources) noexcept {
+  const int wl_fd = wl_display_get_fd(display);
+  constexpr std::size_t kMaxAux = 16;
+  // Bound the poll set to a fixed stack array.  Exceeding it is a static misuse
+  // (too many sources registered), so report it once rather than silently
+  // dropping sources.
+  if (sources.size() > kMaxAux) {
+    std::fprintf(stderr,
+                 "%.*s: RunEventLoop: %zu fd sources exceeds the %zu-source "
+                 "limit; the extra sources will not be polled\n",
+                 static_cast<int>(prefix.size()), prefix.data(), sources.size(),
+                 kMaxAux);
+  }
+  const std::size_t n_src = sources.size() < kMaxAux ? sources.size() : kMaxAux;
+
+  while (!should_stop()) {
+    // ── Write phase ────────────────────────────────────────────────────────
+    while (wl_display_flush(display) < 0) {
+      if (errno != EAGAIN) {
+        LogWlError(display, "flush", prefix);
+        return false;
+      }
+      pollfd pfd{wl_fd, POLLOUT, 0};
+      if (poll(&pfd, 1, -1) < 0) {
+        if (errno == EINTR)
+          continue;
+        return false;
+      }
+    }
+
+    // ── Dispatch pending ───────────────────────────────────────────────────
+    if (wl_display_dispatch_pending(display) < 0) {
+      LogWlError(display, "dispatch_pending", prefix);
+      return false;
+    }
+
+    // ── Build the poll set: Wayland fd + auxiliary sources ─────────────────
+    // poll() ignores a pollfd whose fd is negative (revents set to 0), so an
+    // inactive source (fd() == -1) is simply skipped this iteration.
+    pollfd pfds[1 + kMaxAux];
+    pfds[0] = {wl_fd, POLLIN, 0};
+    std::size_t i = 0;
+    for (const FdSource& s : sources) {
+      if (i >= n_src)
+        break;
+      const int fd = s.fd ? s.fd() : -1;
+      pfds[1 + i] = {fd, static_cast<short>(fd >= 0 ? POLLIN : 0), 0};
+      ++i;
+    }
+
+    if (poll(pfds, static_cast<nfds_t>(1 + n_src), -1) < 0) {
+      if (errno == EINTR)
+        continue;
+      return false;
+    }
+
+    // ── Dispatch auxiliary sources (before the Wayland fd) ─────────────────
+    i = 0;
+    for (const FdSource& s : sources) {
+      if (i >= n_src)
+        break;
+      if ((pfds[1 + i].revents & POLLIN) && s.on_readable)
+        s.on_readable();
+      ++i;
+    }
 
     // ── Wayland events ─────────────────────────────────────────────────────
     if (pfds[0].revents & POLLIN) {

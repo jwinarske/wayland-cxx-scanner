@@ -624,10 +624,7 @@ class App {
   void OnXdgSurfaceConfigure(uint32_t serial);
   void OnToplevelConfigure(int32_t w, int32_t h);
   void OnToplevelClose();
-  void OnKey(uint32_t key, uint32_t state);
-  /// Called by wl::KeyboardHandler before OnKey for every key event that has
-  /// an XKB keysym.  Used here to insert printable characters.
-  void OnKeySym(xkb_keysym_t sym, uint32_t key, uint32_t state);
+  void OnKey(const wl::KeyEvent& ev);
 
  private:
   // ── Member declaration order determines RAII destruction order.
@@ -1054,7 +1051,7 @@ void App::OnToplevelClose() {
   running_ = false;
 }
 
-// ── OnKey — evdev key-code handler (control keys + repeat) ───────────────────
+// ── OnKey — unified key event handler (control keys + printable text) ────────
 //
 // Called for every key press and release, and also on each keyboard-repeat
 // tick (via wl::KeyboardHandler::DispatchRepeat → SeatManager::DispatchRepeat
@@ -1063,13 +1060,19 @@ void App::OnToplevelClose() {
 // Only WL_KEYBOARD_KEY_STATE_PRESSED events are acted upon; releases are
 // ignored.  Because repeat fires with PRESSED state, holding any of the keys
 // below produces continuous effect — exactly like weston's editor.c.
+//
+// The evdev key code (ev.key) drives the control-key switch below; the XKB
+// keysym (ev.keysym) drives printable ASCII insertion (models
+// text_model_keysym() in editor.c).  Non-printable keysyms (arrows, function
+// keys, modifiers, …) produce a utf32 value of 0 or outside 0x20–0x7E and are
+// silently skipped, so control keys never double-insert.
 
-void App::OnKey(const uint32_t key, const uint32_t state) {
-  if (state != WL_KEYBOARD_KEY_STATE_PRESSED)
+void App::OnKey(const wl::KeyEvent& ev) {
+  if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED)
     return;
 
   bool dirty = false;
-  switch (key) {
+  switch (ev.key) {
     case KEY_BACKSPACE:
       text_buf_.Backspace();
       dirty = true;
@@ -1116,30 +1119,14 @@ void App::OnKey(const uint32_t key, const uint32_t state) {
 
   if (dirty)
     Redraw();
-}
 
-// ── OnKeySym — XKB keysym handler (printable character insertion)
-// ─────────────
-//
-// Called before OnKey for every key event that has an XKB keysym.  Used to
-// insert printable ASCII characters (models text_model_keysym() in editor.c).
-// Non-printable keysyms (arrows, function keys, modifiers, …) produce a
-// utf32 value of 0 or outside 0x20–0x7E and are silently skipped.
-//
-// Keyboard repeat fires OnKeySym first (via KeyboardHandler::DispatchRepeat),
-// so holding a printable key inserts it repeatedly — the key repeat feature
-// being demonstrated.
-
-void App::OnKeySym(const xkb_keysym_t sym,
-                   const uint32_t /*key*/,
-                   const uint32_t state) {
-  if (state != WL_KEYBOARD_KEY_STATE_PRESSED)
-    return;
-
-  // Convert XKB keysym to Unicode code point.
-  const uint32_t cp = xkb_keysym_to_utf32(sym);
-
-  // Only insert printable ASCII; the inline font covers exactly 0x20–0x7E.
+  // Printable ASCII insertion driven by the XKB keysym.  Holding a printable
+  // key inserts it repeatedly via keyboard repeat — the feature being
+  // demonstrated.
+  //
+  // Convert XKB keysym to Unicode code point and only insert printable ASCII;
+  // the inline font covers exactly 0x20–0x7E.
+  const uint32_t cp = xkb_keysym_to_utf32(ev.keysym);
   if (cp < 0x20u || cp > 0x7Eu)
     return;
 
