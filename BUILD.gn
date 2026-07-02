@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: MIT
+# GN build for wayland-cxx-scanner — consumable from a GN tree (Chromium, the
+# Flutter Engine / buildroot). The point (vs the meson/CMake build) is to make
+# the scanner a build-time host tool AND expose the header-only `wl/` framework
+# so a GN consumer (e.g. Chromium's ozone/wayland) can generate type-safe C++
+# Wayland client bindings and compile them with the SAME clang + libc++ as the
+# embedder — no ABI shim, no separate build step. Mirrors drm-cxx's GN build.
+#
+#   # generate client bindings for a protocol:
+#   wayland_cxx_protocol("xdg_shell_client") {
+#     protocol = "//third_party/wayland-protocols/.../xdg-shell.xml"
+#     mode = "client-header"
+#     std = "c++20"
+#   }
+#   # then depend on it; you also get <wl/...> framework headers:
+#   deps = [ ":xdg_shell_client" ]
+#
+# NOTE: assumes a Chromium-like //build (gn_run_binary.py, compiler configs). A
+# full `gn gen` runs in the consumer tree. Vendor this at
+# //third_party/wayland-cxx-scanner. (gn syntax not run locally — no gn binary.)
+
+import("wayland_cxx_scanner.gni")
+
+# ── vendored pugixml (the scanner's only external dep; Chromium has no copy) ───
+config("pugixml_config") {
+  include_dirs = [ "subprojects/pugixml-1.15/src" ]
+}
+
+source_set("pugixml") {
+  sources = [ "subprojects/pugixml-1.15/src/pugixml.cpp" ]
+  public_configs = [ ":pugixml_config" ]
+
+  # Third-party code: opt out of Chromium's strict warning set so -Werror in the
+  # host toolchain doesn't reject pugixml.
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [ "//build/config/compiler:no_chromium_code" ]
+}
+
+# ── the code generator (built + run with the HOST toolchain) ──────────────────
+config("scanner_config") {
+  include_dirs = [ "src" ]
+  defines = [ "WLSCANNER_BUILD" ]
+}
+
+executable("wayland_cxx_scanner") {
+  sources = [
+    "src/codegen_c.cpp",
+    "src/codegen_client_cxx.cpp",
+    "src/codegen_interface_tables.cpp",
+    "src/codegen_server_cxx.cpp",
+    "src/main.cpp",
+    "src/name_transform.cpp",
+    "src/xml_parser.cpp",
+  ]
+  configs += [ ":scanner_config" ]
+  deps = [ ":pugixml" ]
+
+  # Vendored tool: relax Chromium's warnings-as-errors for the host build.
+  configs -= [ "//build/config/compiler:chromium_code" ]
+  configs += [ "//build/config/compiler:no_chromium_code" ]
+}
+
+# ── header-only framework (the <wl/...> runtime the generated headers use) ────
+# No sources / no link-time deps of its own; consumers link wayland-client /
+# wayland-server themselves (Chromium's ozone/wayland already does).
+config("wayland_cxx_public_config") {
+  include_dirs = [ "include" ]
+}
+
+source_set("wayland_cxx") {
+  public_configs = [ ":wayland_cxx_public_config" ]
+}

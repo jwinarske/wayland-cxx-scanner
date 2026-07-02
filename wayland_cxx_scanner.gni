@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: MIT
+# wayland_cxx_scanner.gni — GN template to generate type-safe C++ Wayland
+# bindings from a protocol XML, consumable from any GN tree. Importing project:
+#
+#   wayland_cxx_protocol("xdg_shell_client") {
+#     protocol = "//third_party/wayland-protocols/stable/xdg-shell/xdg-shell.xml"
+#     mode = "client-header"        # client-header (default) | server-header | c-header
+#     std  = "c++20"                # optional; client/server headers only
+#     emit_interface_tables = false # optional; also emit wl_interface tables
+#   }
+#
+#   # depend on the target -> pulls the generated header's dir AND the <wl/...>
+#   # framework include onto your compile line:
+#   source_set("my_wayland_client") { deps = [ ":xdg_shell_client" ] ... }
+#
+# The generated header lands at "$target_gen_dir/<protocol-basename>.hpp" (or the
+# `output_name` you set). The scanner is built + run with the HOST toolchain.
+
+# Vendor root — the directory holding wayland-cxx-scanner's BUILD.gn. Override if
+# vendored somewhere other than //third_party/wayland-cxx-scanner.
+wayland_cxx_scanner_root = "//third_party/wayland-cxx-scanner"
+
+template("wayland_cxx_protocol") {
+  assert(
+      defined(invoker.protocol),
+      "wayland_cxx_protocol($target_name) requires `protocol` (path to the .xml)")
+
+  _mode = "client-header"
+  if (defined(invoker.mode)) {
+    _mode = invoker.mode
+  }
+
+  _out_name = get_path_info(invoker.protocol, "name") + ".hpp"
+  if (defined(invoker.output_name)) {
+    _out_name = invoker.output_name
+  }
+  _out = "$target_gen_dir/$_out_name"
+
+  # Build + locate the scanner in the host toolchain (it runs at build time).
+  _scanner_label =
+      "$wayland_cxx_scanner_root:wayland_cxx_scanner($host_toolchain)"
+  _scanner_bin =
+      get_label_info(_scanner_label, "root_out_dir") + "/wayland_cxx_scanner"
+
+  _gen_target = "${target_name}__gen"
+
+  action(_gen_target) {
+    forward_variables_from(invoker, [ "testonly" ])
+    visibility = [ ":$target_name" ]
+
+    # gn_run_binary.py runs a built binary as an action (Chromium //build helper).
+    script = "//build/gn_run_binary.py"
+    deps = [ _scanner_label ]
+    inputs = [
+      _scanner_bin,
+      invoker.protocol,
+    ]
+    outputs = [ _out ]
+
+    args = [
+      rebase_path(_scanner_bin, root_build_dir),
+      "--mode=$_mode",
+    ]
+    if (defined(invoker.std)) {
+      args += [ "--std=${invoker.std}" ]
+    }
+    if (defined(invoker.emit_interface_tables) &&
+        invoker.emit_interface_tables) {
+      args += [ "--emit-interface-tables" ]
+    }
+    args += [
+      rebase_path(invoker.protocol, root_build_dir),
+      rebase_path(_out, root_build_dir),
+    ]
+  }
+
+  # Expose the generated header's dir to dependents (so `#include "<name>.hpp"`
+  # resolves), alongside the framework's <wl/...> include.
+  _inc_config = "${target_name}__inc"
+  config(_inc_config) {
+    include_dirs = [ target_gen_dir ]
+  }
+
+  # A header-carrying source_set so dependents inherit the include dirs + the
+  # framework, and the codegen runs before they compile.
+  source_set(target_name) {
+    forward_variables_from(invoker,
+                           [
+                             "visibility",
+                             "testonly",
+                           ])
+    sources = [ _out ]
+    public_configs = [ ":$_inc_config" ]
+    public_deps = [
+      ":$_gen_target",
+      "$wayland_cxx_scanner_root:wayland_cxx",
+    ]
+  }
+}
