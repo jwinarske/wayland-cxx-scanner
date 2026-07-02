@@ -32,8 +32,16 @@ source_set("pugixml") {
 
   # Third-party code: opt out of Chromium's strict warning set so -Werror in the
   # host toolchain doesn't reject pugixml.
-  configs -= [ "//build/config/compiler:chromium_code" ]
-  configs += [ "//build/config/compiler:no_chromium_code" ]
+  # Third-party / host codegen tool: relax Chromium's strict warnings and enable
+  # exceptions (the scanner + pugixml `throw`; Chromium defaults to -fno-exceptions).
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_exceptions",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:exceptions",
+  ]
 }
 
 # ── the code generator (built + run with the HOST toolchain) ──────────────────
@@ -56,8 +64,16 @@ executable("wayland_cxx_scanner") {
   deps = [ ":pugixml" ]
 
   # Vendored tool: relax Chromium's warnings-as-errors for the host build.
-  configs -= [ "//build/config/compiler:chromium_code" ]
-  configs += [ "//build/config/compiler:no_chromium_code" ]
+  # Third-party / host codegen tool: relax Chromium's strict warnings and enable
+  # exceptions (the scanner + pugixml `throw`; Chromium defaults to -fno-exceptions).
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_exceptions",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:exceptions",
+  ]
 }
 
 # ── header-only framework (the <wl/...> runtime the generated headers use) ────

@@ -25,6 +25,10 @@ template("wayland_cxx_protocol") {
       defined(invoker.protocol),
       "wayland_cxx_protocol($target_name) requires `protocol` (path to the .xml)")
 
+  # Capture the public target name before nested target() blocks shadow
+  # `target_name` with their own.
+  _public_target = target_name
+
   _mode = "client-header"
   if (defined(invoker.mode)) {
     _mode = invoker.mode
@@ -46,7 +50,7 @@ template("wayland_cxx_protocol") {
 
   action(_gen_target) {
     forward_variables_from(invoker, [ "testonly" ])
-    visibility = [ ":$target_name" ]
+    visibility = [ ":$_public_target" ]
 
     # gn_run_binary.py runs a built binary as an action (Chromium //build helper).
     script = "//build/gn_run_binary.py"
