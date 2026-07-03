@@ -165,3 +165,45 @@ TEST(CodegenClientCxx, EmptyProtocol) {
   EXPECT_THAT(out, HasSubstr("#pragma once"));
   EXPECT_THAT(out, HasSubstr("namespace empty::client"));
 }
+
+// wl_registry.bind has a dynamic (interface-less) new_id: the target interface
+// and version are chosen at runtime.  The scanner must emit a BindTraits-
+// templated method that goes through the versioned dynamic-bind path
+// (_MarshalBind / wl::bind), NOT the plain `Bind(name, id)` that dropped the
+// interface-name string + version and produced broken wire output.
+TEST(CodegenClientCxx, DynamicBindEmitsBindTraitsTemplate) {
+  const auto out = generate_client_cxx_header(parse_protocol_from_string(R"(
+<protocol name="wayland">
+  <interface name="wl_registry" version="1">
+    <request name="bind">
+      <arg name="name" type="uint"/>
+      <arg name="id" type="new_id"/>
+    </request>
+  </interface>
+</protocol>)"));
+  EXPECT_THAT(out, HasSubstr("template <typename BindTraits>"));
+  EXPECT_THAT(out, HasSubstr("wl_proxy* Bind("));
+  EXPECT_THAT(out, HasSubstr("_MarshalBind("));
+  EXPECT_THAT(out, HasSubstr("&BindTraits::wl_iface()"));
+  EXPECT_THAT(out, HasSubstr("wl_registry_traits::Op::Bind"));
+  // The synthetic client-chosen version parameter replaces the raw new_id.
+  EXPECT_THAT(out, HasSubstr("uint32_t version)"));
+  // The broken plain-marshal form must be gone.
+  EXPECT_THAT(out, Not(HasSubstr("void Bind(")));
+}
+
+// Regression guard: a *regular* new_id (one carrying an `interface`) must keep
+// the normal request form and must NOT be mistaken for a dynamic bind.
+TEST(CodegenClientCxx, RegularNewIdIsNotDynamicBind) {
+  const auto out = generate_client_cxx_header(parse_protocol_from_string(R"(
+<protocol name="wayland">
+  <interface name="wl_compositor" version="6">
+    <request name="create_surface">
+      <arg name="id" type="new_id" interface="wl_surface"/>
+    </request>
+  </interface>
+</protocol>)"));
+  EXPECT_THAT(out, HasSubstr("void CreateSurface("));
+  EXPECT_THAT(out, Not(HasSubstr("_MarshalBind(")));
+  EXPECT_THAT(out, Not(HasSubstr("BindTraits")));
+}

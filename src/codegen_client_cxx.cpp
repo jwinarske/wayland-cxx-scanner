@@ -5,6 +5,7 @@
 #include "codegen_interface_tables.hpp"
 #include "name_transform.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <sstream>
 
@@ -65,6 +66,46 @@ std::string_view cpp_arg_type(const Arg& arg) {
   }
   assert(false && "unhandled ArgType in cpp_arg_type");
   return "void*";
+}
+
+/// True if the request has a dynamic new_id — a <arg type="new_id"> with no
+/// `interface` attribute, i.e. the wl_registry.bind pattern where the target
+/// interface is chosen at runtime.  Such a request cannot be marshaled like a
+/// normal one (its new_id expands on the wire to interface-name + version +
+/// id); it needs the versioned dynamic-bind path (_MarshalBind / wl::bind).
+bool has_dynamic_bind(const Message& r) {
+  return std::any_of(r.args.begin(), r.args.end(), [](const Arg& a) {
+    return a.type == ArgType::NewId && a.interface_name.empty();
+  });
+}
+
+/// Emit a dynamic-bind request method (e.g. wl_registry.bind): a member
+/// template parameterized on the target BindTraits, delegating to _MarshalBind.
+/// The generated signature drops the dynamic new_id arg and appends a synthetic
+/// `version` parameter (the client-chosen interface version, as in libwayland's
+/// wl_registry_bind).  @p deducing_this selects the C++23 explicit-object form
+/// (`self`) vs. the C++17/20 `Base::` form.
+void emit_bind_request(std::ostringstream& os,
+                       const Message& r,
+                       std::string_view traits_name,
+                       bool deducing_this) {
+  const std::string method = snake_to_pascal(r.name);
+  os << "  template <typename BindTraits>\n";
+  os << "  [[nodiscard]] wl_proxy* " << method << "(";
+  if (deducing_this)
+    os << "this Derived& self, ";
+  for (const auto& a : r.args)
+    if (a.type != ArgType::NewId)
+      os << cpp_arg_type(a) << " " << a.name << ", ";
+  os << "uint32_t version) noexcept {\n";
+  os << "    return "
+     << (deducing_this ? "self._MarshalBind(" : "Base::_MarshalBind(")
+     << traits_name << "::Op::" << method
+     << ", &BindTraits::wl_iface(), version";
+  for (const auto& a : r.args)
+    if (a.type != ArgType::NewId)
+      os << ", " << a.name;
+  os << ");\n  }\n\n";
 }
 
 void emit_enum(std::ostringstream& os, const Interface& iface, const Enum& en) {
@@ -148,6 +189,10 @@ void emit_client_class(std::ostringstream& os,
     os << "#ifdef __cpp_explicit_this_parameter\n";
     os << " public:\n";
     for (const auto& r : iface.requests) {
+      if (has_dynamic_bind(r)) {
+        emit_bind_request(os, r, traits_name, /*deducing_this=*/true);
+        continue;
+      }
       std::string method = snake_to_pascal(r.name);
       // C++23: explicit-object parameter (P0847R7).
       os << "  void " << method << "(this Derived& self";
@@ -166,6 +211,10 @@ void emit_client_class(std::ostringstream& os,
     os << "  using Base = wl::CProxyImpl<Derived, " << traits_name << ">;\n";
     os << "\n public:\n";
     for (const auto& r : iface.requests) {
+      if (has_dynamic_bind(r)) {
+        emit_bind_request(os, r, traits_name, /*deducing_this=*/false);
+        continue;
+      }
       std::string method = snake_to_pascal(r.name);
       // Fallback: traditional Base:: form.
       os << "  void " << method << "(";
@@ -190,6 +239,10 @@ void emit_client_class(std::ostringstream& os,
     os << "  using Base = wl::CProxyImpl<Derived, " << traits_name << ">;\n\n";
     os << " public:\n";
     for (const auto& r : iface.requests) {
+      if (has_dynamic_bind(r)) {
+        emit_bind_request(os, r, traits_name, /*deducing_this=*/false);
+        continue;
+      }
       std::string method = snake_to_pascal(r.name);
       os << "  void " << method << "(";
       for (std::size_t i = 0; i < r.args.size(); ++i) {

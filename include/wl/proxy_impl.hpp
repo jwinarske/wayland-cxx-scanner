@@ -67,6 +67,28 @@ class CProxyImpl : public CProxy<Traits> {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     return wl_proxy_marshal_constructor(Base::m_proxy, opcode, iface, args...);
   }
+
+  /// Send a "bind"-style constructor request whose new_id carries no
+  /// compile-time interface (wl_registry.bind semantics): the target interface
+  /// and version are chosen at runtime.  Unlike a regular new_id, the dynamic
+  /// new_id expands on the wire to (interface->name, version, id), so those
+  /// three values are appended after @p pre — the wire arguments that precede
+  /// the new_id slot (just @c name for wl_registry.bind).  The new proxy is
+  /// created at the requested @p version (not the parent's), which is why the
+  /// versioned constructor is required.  Returns nullptr when the handle is
+  /// null (S4).
+  template <typename... Pre>
+  [[nodiscard]] wl_proxy* _MarshalBind(const uint32_t opcode,
+                                       const wl_interface* iface,
+                                       uint32_t version,
+                                       Pre... pre) noexcept {
+    if (!Base::m_proxy)
+      return nullptr;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
+    return wl_proxy_marshal_constructor_versioned(Base::m_proxy, opcode, iface,
+                                                  version, pre..., iface->name,
+                                                  version, nullptr);
+  }
 };
 
 // ── wl::construct<>
@@ -139,6 +161,37 @@ template <typename ChildTraits,
   static_assert(WlProxyTraits<ChildTraits>,
                 "ChildTraits must satisfy wl::WlProxyTraits");
   return proxy._MarshalNew(Opcode, &ChildTraits::wl_iface(), args..., nullptr);
+}
+
+// ── wl::bind<>
+// ───────────────────────────────────────────────────────────────
+
+/// Type-safe wrapper for a dynamic bind request (wl_registry.bind), whose
+/// new_id has no compile-time interface — the target interface and version are
+/// chosen at runtime.  This is the dynamic-new_id analogue of @c wl::construct:
+/// @p BindTraits selects the interface table and @p Opcode is the bind opcode.
+///
+/// Example:
+/// @code
+///   wl_proxy* compositor =
+///       wl::bind<wl_compositor_traits, wl_registry_traits::Op::Bind>(
+///           registry, name, version);
+/// @endcode
+///
+/// @tparam BindTraits    Traits of the object to bind (WlProxyTraits).
+/// @tparam Opcode        The bind request opcode (compile-time constant).
+/// @tparam Derived       Deduced — most-derived CRTP class of the parent proxy.
+/// @tparam ParentTraits  Deduced — traits of the parent (registry) proxy.
+template <typename BindTraits,
+          uint32_t Opcode,
+          typename Derived,
+          typename ParentTraits>
+[[nodiscard]] wl_proxy* bind(CProxyImpl<Derived, ParentTraits>& proxy,
+                             uint32_t name,
+                             uint32_t version) noexcept {
+  static_assert(WlProxyTraits<BindTraits>,
+                "BindTraits must satisfy wl::WlProxyTraits");
+  return proxy._MarshalBind(Opcode, &BindTraits::wl_iface(), version, name);
 }
 
 }  // namespace wl
