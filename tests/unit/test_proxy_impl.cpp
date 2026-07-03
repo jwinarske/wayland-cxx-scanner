@@ -83,3 +83,23 @@ TEST(Construct, NullParentReturnsNullptr) {
   wl_proxy* result = wl::construct<FakeChildTraits, 0u>(parent);
   EXPECT_EQ(result, nullptr);
 }
+
+// ── _MarshalBind / wl::bind<> tests (dynamic new_id, wl_registry.bind)
+// ─────────
+
+TEST(CProxyImpl, MarshalBindNullProxyReturnsNullptr) {
+  // _MarshalBind on a null proxy must return nullptr (guarded by internal
+  // check) — the dynamic-bind analogue of _MarshalNew.
+  FakeClient c;
+  wl_proxy* result = c._MarshalBind(0u, &FakeChildTraits::wl_iface(),
+                                    /*version=*/1u, /*name=*/42u);
+  EXPECT_EQ(result, nullptr);
+}
+
+TEST(Bind, NullParentReturnsNullptr) {
+  // wl::bind<> delegates to _MarshalBind; null parent must return nullptr.
+  FakeClient parent;  // null proxy
+  wl_proxy* result =
+      wl::bind<FakeChildTraits, 0u>(parent, /*name=*/42u, /*version=*/1u);
+  EXPECT_EQ(result, nullptr);
+}
