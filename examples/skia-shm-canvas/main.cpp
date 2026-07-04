@@ -33,6 +33,7 @@
 // ── Shared scene + policy helpers
 // ─────────────────────────────────────────────
 #include "damage.hpp"
+#include "frame_pacer.hpp"
 #include "scale.hpp"
 #include "scene.hpp"
 
@@ -50,6 +51,7 @@
 extern "C" {
 #include <linux/input-event-codes.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 #include <wayland-client-protocol.h>
 }
@@ -64,6 +66,8 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -301,6 +305,8 @@ bool BufferPool::Create(const int w, const int h, WlShmHandler& shm) noexcept {
 
 class App {
  public:
+  explicit App(demo::PacerConfig pacer_cfg) noexcept : pacer_(pacer_cfg) {}
+
   int Run();
 
   // Callbacks from CRTP handlers.
@@ -320,6 +326,15 @@ class App {
   bool BindGlobals();
   bool CreateWindow();
   bool MainLoop();
+  bool RunSelfPaced();
+  void PrintBenchmark() const noexcept;
+
+  [[nodiscard]] static double NowMs() noexcept {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<double>(ts.tv_sec) * 1000.0 +
+           static_cast<double>(ts.tv_nsec) / 1.0e6;
+  }
 
   // Physical buffer size for the current logical size and scale.
   [[nodiscard]] demo::BufferSize BufferPx() const noexcept {
@@ -331,7 +346,7 @@ class App {
 
   bool EnsurePool() noexcept;
   void RenderFrame(int idx) noexcept;
-  void CommitFrame() noexcept;
+  void CommitFrame(bool arm_callback) noexcept;
   void SubmitDamage() noexcept;
   void RequestFrameCallback() noexcept;
   void ApplyViewport() noexcept;
@@ -375,6 +390,7 @@ class App {
   int scale_120_ = demo::ScalePolicy::kUnityScale120;
 
   demo::SceneState scene_;
+  demo::FramePacer pacer_;
   std::vector<SkIRect> damage_logical_;  // scene's dirty rects, logical px
   std::vector<SkIRect> damage_buffer_;   // mapped to buffer px for submission
 };
@@ -632,7 +648,7 @@ void App::RenderFrame(int idx) noexcept {
   demo::DemoScene::Render(canvas, scene_, &damage_logical_);
 }
 
-void App::CommitFrame() noexcept {
+void App::CommitFrame(bool arm_callback) noexcept {
   if (!EnsurePool())
     return;
 
@@ -644,6 +660,7 @@ void App::CommitFrame() noexcept {
     return;
   }
 
+  scene_.frame = pacer_.frame();
   RenderFrame(idx);
 
   auto& buf = *pool_.bufs.at(static_cast<std::size_t>(idx)).Get();
@@ -656,12 +673,13 @@ void App::CommitFrame() noexcept {
   } else {
     SubmitDamage();
   }
-  RequestFrameCallback();
+  if (arm_callback)
+    RequestFrameCallback();
   surface->Commit();
   buf.busy = true;
-  frame_pending_ = true;
+  frame_pending_ = arm_callback;
   scene_.button_dirty = false;
-  ++scene_.frame;
+  pacer_.Advance();
 }
 
 // Maps the scene's logical dirty rects to buffer pixels and emits one
@@ -718,8 +736,10 @@ void App::OnXdgSurfaceConfigure(std::uint32_t /*serial*/) {
   width_ = pending_width_;
   height_ = pending_height_;
   configured_ = true;
-  if (!frame_pending_)
-    CommitFrame();
+  // In a self-paced run RunSelfPaced() drives every frame; configure only
+  // records the size.
+  if (!pacer_.self_paced() && !frame_pending_)
+    CommitFrame(/*arm_callback=*/true);
 }
 
 void App::OnPreferredScale(int scale_120) noexcept {
@@ -729,8 +749,8 @@ void App::OnPreferredScale(int scale_120) noexcept {
     return;
   scale_120_ = scale_120;
   geometry_dirty_ = true;
-  if (!frame_pending_ && configured_)
-    CommitFrame();
+  if (!pacer_.self_paced() && !frame_pending_ && configured_)
+    CommitFrame(/*arm_callback=*/true);
 }
 
 void App::OnKey(const wl::KeyEvent& ev) {
@@ -754,25 +774,136 @@ void App::OnFrameDone(std::uint32_t /*stamp_ms*/) noexcept {
 
   frame_pending_ = false;
   if (running_ && configured_)
-    CommitFrame();
+    CommitFrame(/*arm_callback=*/true);
+}
+
+// Renders a bounded number of frames back-to-back, driving each with a display
+// roundtrip instead of a compositor frame callback so the run completes even
+// when the surface is never presented (headless, occluded).
+bool App::RunSelfPaced() {
+  std::printf("skia-shm-canvas: self-paced run%s\n",
+              pacer_.benchmarking() ? " (benchmark)" : "");
+  constexpr int kMaxStalls = 8;
+  int stalls = 0;
+  while (running_ && g_running && !pacer_.reached_limit()) {
+    const std::uint32_t before = pacer_.frame();
+    const double t0 = NowMs();
+    CommitFrame(/*arm_callback=*/false);
+    // Time only render + commit; the roundtrip below is compositor latency, not
+    // render cost, so it is excluded from the frame-time sample.
+    const double render_ms = NowMs() - t0;
+
+    // The roundtrip flushes the commit and lets buffer releases arrive.
+    if (!wl::RoundtripWithTimeout(display_.Get())) {
+      std::fprintf(stderr, "skia-shm-canvas: roundtrip failed\n");
+      return false;
+    }
+
+    if (pacer_.frame() == before) {
+      // Frame dropped (pool momentarily exhausted); the roundtrip should have
+      // freed a buffer.  Bound the retries so a wedged compositor cannot spin
+      // this loop forever.
+      if (++stalls > kMaxStalls) {
+        std::fprintf(stderr, "skia-shm-canvas: buffer pool stalled\n");
+        return false;
+      }
+      continue;
+    }
+    stalls = 0;
+    pacer_.RecordFrameMs(render_ms);
+  }
+  if (pacer_.benchmarking())
+    PrintBenchmark();
+  return true;
+}
+
+void App::PrintBenchmark() const noexcept {
+  std::printf(
+      "skia-shm-canvas: %zu frames  mean=%.3f ms  p50=%.3f  p95=%.3f  "
+      "p99=%.3f\n",
+      pacer_.sample_count(), pacer_.Mean(), pacer_.Percentile(50),
+      pacer_.Percentile(95), pacer_.Percentile(99));
 }
 
 bool App::MainLoop() {
+  if (pacer_.self_paced())
+    return RunSelfPaced();
+
   std::printf("skia-shm-canvas: press ESC or Ctrl-C to quit\n");
   // g_running is cleared by the SIGINT handler; include it so the first Ctrl-C
   // exits cleanly.
-  const bool ok = wl::RunEventLoop(
+  return wl::RunEventLoop(
       display_.Get(), [this] { return !running_ || !g_running; },
       "skia-shm-canvas");
-  return ok;
 }
 
 }  // namespace
 
-int main() {
+namespace {
+
+void PrintUsage() {
+  std::printf(
+      "usage: skia_shm_canvas [--frames N] [--exit] [--fixed-dt]\n"
+      "                       [--benchmark N]\n"
+      "  --frames N     render at most N frames\n"
+      "  --exit         quit once the frame limit is reached\n"
+      "  --fixed-dt     deterministic 60 Hz animation clock\n"
+      "  --benchmark N  render N frames self-paced and print frame-time "
+      "stats\n");
+}
+
+[[nodiscard]] bool ParseArgs(const std::vector<std::string_view>& args,
+                             demo::PacerConfig& cfg) {
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    const std::string_view a = args[i];
+    // Parses the next argument as a positive frame count.  Rejecting <= 0 (and
+    // absurdly large values) keeps a bounded, self-paced run from looping
+    // forever.
+    constexpr long kMaxFrames = 1'000'000;
+    const auto next_int = [&](int& out) {
+      if (i + 1 >= args.size())
+        return false;
+      const std::string s(args[i + 1]);
+      char* end = nullptr;
+      const long value = std::strtol(s.c_str(), &end, 10);
+      if (end == s.c_str() || value < 1 || value > kMaxFrames)
+        return false;
+      out = static_cast<int>(value);
+      ++i;
+      return true;
+    };
+    if (a == "--frames") {
+      if (!next_int(cfg.max_frames))
+        return false;
+    } else if (a == "--exit") {
+      cfg.exit_on_limit = true;
+    } else if (a == "--fixed-dt") {
+      cfg.fixed_dt = true;
+    } else if (a == "--benchmark") {
+      if (!next_int(cfg.max_frames))
+        return false;
+      cfg.benchmark = true;
+      cfg.exit_on_limit = true;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
   std::signal(SIGPIPE, SIG_IGN);
   std::signal(SIGINT, OnSigint);
 
-  App app;
+  const std::vector<std::string_view> args(argv, std::next(argv, argc));
+  demo::PacerConfig cfg;
+  if (!ParseArgs(args, cfg)) {
+    PrintUsage();
+    return EXIT_FAILURE;
+  }
+
+  App app(cfg);
   return app.Run();
 }

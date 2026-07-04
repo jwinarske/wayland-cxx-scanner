@@ -78,6 +78,19 @@ weston --backend=headless --width=800 --height=600 &
 WAYLAND_DISPLAY=wayland-1 ./build/examples/skia-shm-canvas/skia_shm_canvas
 ```
 
+### Flags
+
+| Flag | Meaning |
+|---|---|
+| `--frames N` | Render at most N frames. |
+| `--exit` | Quit once the frame limit is reached. |
+| `--fixed-dt` | Use a deterministic 60 Hz animation clock. |
+| `--benchmark N` | Render N frames self-paced (driven by display roundtrips, not frame callbacks) and print frame-time stats (mean, p50/p95/p99). |
+
+A bounded run (`--frames N --exit`, or `--benchmark N`) is self-paced, so it
+runs to completion even when the surface is never presented — useful for
+headless CI and perf measurement.
+
 ## Tests
 
 The `skia-demo-common` library ships offscreen checks and unit tests, all in the
