@@ -52,6 +52,7 @@
 
 #include <wl/client_helpers.hpp>
 #include <wl/keyboard.hpp>
+#include <wl/pointer.hpp>
 #include <wl/wl_ptr.hpp>
 
 extern "C" {
@@ -156,8 +157,18 @@ class SeatManager {
   /// Must be called from App::~App BEFORE member destructors run so that
   /// the protocol messages can still be flushed over the display connection.
   void Release() noexcept {
+    ReleasePointer();
     ReleaseKeyboard();
     ReleaseSeat();
+  }
+
+  /// The bound wl_seat proxy, or nullptr when no seat is bound.
+  ///
+  /// The seat is bound once and lifetime-stable, so this handle is safe to pass
+  /// to requests that take a seat — e.g. xdg_toplevel.move / .resize with a
+  /// pointer button serial (see wl::PointerButtonEvent::serial).
+  [[nodiscard]] wl_proxy* Seat() const noexcept {
+    return seat_.IsNull() ? nullptr : seat_.Get()->GetProxy();
   }
 
   /// Returns the read end of the self-pipe used for key-repeat signaling.
@@ -197,6 +208,23 @@ class SeatManager {
     } else if (!has_kbd && !keyboard_.IsNull()) {
       ReleaseKeyboard();
     }
+
+    // The pointer is created only when the App defines a pointer hook, so
+    // keyboard-only consumers never bind one (and never surprise the compositor
+    // by holding a cursor-less pointer).
+    if constexpr (wl::detail::WantsPointer<App>) {
+      const bool has_ptr = (caps & WL_SEAT_CAPABILITY_POINTER) != 0u;
+      if (has_ptr && pointer_.IsNull()) {
+        if (wl::SetupHandler(
+                pointer_,
+                wl::construct<wl_pointer_traits,
+                              wl_seat_traits::Op::GetPointer>(*seat_.Get()))) {
+          pointer_.Get()->app_ = app_;
+        }
+      } else if (!has_ptr && !pointer_.IsNull()) {
+        ReleasePointer();
+      }
+    }
   }
 
  private:
@@ -214,6 +242,7 @@ class SeatManager {
   // seat_ declared before keyboard_ → seat_ is destroyed AFTER keyboard_.
   wl::WlPtr<SeatHandler> seat_;
   wl::WlPtr<wl::KeyboardHandler<App>> keyboard_;
+  wl::WlPtr<wl::PointerHandler<App>> pointer_;
 
   uint32_t name_ = 0;     // global id recorded during ScanGlobals
   uint32_t ver_adv_ = 0;  // advertised version
@@ -228,6 +257,15 @@ class SeatManager {
     if (ver_ >= Kbd::Op::Since::Release)
       keyboard_.Get()->Release();
     keyboard_.Reset();
+  }
+
+  void ReleasePointer() noexcept {
+    if (pointer_.IsNull())
+      return;
+    using Ptr = wayland::client::wl_pointer_traits;
+    if (ver_ >= Ptr::Op::Since::Release)
+      pointer_.Get()->Release();
+    pointer_.Reset();
   }
 
   void ReleaseSeat() noexcept {

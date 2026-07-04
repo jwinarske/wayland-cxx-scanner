@@ -64,6 +64,7 @@ install_headers(
     'include/wl/xdg_shell.hpp',
     'include/wl/xdg_decoration.hpp',
     'include/wl/keyboard.hpp',
+    'include/wl/pointer.hpp',
     'include/wl/seat.hpp',
     subdir: 'wl',
 )
