@@ -13,6 +13,7 @@ example renders on the CPU, so the two backends are directly comparable.
 |---|---|
 | `Esc` / window close | quit |
 | `Space` | toggle the button-active scene state |
+| left-click | toggle the button when clicked on it (via the view tree's hit test) |
 
 ## Build and run
 
