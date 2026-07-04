@@ -12,7 +12,8 @@
 //
 // Controls:
 //   ESC / window close   quit
-//   SPACE                toggles the button-active scene state
+//   SPACE / left-click  toggles the button-active scene state (click the
+//   button)
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
 #include "fractional_scale_client.hpp"  // namespace fractional_scale_v1::client
@@ -95,6 +96,9 @@ const wl_interface& wl_shm_traits::wl_iface() noexcept {
 }
 const wl_interface& wl_buffer_traits::wl_iface() noexcept {
   return wl_buffer_interface;
+}
+const wl_interface& wl_pointer_traits::wl_iface() noexcept {
+  return wl_pointer_interface;
 }
 
 }  // namespace wayland::client
@@ -183,6 +187,29 @@ class WlCallbackHandler
  public:
   App* app_ = nullptr;
   void OnDone(std::uint32_t time_ms) override;
+};
+
+// Pointer input.  SeatManager owns the keyboard; the pointer is created from a
+// second wl_seat binding (SeatHandler) so it can coexist with it.
+class WlPointerHandler : public wayland::client::CWlPointer<WlPointerHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnEnter(std::uint32_t serial,
+               wl_proxy* surface,
+               wl_fixed_t sx,
+               wl_fixed_t sy) override;
+  void OnMotion(std::uint32_t time, wl_fixed_t sx, wl_fixed_t sy) override;
+  void OnButton(std::uint32_t serial,
+                std::uint32_t time,
+                std::uint32_t button,
+                std::uint32_t state) override;
+};
+
+class SeatHandler : public wayland::client::CWlSeat<SeatHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnCapabilities(std::uint32_t caps) override;
+  void OnName(const char*) override {}
 };
 
 // wp_viewporter / wp_viewport and the fractional-scale manager have no events;
@@ -324,6 +351,9 @@ class App {
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(std::uint32_t stamp_ms) noexcept;
   void OnPreferredScale(int scale_120) noexcept;
+  void OnSeatCapabilities(std::uint32_t caps) noexcept;
+  void OnPointerMotion(wl_fixed_t sx, wl_fixed_t sy) noexcept;
+  void OnPointerButton(std::uint32_t button, std::uint32_t state) noexcept;
 
  private:
   static constexpr int kDefaultWidth = 480;
@@ -368,6 +398,9 @@ class App {
   wl::WlPtr<WpViewporterHandler> viewporter_;
   wl::WlPtr<WpFractionalScaleManagerHandler> fractional_manager_;
   wl::SeatManager<App> seat_;
+  // A second wl_seat binding + pointer, alongside SeatManager's keyboard.
+  wl::WlPtr<SeatHandler> seat_handler_;
+  wl::WlPtr<WlPointerHandler> pointer_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
@@ -383,6 +416,10 @@ class App {
   std::uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
   std::uint32_t viewporter_name_ = 0, viewporter_ver_ = 0;
   std::uint32_t fractional_name_ = 0, fractional_ver_ = 0;
+  std::uint32_t seat_name_ = 0, seat_ver_ = 0;
+
+  int pointer_x_ = -1;
+  int pointer_y_ = -1;
 
   bool running_ = true;
   bool configured_ = false;
@@ -410,6 +447,28 @@ void WpFractionalScaleHandler::OnPreferredScale(std::uint32_t scale) {
 
 void WlCallbackHandler::OnDone(std::uint32_t time_ms) {
   app_->OnFrameDone(time_ms);
+}
+
+void WlPointerHandler::OnEnter(std::uint32_t /*serial*/,
+                               wl_proxy* /*surface*/,
+                               wl_fixed_t sx,
+                               wl_fixed_t sy) {
+  app_->OnPointerMotion(sx, sy);
+}
+void WlPointerHandler::OnMotion(std::uint32_t /*time*/,
+                                wl_fixed_t sx,
+                                wl_fixed_t sy) {
+  app_->OnPointerMotion(sx, sy);
+}
+void WlPointerHandler::OnButton(std::uint32_t /*serial*/,
+                                std::uint32_t /*time*/,
+                                std::uint32_t button,
+                                std::uint32_t state) {
+  app_->OnPointerButton(button, state);
+}
+
+void SeatHandler::OnCapabilities(std::uint32_t caps) {
+  app_->OnSeatCapabilities(caps);
 }
 
 // ── Signal handling
@@ -477,6 +536,8 @@ bool App::ScanGlobals() {
       fractional_ver_ = ver;
     } else if (iface == wl_seat_traits::interface_name) {
       seat_.Record(name, ver);
+      seat_name_ = name;
+      seat_ver_ = ver;
     }
   });
 
@@ -536,6 +597,16 @@ bool App::BindGlobals() {
   if (!seat_.Bind(registry_, this)) {
     std::fprintf(stderr, "skia-shm-canvas: wl_seat bind failed\n");
     return false;
+  }
+
+  // A second wl_seat binding drives the pointer (SeatManager handles keyboard).
+  if (seat_name_) {
+    using T = wayland::client::wl_seat_traits;
+    if (wl_proxy* raw =
+            registry_.Bind<T>(seat_name_, std::min(seat_ver_, T::version))) {
+      if (wl::SetupHandler(seat_handler_, raw))
+        seat_handler_.Get()->app_ = this;
+    }
   }
 
   if (!wl::RoundtripWithTimeout(display_.Get())) {
@@ -772,6 +843,39 @@ void App::OnKey(const wl::KeyEvent& ev) {
   if (ev.key == KEY_ESC) {
     running_ = false;
   } else if (ev.key == KEY_SPACE) {
+    scene_.button_active = !scene_.button_active;
+    view_tree_.MarkDirty(demo::View::kButton);
+  }
+}
+
+void App::OnSeatCapabilities(std::uint32_t caps) noexcept {
+  using namespace wayland::client;
+  const bool has_pointer = (caps & WL_SEAT_CAPABILITY_POINTER) != 0u;
+  if (has_pointer && pointer_.Get()->GetProxy() == nullptr) {
+    if (wl_proxy* raw =
+            wl::construct<wl_pointer_traits, wl_seat_traits::Op::GetPointer>(
+                *seat_handler_.Get())) {
+      if (wl::SetupHandler(pointer_, raw))
+        pointer_.Get()->app_ = this;
+    }
+  } else if (!has_pointer && pointer_.Get()->GetProxy() != nullptr) {
+    pointer_.Reset();
+  }
+}
+
+void App::OnPointerMotion(wl_fixed_t sx, wl_fixed_t sy) noexcept {
+  // Pointer coordinates are surface-local logical pixels — the same space the
+  // view tree is laid out in (the viewport maps the physical buffer to it).
+  pointer_x_ = wl_fixed_to_int(sx);
+  pointer_y_ = wl_fixed_to_int(sy);
+}
+
+void App::OnPointerButton(std::uint32_t button, std::uint32_t state) noexcept {
+  if (state != WL_POINTER_BUTTON_STATE_PRESSED || button != BTN_LEFT)
+    return;
+  if (view_tree_.HitTest(static_cast<SkScalar>(pointer_x_),
+                         static_cast<SkScalar>(pointer_y_)) ==
+      demo::View::kButton) {
     scene_.button_active = !scene_.button_active;
     view_tree_.MarkDirty(demo::View::kButton);
   }
