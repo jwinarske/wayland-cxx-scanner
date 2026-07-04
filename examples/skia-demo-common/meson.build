@@ -39,3 +39,30 @@ test(
     args: [meson.current_build_dir() / 'demo-scene.png'],
     suite: 'skia',
 )
+
+# ── Unit tests ────────────────────────────────────────────────────────────────
+#
+# Cover the pure logic in the shared library — the fractional-scale policy and
+# the damage-list helpers.  Built with -Dtests=true; they live here rather than
+# under tests/ because that subdir is processed before Skia is resolved.
+if get_option('tests')
+    gtest_main_dep = dependency('gtest_main', required: false,
+                                fallback: ['gtest', 'gtest_main_dep'])
+    if gtest_main_dep.found()
+        foreach case : ['scale', 'damage']
+            _exe = executable(
+                'skia_demo_test_' + case,
+                sources: ['test_' + case + '.cpp'],
+                dependencies: [skia_demo_common_dep, gtest_main_dep],
+            )
+            test(
+                'skia-demo-' + case,
+                _exe,
+                args: ['--gtest_color=yes'],
+                suite: 'skia',
+            )
+        endforeach
+    else
+        warning('GoogleTest not available — skipping Skia demo-common unit tests')
+    endif
+endif
