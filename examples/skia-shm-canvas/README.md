@@ -32,6 +32,7 @@ can be shared by future GL and Vulkan variants for direct comparison.
 | `Space` | toggle the button-active scene state |
 | left-click | toggle the button when clicked on it (via the view tree's hit test) |
 | touch tap | toggle the button when tapped (multi-touch tracked, up to 10 contacts) |
+| `F1` | toggle the performance overlay (also enabled at start with `--hud`) |
 
 ## Build
 
@@ -102,6 +103,7 @@ WAYLAND_DISPLAY=wayland-1 ./build/examples/skia-shm-canvas/skia_shm_canvas
 | `--exit` | Quit once the frame limit is reached. |
 | `--fixed-dt` | Use a deterministic 60 Hz animation clock. |
 | `--benchmark N` | Render N frames self-paced (driven by display roundtrips, not frame callbacks) and print frame-time stats (mean, p50/p95/p99). |
+| `--hud` | Start with the performance overlay visible (FPS, present latency, measured refresh); toggle at runtime with `F1`. |
 
 A bounded run (`--frames N --exit`, or `--benchmark N`) is self-paced, so it
 runs to completion even when the surface is never presented — useful for
@@ -122,6 +124,16 @@ skia-shm-canvas: presentation: 512 shown  latency mean=8.421 ms  p50=8.300  p95=
 
 The line is omitted when the protocol is absent or every frame was discarded
 (headless or fully occluded), so no misleading zeros are printed.
+
+### Performance overlay (`--hud` / `F1`)
+
+`--hud` draws a small on-screen overlay — a rounded translucent panel, top-left,
+with the live FPS and frame index, the present-latency mean/p95 from the section
+above, and the measured refresh. `F1` toggles it at runtime. Rendering is a
+no-op while hidden, so it costs nothing when off; the FPS comes from an
+allocation-free rolling one-second window (`demo::FpsMeter`), and the SHM path
+damages only the overlay's fixed rectangle each frame so the rest of the
+damage-tracking demonstration is unaffected.
 
 ## Tests
 

@@ -12,6 +12,7 @@
 //   ESC / window close   quit
 //   SPACE / left-click  toggles the button-active scene state (click the
 //   button)
+//   F1                  toggles the performance overlay (also --hud)
 
 // ── EGL/GLES headers (before Wayland headers)
 // ─────────────────────────────────
@@ -48,6 +49,7 @@ extern "C" {
 // ── Shared scene + pacing
 // ────────────────────────────────────────────────────
 #include "frame_pacer.hpp"
+#include "perf_hud.hpp"
 #include "scene.hpp"
 #include "view_tree.hpp"
 
@@ -130,7 +132,9 @@ class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 
 class App {
  public:
-  explicit App(demo::PacerConfig pacer_cfg) noexcept : pacer_(pacer_cfg) {}
+  App(demo::PacerConfig pacer_cfg, bool hud) noexcept : pacer_(pacer_cfg) {
+    hud_.set_visible(hud);
+  }
   ~App();
 
   int Run();
@@ -225,6 +229,8 @@ class App {
 
   demo::SceneState scene_;
   demo::FramePacer pacer_;
+  demo::PerfHud hud_;
+  demo::FpsMeter fps_;
   demo::ViewTree view_tree_;
 };
 
@@ -466,9 +472,14 @@ void App::RenderFrame() noexcept {
       gr_context_.get(), target, kBottomLeft_GrSurfaceOrigin,
       kRGBA_8888_SkColorType, nullptr, nullptr);
   scene_.frame = pacer_.frame();
+  fps_.Tick(NowMs());
   if (surface != nullptr) {
     view_tree_.Layout(width_, height_);
-    demo::DemoScene::Render(surface->getCanvas(), scene_, view_tree_);
+    SkCanvas* canvas = surface->getCanvas();
+    demo::DemoScene::Render(canvas, scene_, view_tree_);
+    // The HUD overlays the scene (no-op while hidden); GL redraws the whole
+    // buffer each frame, so no damage bookkeeping is needed.
+    hud_.Render(canvas, pacer_, fps_.fps());
     gr_context_->flushAndSubmit();
   }
 
@@ -584,6 +595,8 @@ void App::OnKey(const wl::KeyEvent& ev) {
     running_ = false;
   else if (ev.key == KEY_SPACE)
     scene_.button_active = !scene_.button_active;
+  else if (ev.key == KEY_F1)
+    hud_.toggle();
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
@@ -609,16 +622,18 @@ namespace {
 void PrintUsage() {
   std::printf(
       "usage: skia_egl_canvas [--frames N] [--exit] [--fixed-dt]\n"
-      "                       [--benchmark N]\n"
+      "                       [--benchmark N] [--hud]\n"
       "  --frames N     render at most N frames\n"
       "  --exit         quit once the frame limit is reached\n"
       "  --fixed-dt     deterministic 60 Hz animation clock\n"
       "  --benchmark N  render N frames self-paced and print frame-time "
-      "stats\n");
+      "stats\n"
+      "  --hud          show the performance overlay (toggle with F1)\n");
 }
 
 [[nodiscard]] bool ParseArgs(const std::vector<std::string_view>& args,
-                             demo::PacerConfig& cfg) {
+                             demo::PacerConfig& cfg,
+                             bool& hud) {
   // Parses the next argument as a positive frame count.  Rejecting <= 0 (and
   // absurdly large values) keeps a bounded, self-paced run from looping
   // forever.
@@ -649,6 +664,8 @@ void PrintUsage() {
         return false;
       cfg.benchmark = true;
       cfg.exit_on_limit = true;
+    } else if (a == "--hud") {
+      hud = true;
     } else {
       return false;
     }
@@ -664,11 +681,12 @@ int main(int argc, char* argv[]) {
 
   const std::vector<std::string_view> args(argv, std::next(argv, argc));
   demo::PacerConfig cfg;
-  if (!ParseArgs(args, cfg)) {
+  bool hud = false;
+  if (!ParseArgs(args, cfg, hud)) {
     PrintUsage();
     return EXIT_FAILURE;
   }
 
-  App app(cfg);
+  App app(cfg, hud);
   return app.Run();
 }
