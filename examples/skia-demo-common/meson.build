@@ -15,6 +15,7 @@ skia_demo_common_lib = static_library(
         'scale.cpp',
         'damage.cpp',
         'frame_pacer.cpp',
+        'view_tree.cpp',
     ],
     include_directories: skia_demo_common_inc,
     dependencies: [skia_dep],
@@ -68,7 +69,7 @@ if get_option('tests')
     gtest_main_dep = dependency('gtest_main', required: false,
                                 fallback: ['gtest', 'gtest_main_dep'])
     if gtest_main_dep.found()
-        foreach case : ['scale', 'damage', 'frame_pacer']
+        foreach case : ['scale', 'damage', 'frame_pacer', 'view_tree']
             _exe = executable(
                 'skia_demo_test_' + case,
                 sources: ['test_' + case + '.cpp'],

@@ -7,6 +7,7 @@
 // prefix is wired correctly and the scene draws.
 
 #include "scene.hpp"
+#include "view_tree.hpp"
 
 #include "include/core/SkAlphaType.h"
 #include "include/core/SkColorType.h"
@@ -40,9 +41,9 @@ int main(int argc, char* argv[]) {
   }
 
   demo::SceneState state;
-  state.width = kWidth;
-  state.height = kHeight;
-  demo::DemoScene::Render(surface->getCanvas(), state, nullptr);
+  demo::ViewTree views;
+  views.Layout(kWidth, kHeight);
+  demo::DemoScene::Render(surface->getCanvas(), state, views);
 
   const sk_sp<SkImage> image = surface->makeImageSnapshot();
   SkFILEWStream stream(out_path.c_str());

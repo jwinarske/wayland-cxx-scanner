@@ -106,6 +106,8 @@ meson test -C build --suite skia
 |---|---|
 | `skia-demo-scale` | fractional-scale buffer sizing and canvas scale |
 | `skia-demo-damage` | damage-list clamp and coalesce helpers |
+| `skia-demo-frame_pacer` | frame limits, animation clock, frame-time stats |
+| `skia-demo-view_tree` | view layout, hit-testing, dirty-region damage |
 | `skia-demo-scene-render` | scene renders offscreen to a PNG (links the text stack) |
 | `skia-demo-golden` | shapes-only golden-image regression (see below) |
 
