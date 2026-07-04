@@ -95,6 +95,9 @@ const wl_interface& wl_surface_traits::wl_iface() noexcept {
 const wl_interface& wl_pointer_traits::wl_iface() noexcept {
   return wl_pointer_interface;
 }
+const wl_interface& wl_touch_traits::wl_iface() noexcept {
+  return wl_touch_interface;
+}
 
 }  // namespace wayland::client
 
@@ -138,6 +141,8 @@ class App {
   // Pointer input is delivered by wl::SeatManager; the event carries the click
   // position, so the App just implements this hook.
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
+  // A touch tap on the button toggles it too.
+  void OnTouchDown(const wl::TouchPoint& p) noexcept;
 
  private:
   static constexpr int kDefaultWidth = 480;
@@ -544,6 +549,13 @@ void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
     return;
   if (view_tree_.HitTest(static_cast<SkScalar>(ev.x),
                          static_cast<SkScalar>(ev.y)) == demo::View::kButton) {
+    scene_.button_active = !scene_.button_active;
+  }
+}
+
+void App::OnTouchDown(const wl::TouchPoint& p) noexcept {
+  if (view_tree_.HitTest(static_cast<SkScalar>(p.x),
+                         static_cast<SkScalar>(p.y)) == demo::View::kButton) {
     scene_.button_active = !scene_.button_active;
   }
 }

@@ -53,6 +53,7 @@
 #include <wl/client_helpers.hpp>
 #include <wl/keyboard.hpp>
 #include <wl/pointer.hpp>
+#include <wl/touch.hpp>
 #include <wl/wl_ptr.hpp>
 
 extern "C" {
@@ -157,6 +158,7 @@ class SeatManager {
   /// Must be called from App::~App BEFORE member destructors run so that
   /// the protocol messages can still be flushed over the display connection.
   void Release() noexcept {
+    ReleaseTouch();
     ReleasePointer();
     ReleaseKeyboard();
     ReleaseSeat();
@@ -225,6 +227,21 @@ class SeatManager {
         ReleasePointer();
       }
     }
+
+    // Touch is likewise bound only when the App defines a touch hook.
+    if constexpr (wl::detail::WantsTouch<App>) {
+      const bool has_touch = (caps & WL_SEAT_CAPABILITY_TOUCH) != 0u;
+      if (has_touch && touch_.IsNull()) {
+        if (wl::SetupHandler(
+                touch_,
+                wl::construct<wl_touch_traits, wl_seat_traits::Op::GetTouch>(
+                    *seat_.Get()))) {
+          touch_.Get()->app_ = app_;
+        }
+      } else if (!has_touch && !touch_.IsNull()) {
+        ReleaseTouch();
+      }
+    }
   }
 
  private:
@@ -243,6 +260,7 @@ class SeatManager {
   wl::WlPtr<SeatHandler> seat_;
   wl::WlPtr<wl::KeyboardHandler<App>> keyboard_;
   wl::WlPtr<wl::PointerHandler<App>> pointer_;
+  wl::WlPtr<wl::TouchHandler<App>> touch_;
 
   uint32_t name_ = 0;     // global id recorded during ScanGlobals
   uint32_t ver_adv_ = 0;  // advertised version
@@ -266,6 +284,15 @@ class SeatManager {
     if (ver_ >= Ptr::Op::Since::Release)
       pointer_.Get()->Release();
     pointer_.Reset();
+  }
+
+  void ReleaseTouch() noexcept {
+    if (touch_.IsNull())
+      return;
+    using Tch = wayland::client::wl_touch_traits;
+    if (ver_ >= Tch::Op::Since::Release)
+      touch_.Get()->Release();
+    touch_.Reset();
   }
 
   void ReleaseSeat() noexcept {

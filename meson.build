@@ -66,6 +66,7 @@ install_headers(
     'include/wl/keyboard.hpp',
     'include/wl/pointer.hpp',
     'include/wl/seat.hpp',
+    'include/wl/touch.hpp',
     subdir: 'wl',
 )
 
