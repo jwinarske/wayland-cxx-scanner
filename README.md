@@ -47,6 +47,7 @@ The framework targets a C++17 floor and also compiles cleanly at C++20/C++23.
 | [Google Test](https://github.com/google/googletest)                           | —                   | Optional; required for tests (auto-fetched)    |
 | [libxkbcommon](https://xkbcommon.org/)                                        | —                   | Optional; required for keyboard examples/tests |
 | [SDL3](https://github.com/libsdl-org/SDL)                                     | 3.x                 | Optional; required for `sdl3-presentation-shm` |
+| [Skia](https://skia.org/)                                                     | `chrome/m150`       | Optional; required for `skia-shm-canvas` (build via `scripts/build-skia.sh`) |
 
 **Ubuntu / Debian:**
 
@@ -245,6 +246,7 @@ passed to `meson setup` (requires `wayland-client` and `wayland-server`).
 | [simple-shell-egl](examples/simple-shell-egl)                 | RDK/Westeros `wl_simple_shell` layout via EGL    | EGL, GLESv2                  |
 | [xdg-csd](examples/xdg-csd)                                   | Client-side decorations (Cairo / GTK back-ends)  | cairo or gtk+-3.0            |
 | [xdg-simple-dmabuf-vulkan](examples/xdg-simple-dmabuf-vulkan) | Vulkan rendering with DMA-BUF export             | Vulkan                       |
+| [skia-shm-canvas](examples/skia-shm-canvas)                   | Skia CPU raster into `wl_shm`, fractional scale + damage | Skia (`-Dskia_examples=enabled`) |
 
 ## Testing
 
