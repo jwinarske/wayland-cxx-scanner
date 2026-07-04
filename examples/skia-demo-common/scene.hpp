@@ -25,6 +25,9 @@ struct SceneState {
   std::uint32_t frame = 0;     // monotone frame counter; drives animation
   bool button_active = false;  // true while the button is held
   bool button_dirty = false;   // button changed since the last rendered frame
+  // Draw the text card's glyphs.  Off for golden-image tests, whose fonts come
+  // from the system and so are not reproducible; the rest of the scene is.
+  bool draw_text = true;
 };
 
 class DemoScene {
