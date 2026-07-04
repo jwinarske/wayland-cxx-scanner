@@ -21,6 +21,7 @@ extern "C" {
 }
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
+#include "presentation_time_client.hpp"  // namespace presentation_time::client
 #include "wayland_client.hpp"
 #include "xdg_shell_client.hpp"
 
@@ -38,6 +39,7 @@ extern "C" {
 // ─────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
 #include <wl/display.hpp>
+#include <wl/presentation.hpp>
 #include <wl/registry.hpp>
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
@@ -143,6 +145,9 @@ class App {
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
   // A touch tap on the button toggles it too.
   void OnTouchDown(const wl::TouchPoint& p) noexcept;
+  // wp_presentation feedback: the frame committed for `fb.frame` turned to
+  // light.  wl::PresentationManager creates the feedback when this hook exists.
+  void OnPresented(const wl::PresentFeedback& fb) noexcept;
 
  private:
   static constexpr int kDefaultWidth = 480;
@@ -156,6 +161,7 @@ class App {
   bool MainLoop();
   bool RunSelfPaced();
   void PrintBenchmark() const noexcept;
+  void PrintPresentSummary() const noexcept;
   void RequestFrameCallback() noexcept;
   void RenderFrame() noexcept;
 
@@ -206,6 +212,7 @@ class App {
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
   wl::SeatManager<App> seat_;
+  wl::PresentationManager<App> presentation_;
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
   bool running_ = true;
@@ -235,6 +242,7 @@ extern "C" void OnSigint(int /*signo*/) noexcept {
 App::~App() {
   // Release GL-backed resources while the EGL context is still current.
   gr_context_.reset();
+  presentation_.Release();
   seat_.Release();
 }
 
@@ -277,6 +285,9 @@ bool App::ScanGlobals() {
       xdg_wm_base_ver_ = ver;
     } else if (iface == wl_seat_traits::interface_name) {
       seat_.Record(name, ver);
+    } else if (iface == presentation_time::client::wp_presentation_traits::
+                            interface_name) {
+      presentation_.Record(name, ver);
     }
   });
   if (!wl::RoundtripWithTimeout(display_.Get())) {
@@ -308,6 +319,11 @@ bool App::BindGlobals() {
   }
   if (!seat_.Bind(registry_, this)) {
     std::fprintf(stderr, "skia-egl-canvas: wl_seat bind failed\n");
+    return false;
+  }
+  // wp_presentation is optional; Bind() is a no-op if it was never advertised.
+  if (!presentation_.Bind(registry_, this)) {
+    std::fprintf(stderr, "skia-egl-canvas: wp_presentation bind failed\n");
     return false;
   }
   return true;
@@ -456,8 +472,17 @@ void App::RenderFrame() noexcept {
     gr_context_->flushAndSubmit();
   }
 
+  // eglSwapBuffers performs the wl_surface.commit, so request presentation
+  // feedback for this content first — it binds to the commit that follows.
+  presentation_.Arm(surface_.Get()->GetProxy(), pacer_.frame());
   eglSwapBuffers(egl_.display, egl_.surface);
   pacer_.Advance();
+}
+
+void App::OnPresented(const wl::PresentFeedback& fb) noexcept {
+  // Real commit→turn-to-light latency and the compositor's measured refresh.
+  pacer_.RecordPresentMs(fb.latency_ms);
+  pacer_.NoteRefreshNs(fb.refresh_ns);
 }
 
 // Renders a bounded number of frames back-to-back without waiting on compositor
@@ -488,6 +513,21 @@ void App::PrintBenchmark() const noexcept {
       "p99=%.3f\n",
       pacer_.sample_count(), pacer_.Mean(), pacer_.Percentile(50),
       pacer_.Percentile(95), pacer_.Percentile(99));
+  PrintPresentSummary();
+}
+
+// Reports wp_presentation timing when any frame was actually presented.  In a
+// headless or fully occluded run the compositor discards every frame, so this
+// stays silent rather than printing zeros.
+void App::PrintPresentSummary() const noexcept {
+  if (pacer_.present_count() == 0)
+    return;
+  std::printf(
+      "skia-egl-canvas: presentation: %llu shown  latency mean=%.3f ms  "
+      "p50=%.3f  p95=%.3f  refresh=%.2f Hz\n",
+      static_cast<unsigned long long>(pacer_.present_count()),
+      pacer_.PresentMean(), pacer_.PresentPercentile(50),
+      pacer_.PresentPercentile(95), pacer_.refresh_hz());
 }
 
 bool App::MainLoop() {
@@ -497,9 +537,11 @@ bool App::MainLoop() {
   std::printf("skia-egl-canvas: press ESC or Ctrl-C to quit\n");
   RequestFrameCallback();
   RenderFrame();
-  return wl::RunEventLoop(
+  const bool ok = wl::RunEventLoop(
       display_.Get(), [this] { return !running_ || !g_running; },
       "skia-egl-canvas");
+  PrintPresentSummary();
+  return ok;
 }
 
 void App::RequestFrameCallback() noexcept {

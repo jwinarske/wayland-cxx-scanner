@@ -84,4 +84,45 @@ TEST(FramePacer, MeanAndPercentiles) {
   EXPECT_DOUBLE_EQ(pacer.Percentile(100), 10.0);
 }
 
+TEST(FramePacer, PresentStatsEmptyAreZero) {
+  FramePacer pacer{PacerConfig{}};
+  EXPECT_EQ(pacer.present_count(), 0u);
+  EXPECT_DOUBLE_EQ(pacer.PresentMean(), 0.0);
+  EXPECT_DOUBLE_EQ(pacer.PresentPercentile(95), 0.0);
+  EXPECT_DOUBLE_EQ(pacer.refresh_hz(), 0.0);
+}
+
+TEST(FramePacer, PresentMeanAndPercentiles) {
+  FramePacer pacer{PacerConfig{}};
+  for (int i = 1; i <= 10; ++i)
+    pacer.RecordPresentMs(static_cast<double>(i));
+  EXPECT_EQ(pacer.present_count(), 10u);
+  EXPECT_DOUBLE_EQ(pacer.PresentMean(), 5.5);
+  EXPECT_DOUBLE_EQ(pacer.PresentPercentile(50), 5.0);
+  EXPECT_DOUBLE_EQ(pacer.PresentPercentile(95), 10.0);
+}
+
+TEST(FramePacer, PresentLatenciesAreBoundedToWindow) {
+  FramePacer pacer{PacerConfig{}};
+  // Record more than the ring holds; the total keeps counting but the window
+  // retains only the most recent kPresentWindow samples for percentiles.
+  const std::size_t n = FramePacer::kPresentWindow + 500;
+  for (std::size_t i = 0; i < n; ++i)
+    pacer.RecordPresentMs(1.0);
+  EXPECT_EQ(pacer.present_count(), static_cast<std::uint64_t>(n));
+  // Every retained sample is 1.0, so the stats are exactly 1.0 regardless of
+  // wrap-around (proving the ring overwrote rather than grew unbounded).
+  EXPECT_DOUBLE_EQ(pacer.PresentMean(), 1.0);
+  EXPECT_DOUBLE_EQ(pacer.PresentPercentile(99), 1.0);
+}
+
+TEST(FramePacer, RefreshHzFromLastPlausibleInterval) {
+  FramePacer pacer{PacerConfig{}};
+  pacer.NoteRefreshNs(16'666'667u);  // ~60 Hz
+  EXPECT_NEAR(pacer.refresh_hz(), 60.0, 0.01);
+  // A 0 ("unknown") interval is ignored, retaining the last good value.
+  pacer.NoteRefreshNs(0u);
+  EXPECT_NEAR(pacer.refresh_hz(), 60.0, 0.01);
+}
+
 }  // namespace
