@@ -65,10 +65,52 @@ class FramePacer {
   // Nearest-rank percentile of recorded frame times; p in [0, 100].
   [[nodiscard]] double Percentile(double p) const noexcept;
 
+  // ── Presentation-feedback stats (wp_presentation) ──────────────────────────
+  // Optional: populated only when the compositor supports wp_presentation and
+  // the surface is actually presented.  Latency is commit→turn-to-light in ms.
+  //
+  // Unlike the frame-time samples (recorded only in a bounded self-paced run),
+  // present latencies arrive continuously in the interactive loop, so they are
+  // kept in a fixed-size ring — the last kPresentWindow samples — rather than
+  // an unbounded vector.  present_count() still reports the lifetime total.
+
+  static constexpr std::size_t kPresentWindow = 2048;
+
+  void RecordPresentMs(double ms) {
+    if (present_ms_.size() < kPresentWindow)
+      present_ms_.push_back(ms);
+    else
+      present_ms_[present_next_] = ms;
+    present_next_ = (present_next_ + 1) % kPresentWindow;
+    ++present_total_;
+  }
+  // Remember the most recent plausible refresh interval (nanoseconds); 0 means
+  // "unknown" and is ignored so a stale-but-valid value is retained.
+  void NoteRefreshNs(std::uint32_t ns) noexcept {
+    if (ns != 0)
+      refresh_ns_ = ns;
+  }
+
+  // Lifetime count of presented frames (not the ring's current size).
+  [[nodiscard]] std::uint64_t present_count() const noexcept {
+    return present_total_;
+  }
+  [[nodiscard]] double PresentMean() const noexcept;
+  // Nearest-rank percentile over the retained window; p in [0, 100].
+  [[nodiscard]] double PresentPercentile(double p) const noexcept;
+  // Measured refresh rate in Hz, or 0.0 when no refresh has been reported.
+  [[nodiscard]] double refresh_hz() const noexcept {
+    return refresh_ns_ != 0 ? 1.0e9 / static_cast<double>(refresh_ns_) : 0.0;
+  }
+
  private:
   PacerConfig cfg_;
   std::uint32_t frame_ = 0;
   std::vector<double> durations_;
+  std::vector<double> present_ms_;   // ring of the last kPresentWindow samples
+  std::size_t present_next_ = 0;     // next write index once the ring is full
+  std::uint64_t present_total_ = 0;  // lifetime count of presented frames
+  std::uint32_t refresh_ns_ = 0;
 };
 
 }  // namespace demo

@@ -45,3 +45,12 @@ vsync — useful for headless CI and GPU-side perf measurement.
 ```sh
 ./build/examples/skia-egl-canvas/skia_egl_canvas --benchmark 300
 ```
+
+### Presentation timing
+
+Like [`skia-shm-canvas`](../skia-shm-canvas/README.md#presentation-timing), the
+example arms `wp_presentation` feedback (via `wl::PresentationManager`) for each
+frame — here just before `eglSwapBuffers`, which performs the commit. On exit it
+prints the presented-frame count, commit→turn-to-light latency percentiles, and
+the compositor's measured refresh rate, or stays silent when the protocol is
+absent or no frame was presented.

@@ -65,6 +65,8 @@ install_headers(
     'include/wl/xdg_decoration.hpp',
     'include/wl/keyboard.hpp',
     'include/wl/pointer.hpp',
+    'include/wl/present_feedback.hpp',
+    'include/wl/presentation.hpp',
     'include/wl/seat.hpp',
     'include/wl/touch.hpp',
     subdir: 'wl',

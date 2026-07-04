@@ -107,6 +107,22 @@ A bounded run (`--frames N --exit`, or `--benchmark N`) is self-paced, so it
 runs to completion even when the surface is never presented — useful for
 headless CI and perf measurement.
 
+### Presentation timing
+
+When the compositor supports `wp_presentation`, the example requests
+presentation feedback for every committed frame via `wl::PresentationManager`.
+Each frame that is actually shown reports the real commit→turn-to-light latency
+and the compositor's measured refresh interval. On exit (and at the end of a
+`--benchmark` run) a one-line summary prints the presented-frame count, latency
+mean/p50/p95, and the measured refresh rate:
+
+```
+skia-shm-canvas: presentation: 512 shown  latency mean=8.421 ms  p50=8.300  p95=12.100  refresh=60.00 Hz
+```
+
+The line is omitted when the protocol is absent or every frame was discarded
+(headless or fully occluded), so no misleading zeros are printed.
+
 ## Tests
 
 The `skia-demo-common` library ships offscreen checks and unit tests, all in the

@@ -17,14 +17,16 @@
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
 #include "fractional_scale_client.hpp"  // namespace fractional_scale_v1::client
-#include "viewporter_client.hpp"        // namespace viewporter::client
-#include "wayland_client.hpp"           // namespace wayland::client
-#include "xdg_shell_client.hpp"         // namespace xdg_shell::client
+#include "presentation_time_client.hpp"  // namespace presentation_time::client
+#include "viewporter_client.hpp"         // namespace viewporter::client
+#include "wayland_client.hpp"            // namespace wayland::client
+#include "xdg_shell_client.hpp"          // namespace xdg_shell::client
 
 // ── Framework headers
 // ─────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
 #include <wl/display.hpp>
+#include <wl/presentation.hpp>
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
 #include <wl/seat.hpp>
@@ -331,6 +333,9 @@ class App {
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(std::uint32_t stamp_ms) noexcept;
   void OnPreferredScale(int scale_120) noexcept;
+  // wp_presentation feedback: the frame committed for `fb.frame` turned to
+  // light.  wl::PresentationManager creates the feedback when this hook exists.
+  void OnPresented(const wl::PresentFeedback& fb) noexcept;
   // Pointer input is delivered by wl::SeatManager (it creates the wl_pointer
   // when this hook is present); the event carries the click position.
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
@@ -349,6 +354,7 @@ class App {
   bool MainLoop();
   bool RunSelfPaced();
   void PrintBenchmark() const noexcept;
+  void PrintPresentSummary() const noexcept;
 
   [[nodiscard]] static double NowMs() noexcept {
     timespec ts{};
@@ -381,6 +387,7 @@ class App {
   wl::WlPtr<WpViewporterHandler> viewporter_;
   wl::WlPtr<WpFractionalScaleManagerHandler> fractional_manager_;
   wl::SeatManager<App> seat_;
+  wl::PresentationManager<App> presentation_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
@@ -490,6 +497,9 @@ bool App::ScanGlobals() {
       fractional_ver_ = ver;
     } else if (iface == wl_seat_traits::interface_name) {
       seat_.Record(name, ver);
+    } else if (iface == presentation_time::client::wp_presentation_traits::
+                            interface_name) {
+      presentation_.Record(name, ver);
     }
   });
 
@@ -548,6 +558,12 @@ bool App::BindGlobals() {
 
   if (!seat_.Bind(registry_, this)) {
     std::fprintf(stderr, "skia-shm-canvas: wl_seat bind failed\n");
+    return false;
+  }
+
+  // wp_presentation is optional; Bind() is a no-op if it was never advertised.
+  if (!presentation_.Bind(registry_, this)) {
+    std::fprintf(stderr, "skia-shm-canvas: wp_presentation bind failed\n");
     return false;
   }
 
@@ -701,6 +717,9 @@ void App::CommitFrame(bool arm_callback) noexcept {
   }
   if (arm_callback)
     RequestFrameCallback();
+  // Request presentation feedback for this content before committing it, so the
+  // compositor reports when this exact frame turns to light.
+  presentation_.Arm(surface->GetProxy(), pacer_.frame());
   surface->Commit();
   buf.busy = true;
   frame_pending_ = arm_callback;
@@ -823,6 +842,12 @@ void App::OnFrameDone(std::uint32_t /*stamp_ms*/) noexcept {
     CommitFrame(/*arm_callback=*/true);
 }
 
+void App::OnPresented(const wl::PresentFeedback& fb) noexcept {
+  // Real commit→turn-to-light latency and the compositor's measured refresh.
+  pacer_.RecordPresentMs(fb.latency_ms);
+  pacer_.NoteRefreshNs(fb.refresh_ns);
+}
+
 // Renders a bounded number of frames back-to-back, driving each with a display
 // roundtrip instead of a compositor frame callback so the run completes even
 // when the surface is never presented (headless, occluded).
@@ -869,6 +894,21 @@ void App::PrintBenchmark() const noexcept {
       "p99=%.3f\n",
       pacer_.sample_count(), pacer_.Mean(), pacer_.Percentile(50),
       pacer_.Percentile(95), pacer_.Percentile(99));
+  PrintPresentSummary();
+}
+
+// Reports wp_presentation timing when any frame was actually presented.  In a
+// headless or fully occluded run the compositor discards every frame, so this
+// stays silent rather than printing zeros.
+void App::PrintPresentSummary() const noexcept {
+  if (pacer_.present_count() == 0)
+    return;
+  std::printf(
+      "skia-shm-canvas: presentation: %llu shown  latency mean=%.3f ms  "
+      "p50=%.3f  p95=%.3f  refresh=%.2f Hz\n",
+      static_cast<unsigned long long>(pacer_.present_count()),
+      pacer_.PresentMean(), pacer_.PresentPercentile(50),
+      pacer_.PresentPercentile(95), pacer_.refresh_hz());
 }
 
 bool App::MainLoop() {
@@ -878,9 +918,11 @@ bool App::MainLoop() {
   std::printf("skia-shm-canvas: press ESC or Ctrl-C to quit\n");
   // g_running is cleared by the SIGINT handler; include it so the first Ctrl-C
   // exits cleanly.
-  return wl::RunEventLoop(
+  const bool ok = wl::RunEventLoop(
       display_.Get(), [this] { return !running_ || !g_running; },
       "skia-shm-canvas");
+  PrintPresentSummary();
+  return ok;
 }
 
 }  // namespace
