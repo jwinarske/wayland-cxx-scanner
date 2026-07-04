@@ -27,6 +27,7 @@ extern "C" {
 // ──────────────────────────────────────────────────
 extern "C" {
 #include <linux/input-event-codes.h>
+#include <time.h>
 #include <unistd.h>
 #include <wayland-client-protocol.h>
 #include <wayland-egl.h>
@@ -41,8 +42,9 @@ extern "C" {
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
 
-// ── Shared scene
-// ──────────────────────────────────────────────────────────────
+// ── Shared scene + pacing
+// ────────────────────────────────────────────────────
+#include "frame_pacer.hpp"
 #include "scene.hpp"
 
 // ── Skia (Ganesh GL)
@@ -68,7 +70,10 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
+#include <string>
 #include <string_view>
+#include <vector>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() definitions — core Wayland interfaces
@@ -115,8 +120,10 @@ class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 
 class App {
  public:
-  int Run();
+  explicit App(demo::PacerConfig pacer_cfg) noexcept : pacer_(pacer_cfg) {}
   ~App();
+
+  int Run();
 
   void OnXdgSurfaceConfigure(std::uint32_t serial);
   void OnToplevelConfigure(int32_t w, int32_t h);
@@ -134,8 +141,17 @@ class App {
   bool CreateSurfaces();
   bool InitEgl();
   bool MainLoop();
+  bool RunSelfPaced();
+  void PrintBenchmark() const noexcept;
   void RequestFrameCallback() noexcept;
   void RenderFrame() noexcept;
+
+  [[nodiscard]] static double NowMs() noexcept {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<double>(ts.tv_sec) * 1000.0 +
+           static_cast<double>(ts.tv_nsec) / 1.0e6;
+  }
 
   wl::DisplayHandle display_;
   wl::CRegistry registry_;
@@ -188,6 +204,7 @@ class App {
   std::uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
 
   demo::SceneState scene_;
+  demo::FramePacer pacer_;
 };
 
 void WlCallbackHandler::OnDone(std::uint32_t time_ms) {
@@ -397,7 +414,8 @@ bool App::InitEgl() {
     std::fprintf(stderr, "skia-egl-canvas: eglMakeCurrent failed\n");
     return false;
   }
-  eglSwapInterval(egl_.display, 1);
+  // A self-paced run must not block on vsync (the surface may never present).
+  eglSwapInterval(egl_.display, pacer_.self_paced() ? 0 : 1);
 
   gr_context_ = GrDirectContexts::MakeGL(GrGLInterfaces::MakeEGL());
   if (gr_context_ == nullptr) {
@@ -417,6 +435,7 @@ void App::RenderFrame() noexcept {
   sk_sp<SkSurface> surface = SkSurfaces::WrapBackendRenderTarget(
       gr_context_.get(), target, kBottomLeft_GrSurfaceOrigin,
       kRGBA_8888_SkColorType, nullptr, nullptr);
+  scene_.frame = pacer_.frame();
   if (surface != nullptr) {
     scene_.width = width_;
     scene_.height = height_;
@@ -425,10 +444,43 @@ void App::RenderFrame() noexcept {
   }
 
   eglSwapBuffers(egl_.display, egl_.surface);
-  ++scene_.frame;
+  pacer_.Advance();
+}
+
+// Renders a bounded number of frames back-to-back without waiting on compositor
+// frame callbacks (swap interval is 0 in this mode), so the run completes even
+// when the surface is never presented.
+bool App::RunSelfPaced() {
+  std::printf("skia-egl-canvas: self-paced run%s\n",
+              pacer_.benchmarking() ? " (benchmark)" : "");
+  while (running_ && g_running && !pacer_.reached_limit()) {
+    const double t0 = NowMs();
+    RenderFrame();
+    // Time only render + swap; the roundtrip is compositor latency, excluded.
+    const double render_ms = NowMs() - t0;
+    if (!wl::RoundtripWithTimeout(display_.Get())) {
+      std::fprintf(stderr, "skia-egl-canvas: roundtrip failed\n");
+      return false;
+    }
+    pacer_.RecordFrameMs(render_ms);
+  }
+  if (pacer_.benchmarking())
+    PrintBenchmark();
+  return true;
+}
+
+void App::PrintBenchmark() const noexcept {
+  std::printf(
+      "skia-egl-canvas: %zu frames  mean=%.3f ms  p50=%.3f  p95=%.3f  "
+      "p99=%.3f\n",
+      pacer_.sample_count(), pacer_.Mean(), pacer_.Percentile(50),
+      pacer_.Percentile(95), pacer_.Percentile(99));
 }
 
 bool App::MainLoop() {
+  if (pacer_.self_paced())
+    return RunSelfPaced();
+
   std::printf("skia-egl-canvas: press ESC or Ctrl-C to quit\n");
   RequestFrameCallback();
   RenderFrame();
@@ -481,9 +533,71 @@ void App::OnKey(const wl::KeyEvent& ev) {
 
 }  // namespace
 
-int main() {
+namespace {
+
+void PrintUsage() {
+  std::printf(
+      "usage: skia_egl_canvas [--frames N] [--exit] [--fixed-dt]\n"
+      "                       [--benchmark N]\n"
+      "  --frames N     render at most N frames\n"
+      "  --exit         quit once the frame limit is reached\n"
+      "  --fixed-dt     deterministic 60 Hz animation clock\n"
+      "  --benchmark N  render N frames self-paced and print frame-time "
+      "stats\n");
+}
+
+[[nodiscard]] bool ParseArgs(const std::vector<std::string_view>& args,
+                             demo::PacerConfig& cfg) {
+  // Parses the next argument as a positive frame count.  Rejecting <= 0 (and
+  // absurdly large values) keeps a bounded, self-paced run from looping
+  // forever.
+  constexpr long kMaxFrames = 1'000'000;
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    const std::string_view a = args[i];
+    const auto next_int = [&](int& out) {
+      if (i + 1 >= args.size())
+        return false;
+      const std::string s(args[i + 1]);
+      char* end = nullptr;
+      const long value = std::strtol(s.c_str(), &end, 10);
+      if (end == s.c_str() || value < 1 || value > kMaxFrames)
+        return false;
+      out = static_cast<int>(value);
+      ++i;
+      return true;
+    };
+    if (a == "--frames") {
+      if (!next_int(cfg.max_frames))
+        return false;
+    } else if (a == "--exit") {
+      cfg.exit_on_limit = true;
+    } else if (a == "--fixed-dt") {
+      cfg.fixed_dt = true;
+    } else if (a == "--benchmark") {
+      if (!next_int(cfg.max_frames))
+        return false;
+      cfg.benchmark = true;
+      cfg.exit_on_limit = true;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
   std::signal(SIGPIPE, SIG_IGN);
   std::signal(SIGINT, OnSigint);
-  App app;
+
+  const std::vector<std::string_view> args(argv, std::next(argv, argc));
+  demo::PacerConfig cfg;
+  if (!ParseArgs(args, cfg)) {
+    PrintUsage();
+    return EXIT_FAILURE;
+  }
+
+  App app(cfg);
   return app.Run();
 }
