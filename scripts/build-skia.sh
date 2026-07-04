@@ -125,6 +125,18 @@ mkdir -p "$PREFIX/lib"
 
 # Header trees, preserving the layout Skia's own #includes expect.
 cp -a "$SRC_DIR/include" "$PREFIX/"
+
+# Public module headers (SkUnicode, SkParagraph, ...) reference private headers
+# under src/ as "src/base/SkUTF.h" and similar, so ship the src/ header tree
+# (headers only) rooted at the prefix.
+if command -v rsync >/dev/null 2>&1; then
+    rsync -am --include='*/' --include='*.h' --exclude='*' \
+        "$SRC_DIR/src/" "$PREFIX/src/"
+else
+    ( cd "$SRC_DIR" && find src -name '*.h' -print0 \
+        | cpio -0 -pdm --quiet "$PREFIX" )
+fi
+
 mkdir -p "$PREFIX/modules"
 for m in skparagraph skshaper skunicode; do
     if [ -d "$SRC_DIR/modules/$m/include" ]; then
