@@ -52,6 +52,20 @@ System dev packages are required for the raster + text path (Fedora names):
 `freetype-devel fontconfig-devel zlib-devel`, plus `wayland-devel
 wayland-protocols-devel libxkbcommon-devel` for the example itself.
 
+The text card's color-emoji and Arabic (RTL) runs need runtime font packages
+that ship those glyphs; without them those runs render as blank tofu boxes
+while the Latin text is unaffected. Install the color-emoji font (the color 🚀)
+and an Arabic font (مرحبا):
+
+- Fedora: `google-noto-emoji-color-fonts google-noto-sans-arabic-fonts`
+- Ubuntu/Debian: `fonts-noto-color-emoji fonts-noto-core`
+  (`fonts-noto-core` supplies Noto Sans Arabic)
+
+The scene resolves fonts through the system fontconfig manager, so any
+equivalent color-emoji and Arabic families work; verify coverage with
+`fc-list ':charset=1F680'` and `fc-list ':lang=ar'` (each should list at least
+one font).
+
 ### 2. Configure and build
 
 ```sh
