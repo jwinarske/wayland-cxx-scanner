@@ -50,6 +50,32 @@ namespace {
 constexpr SkScalar kMargin = 16.0F;
 constexpr SkScalar kPanelRadius = 18.0F;
 constexpr SkScalar kButtonRadius = 10.0F;
+constexpr SkScalar kSpinnerRadius = 26.0F;
+constexpr SkScalar kSpinnerStroke = 5.0F;
+
+// Geometry helpers shared by the drawing and the damage reporting so the two
+// never disagree about where a view is.
+SkRect PanelRect(int width, int height) noexcept {
+  return SkRect::MakeLTRB(kMargin, kMargin,
+                          static_cast<SkScalar>(width) - kMargin,
+                          static_cast<SkScalar>(height) - kMargin);
+}
+
+SkRect ButtonRect(const SkRect& panel) noexcept {
+  return SkRect::MakeXYWH(panel.left() + 24.0F, panel.bottom() - 72.0F, 132.0F,
+                          44.0F);
+}
+
+SkPoint SpinnerCenter(const SkRect& panel) noexcept {
+  return {panel.right() - 56.0F, panel.bottom() - 50.0F};
+}
+
+// Bounds of the spinner including its stroke width and round caps.
+SkRect SpinnerBounds(const SkRect& panel) noexcept {
+  const SkPoint c = SpinnerCenter(panel);
+  const SkScalar r = kSpinnerRadius + kSpinnerStroke;
+  return SkRect::MakeLTRB(c.fX - r, c.fY - r, c.fX + r, c.fY + r);
+}
 
 // A rounded-rect panel filling the window inset by the margin, painted with a
 // vertical linear gradient.  Exercises clip + shader together.
@@ -75,9 +101,7 @@ void DrawBackgroundPanel(SkCanvas* canvas, const SkRect& panel) noexcept {
 }
 
 // A state-dependent button in the lower-left of the panel.
-void DrawButton(SkCanvas* canvas, const SkRect& panel, bool active) noexcept {
-  const SkRect rect = SkRect::MakeXYWH(panel.left() + 24.0F,
-                                       panel.bottom() - 72.0F, 132.0F, 44.0F);
+void DrawButton(SkCanvas* canvas, const SkRect& rect, bool active) noexcept {
   SkPaint paint;
   paint.setAntiAlias(true);
   paint.setColor(active ? SkColorSetRGB(0x4C, 0x9A, 0xFF)
@@ -167,13 +191,12 @@ void DrawTextCard(SkCanvas* canvas, const SkRect& panel) noexcept {
 void DrawSpinner(SkCanvas* canvas,
                  const SkRect& panel,
                  std::uint32_t frame) noexcept {
-  const SkPoint center = {panel.right() - 56.0F, panel.bottom() - 50.0F};
-  constexpr SkScalar kRadius = 26.0F;
+  const SkPoint center = SpinnerCenter(panel);
 
   SkPaint paint;
   paint.setAntiAlias(true);
   paint.setStyle(SkPaint::kStroke_Style);
-  paint.setStrokeWidth(5.0F);
+  paint.setStrokeWidth(kSpinnerStroke);
   paint.setStrokeCap(SkPaint::kRound_Cap);
   paint.setColor(SkColorSetRGB(0xF2, 0xC4, 0x4C));
 
@@ -189,8 +212,9 @@ void DrawSpinner(SkCanvas* canvas,
   canvas->save();
   canvas->rotate(angle, center.x(), center.y());
   SkPathBuilder builder;
-  builder.addArc(SkRect::MakeLTRB(center.x() - kRadius, center.y() - kRadius,
-                                  center.x() + kRadius, center.y() + kRadius),
+  builder.addArc(SkRect::MakeLTRB(
+                     center.x() - kSpinnerRadius, center.y() - kSpinnerRadius,
+                     center.x() + kSpinnerRadius, center.y() + kSpinnerRadius),
                  0.0F, 300.0F);
   canvas->drawPath(builder.detach(), paint);
   canvas->restore();
@@ -200,22 +224,25 @@ void DrawSpinner(SkCanvas* canvas,
 
 void DemoScene::Render(SkCanvas* canvas,
                        const SceneState& state,
-                       SkIRect* out_damage) noexcept {
+                       std::vector<SkIRect>* out_damage) noexcept {
   canvas->clear(SkColorSetRGB(0x12, 0x14, 0x18));
 
-  const SkRect panel = SkRect::MakeLTRB(
-      kMargin, kMargin, static_cast<SkScalar>(state.width) - kMargin,
-      static_cast<SkScalar>(state.height) - kMargin);
+  const SkRect panel = PanelRect(state.width, state.height);
+  const SkRect button = ButtonRect(panel);
 
   DrawBackgroundPanel(canvas, panel);
   DrawTextCard(canvas, panel);
-  DrawButton(canvas, panel, state.button_active);
+  DrawButton(canvas, button, state.button_active);
   DrawSpinner(canvas, panel, state.frame);
 
   if (out_damage != nullptr) {
-    // Full-scene damage for now; refined to the union of changed views once
-    // dirty-rect tracking is wired through the view tree.
-    *out_damage = SkIRect::MakeWH(state.width, state.height);
+    // The whole scene is redrawn every frame, so the reported damage is the
+    // difference between consecutive frames: the animated spinner always, plus
+    // the button on the frame its state changed.
+    out_damage->clear();
+    out_damage->push_back(SpinnerBounds(panel).roundOut());
+    if (state.button_dirty)
+      out_damage->push_back(button.roundOut());
   }
 }
 
