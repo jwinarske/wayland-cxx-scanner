@@ -185,6 +185,8 @@ if (NOT WAYLAND_CXX_SCANNER_TOOL_ONLY)
         include/wl/xdg_decoration.hpp
         include/wl/keyboard.hpp
         include/wl/pointer.hpp
+        include/wl/present_feedback.hpp
+        include/wl/presentation.hpp
         include/wl/seat.hpp
         include/wl/touch.hpp
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/wl)

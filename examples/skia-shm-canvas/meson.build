@@ -20,6 +20,7 @@ wayland_xml           = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml
 xdg_shell_xml         = wp_datadir / 'stable/xdg-shell/xdg-shell.xml'
 viewporter_xml        = wp_datadir / 'stable/viewporter/viewporter.xml'
 fractional_scale_xml  = wp_datadir / 'staging/fractional-scale/fractional-scale-v1.xml'
+presentation_time_xml = wp_datadir / 'stable/presentation-time/presentation-time.xml'
 
 # ── Generate C++ client headers from protocol XMLs ────────────────────────────
 #
@@ -57,6 +58,14 @@ fractional_scale_client_hdr = custom_target(
               '@INPUT@', '@OUTPUT@'],
 )
 
+presentation_time_client_hdr = custom_target(
+    'skia-shm-canvas-presentation-time-client-header',
+    input:   presentation_time_xml,
+    output:  'presentation_time_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
+)
+
 # ── Include paths ─────────────────────────────────────────────────────────────
 
 framework_inc = include_directories('../../include')
@@ -72,6 +81,7 @@ executable(
         xdg_shell_client_hdr,
         viewporter_client_hdr,
         fractional_scale_client_hdr,
+        presentation_time_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
     dependencies: [

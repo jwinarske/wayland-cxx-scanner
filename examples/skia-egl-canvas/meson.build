@@ -19,8 +19,9 @@ endif
 
 # ── Locate system protocol XMLs ───────────────────────────────────────────────
 
-wayland_xml   = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
-xdg_shell_xml = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+wayland_xml           = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
+xdg_shell_xml         = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+presentation_time_xml = wp_dep.get_variable('pkgdatadir') / 'stable/presentation-time/presentation-time.xml'
 
 # ── Generate C++ client headers from protocol XMLs ────────────────────────────
 
@@ -38,6 +39,16 @@ xdg_shell_client_hdr = custom_target(
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
 )
 
+# Extension protocol → generated with --emit-interface-tables so it defines its
+# own wl_interface tables and wl_iface() (presentation-time is not in libwayland).
+presentation_time_client_hdr = custom_target(
+    'skia-egl-canvas-presentation-time-client-header',
+    input:   presentation_time_xml,
+    output:  'presentation_time_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
+)
+
 # ── Include paths ─────────────────────────────────────────────────────────────
 
 framework_inc = include_directories('../../include')
@@ -51,6 +62,7 @@ executable(
         'main.cpp',
         wayland_client_hdr,
         xdg_shell_client_hdr,
+        presentation_time_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
     dependencies: [
