@@ -31,6 +31,7 @@ can be shared by future GL and Vulkan variants for direct comparison.
 | `Esc` / window close | quit |
 | `Space` | toggle the button-active scene state |
 | left-click | toggle the button when clicked on it (via the view tree's hit test) |
+| touch tap | toggle the button when tapped (multi-touch tracked, up to 10 contacts) |
 
 ## Build
 

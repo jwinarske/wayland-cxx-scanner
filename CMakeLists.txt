@@ -186,6 +186,7 @@ if (NOT WAYLAND_CXX_SCANNER_TOOL_ONLY)
         include/wl/keyboard.hpp
         include/wl/pointer.hpp
         include/wl/seat.hpp
+        include/wl/touch.hpp
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/wl)
     install(FILES
         include/wl/ime/text_input_receiver.hpp

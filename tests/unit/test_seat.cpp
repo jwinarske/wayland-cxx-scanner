@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdlib>  // free
 #include <cstring>  // strlen, memcpy
+#include <vector>
 
 // ── Minimal App stubs
 // ─────────────────────────────────────────────────────────
@@ -41,6 +42,31 @@ struct FakePointerApp {
     ++button_count;
   }
   void OnPointerLeave() { left = true; }
+};
+
+// App with the full set of touch hooks.
+struct FakeTouchApp {
+  int downs = 0;
+  int ups = 0;
+  int motions = 0;
+  int cancels = 0;
+  wl::TouchPoint last_down{};
+  std::int32_t last_up = -99;
+  std::vector<wl::TouchPoint> last_frame;
+
+  void OnTouchDown(const wl::TouchPoint& p) {
+    last_down = p;
+    ++downs;
+  }
+  void OnTouchMotion(const wl::TouchPoint&) { ++motions; }
+  void OnTouchUp(std::int32_t id) {
+    last_up = id;
+    ++ups;
+  }
+  void OnTouchFrame(wl::span<const wl::TouchPoint> pts) {
+    last_frame.assign(pts.begin(), pts.end());
+  }
+  void OnTouchCancel() { ++cancels; }
 };
 
 // Minimal App: implements only the required OnKey(const wl::KeyEvent&) sink.
@@ -311,5 +337,101 @@ TEST(PointerHandler, WantsPointerDetectsHooks) {
                 "App with pointer hooks should be detected");
   static_assert(!wl::detail::WantsPointer<FakeSeatApp>,
                 "keyboard-only App must not request a pointer");
+  SUCCEED();
+}
+
+// ── TouchHandler tests ───────────────────────────────────────────────────────
+
+namespace {
+// wl_fixed_t is 24.8 fixed point.
+wl_fixed_t Fixed(double v) {
+  return static_cast<wl_fixed_t>(v * 256.0);
+}
+}  // namespace
+
+TEST(TouchHandler, TracksTenConcurrentContacts) {
+  wl::TouchHandler<FakeTouchApp> t;
+  FakeTouchApp app;
+  t.app_ = &app;
+
+  for (std::int32_t i = 0; i < 10; ++i)
+    t.OnDown(1u, 0u, nullptr, i, Fixed(i), Fixed(i * 2));
+
+  EXPECT_EQ(app.downs, 10);
+  EXPECT_EQ(t.active().size(), 10u);
+
+  t.OnFrame();
+  ASSERT_EQ(app.last_frame.size(), 10u);
+  EXPECT_EQ(app.last_frame[3].id, 3);
+  EXPECT_DOUBLE_EQ(app.last_frame[3].x, 3.0);
+  EXPECT_DOUBLE_EQ(app.last_frame[3].y, 6.0);
+}
+
+TEST(TouchHandler, MotionUpdatesAndUpCompacts) {
+  wl::TouchHandler<FakeTouchApp> t;
+  FakeTouchApp app;
+  t.app_ = &app;
+
+  t.OnDown(1u, 0u, nullptr, 5, Fixed(1), Fixed(1));
+  t.OnDown(1u, 0u, nullptr, 7, Fixed(2), Fixed(2));
+  t.OnMotion(0u, 5, Fixed(9), Fixed(9));
+  EXPECT_EQ(app.motions, 1);
+
+  double x5 = -1.0;
+  for (const wl::TouchPoint& p : t.active()) {
+    if (p.id == 5)
+      x5 = p.x;
+  }
+  EXPECT_DOUBLE_EQ(x5, 9.0);
+
+  // Lifting id 5 swap-removes it, leaving id 7 as the sole compact entry.
+  t.OnUp(1u, 0u, 5);
+  EXPECT_EQ(app.last_up, 5);
+  ASSERT_EQ(t.active().size(), 1u);
+  EXPECT_EQ(t.active()[0].id, 7);
+}
+
+TEST(TouchHandler, OverCapacityContactIsDropped) {
+  wl::TouchHandler<FakeTouchApp> t;
+  FakeTouchApp app;
+  t.app_ = &app;
+
+  for (std::int32_t i = 0; i < 12; ++i)
+    t.OnDown(1u, 0u, nullptr, i, Fixed(i), Fixed(i));
+
+  EXPECT_EQ(t.active().size(), wl::TouchHandler<FakeTouchApp>::kMaxPoints);
+  EXPECT_EQ(app.downs, 10);  // only kMaxPoints accepted; extras ignored
+}
+
+TEST(TouchHandler, CancelClearsAll) {
+  wl::TouchHandler<FakeTouchApp> t;
+  FakeTouchApp app;
+  t.app_ = &app;
+
+  t.OnDown(1u, 0u, nullptr, 1, Fixed(1), Fixed(1));
+  t.OnDown(1u, 0u, nullptr, 2, Fixed(2), Fixed(2));
+  t.OnCancel();
+  EXPECT_EQ(app.cancels, 1);
+  EXPECT_TRUE(t.active().empty());
+}
+
+TEST(TouchHandler, NullAppTracksWithoutCrash) {
+  wl::TouchHandler<FakeTouchApp> t;  // app_ left null
+  t.OnDown(1u, 0u, nullptr, 0, Fixed(4), Fixed(4));
+  EXPECT_EQ(t.active().size(), 1u);
+  t.OnMotion(0u, 0, Fixed(5), Fixed(5));
+  t.OnUp(1u, 0u, 0);
+  t.OnFrame();
+  t.OnCancel();
+  EXPECT_TRUE(t.active().empty());
+}
+
+TEST(TouchHandler, WantsTouchDetectsHooks) {
+  static_assert(wl::detail::WantsTouch<FakeTouchApp>,
+                "App with touch hooks should be detected");
+  static_assert(!wl::detail::WantsTouch<FakeSeatApp>,
+                "keyboard-only App must not request touch");
+  static_assert(!wl::detail::WantsTouch<FakePointerApp>,
+                "pointer-only App must not request touch");
   SUCCEED();
 }
