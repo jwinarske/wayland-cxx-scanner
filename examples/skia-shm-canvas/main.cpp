@@ -36,6 +36,7 @@
 #include "frame_pacer.hpp"
 #include "scale.hpp"
 #include "scene.hpp"
+#include "view_tree.hpp"
 
 // ── Skia
 // ──────────────────────────────────────────────────────────────────────
@@ -305,7 +306,14 @@ bool BufferPool::Create(const int w, const int h, WlShmHandler& shm) noexcept {
 
 class App {
  public:
-  explicit App(demo::PacerConfig pacer_cfg) noexcept : pacer_(pacer_cfg) {}
+  explicit App(demo::PacerConfig pacer_cfg) : pacer_(pacer_cfg) {
+    // Views are the only damage sources, so the per-frame damage lists never
+    // exceed the view count.  Reserve once so steady-state frames allocate
+    // nothing.
+    const auto max_rects = static_cast<std::size_t>(demo::View::kCount);
+    damage_logical_.reserve(max_rects);
+    damage_buffer_.reserve(max_rects);
+  }
 
   int Run();
 
@@ -391,7 +399,8 @@ class App {
 
   demo::SceneState scene_;
   demo::FramePacer pacer_;
-  std::vector<SkIRect> damage_logical_;  // scene's dirty rects, logical px
+  demo::ViewTree view_tree_;
+  std::vector<SkIRect> damage_logical_;  // dirty view rects, logical px
   std::vector<SkIRect> damage_buffer_;   // mapped to buffer px for submission
 };
 
@@ -643,9 +652,7 @@ void App::RenderFrame(int idx) noexcept {
   SkCanvas* canvas = surface->getCanvas();
   canvas->scale(canvas_scale, canvas_scale);
 
-  scene_.width = width_;
-  scene_.height = height_;
-  demo::DemoScene::Render(canvas, scene_, &damage_logical_);
+  demo::DemoScene::Render(canvas, scene_, view_tree_);
 }
 
 void App::CommitFrame(bool arm_callback) noexcept {
@@ -661,6 +668,10 @@ void App::CommitFrame(bool arm_callback) noexcept {
   }
 
   scene_.frame = pacer_.frame();
+  // Lay out the views for the current logical size and mark the animated
+  // spinner dirty; the button is marked dirty by input.
+  view_tree_.Layout(width_, height_);
+  view_tree_.MarkDirty(demo::View::kSpinner);
   RenderFrame(idx);
 
   auto& buf = *pool_.bufs.at(static_cast<std::size_t>(idx)).Get();
@@ -671,6 +682,8 @@ void App::CommitFrame(bool arm_callback) noexcept {
     surface->DamageBuffer(0, 0, pool_.width, pool_.height);
     geometry_dirty_ = false;
   } else {
+    damage_logical_.clear();
+    view_tree_.CollectDamage(damage_logical_);
     SubmitDamage();
   }
   if (arm_callback)
@@ -678,7 +691,7 @@ void App::CommitFrame(bool arm_callback) noexcept {
   surface->Commit();
   buf.busy = true;
   frame_pending_ = arm_callback;
-  scene_.button_dirty = false;
+  view_tree_.ClearDirty();
   pacer_.Advance();
 }
 
@@ -760,7 +773,7 @@ void App::OnKey(const wl::KeyEvent& ev) {
     running_ = false;
   } else if (ev.key == KEY_SPACE) {
     scene_.button_active = !scene_.button_active;
-    scene_.button_dirty = true;
+    view_tree_.MarkDirty(demo::View::kButton);
   }
 }
 

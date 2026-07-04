@@ -12,6 +12,8 @@
 
 #include "scene.hpp"
 
+#include "view_tree.hpp"
+
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
 #include "include/core/SkFontMgr.h"
@@ -48,35 +50,9 @@ namespace demo {
 
 namespace {
 
-constexpr SkScalar kMargin = 16.0F;
 constexpr SkScalar kPanelRadius = 18.0F;
 constexpr SkScalar kButtonRadius = 10.0F;
-constexpr SkScalar kSpinnerRadius = 26.0F;
 constexpr SkScalar kSpinnerStroke = 5.0F;
-
-// Geometry helpers shared by the drawing and the damage reporting so the two
-// never disagree about where a view is.
-SkRect PanelRect(int width, int height) noexcept {
-  return SkRect::MakeLTRB(kMargin, kMargin,
-                          static_cast<SkScalar>(width) - kMargin,
-                          static_cast<SkScalar>(height) - kMargin);
-}
-
-SkRect ButtonRect(const SkRect& panel) noexcept {
-  return SkRect::MakeXYWH(panel.left() + 24.0F, panel.bottom() - 72.0F, 132.0F,
-                          44.0F);
-}
-
-SkPoint SpinnerCenter(const SkRect& panel) noexcept {
-  return {panel.right() - 56.0F, panel.bottom() - 50.0F};
-}
-
-// Bounds of the spinner including its stroke width and round caps.
-SkRect SpinnerBounds(const SkRect& panel) noexcept {
-  const SkPoint c = SpinnerCenter(panel);
-  const SkScalar r = kSpinnerRadius + kSpinnerStroke;
-  return SkRect::MakeLTRB(c.fX - r, c.fY - r, c.fX + r, c.fY + r);
-}
 
 // A rounded-rect panel filling the window inset by the margin, painted with a
 // vertical linear gradient.  Exercises clip + shader together.
@@ -120,12 +96,9 @@ void DrawButton(SkCanvas* canvas, const SkRect& rect, bool active) noexcept {
 // reproducible across machines; `with_text` lets golden-image tests draw just
 // the (deterministic) card panel.
 void DrawTextCard(SkCanvas* canvas,
-                  const SkRect& panel,
+                  const SkRect& rect,
                   bool with_text) noexcept {
   namespace para = skia::textlayout;
-
-  const SkRect rect = SkRect::MakeXYWH(
-      panel.left() + 24.0F, panel.top() + 24.0F, panel.width() - 48.0F, 96.0F);
 
   SkPaint bg;
   bg.setAntiAlias(true);
@@ -197,11 +170,15 @@ void DrawTextCard(SkCanvas* canvas,
   paragraph->paint(canvas, rect.left() + 12.0F, rect.top() + 12.0F);
 }
 
-// A rotating dashed-stroke arc — the classic path-effect corner case.
+// A rotating dashed-stroke arc — the classic path-effect corner case.  The arc
+// fits inside `bounds` (which includes the stroke padding, so the radius backs
+// the stroke width out).
 void DrawSpinner(SkCanvas* canvas,
-                 const SkRect& panel,
+                 const SkRect& bounds,
                  std::uint32_t frame) noexcept {
-  const SkPoint center = SpinnerCenter(panel);
+  const SkScalar cx = bounds.centerX();
+  const SkScalar cy = bounds.centerY();
+  const SkScalar radius = bounds.width() * 0.5F - kSpinnerStroke;
 
   SkPaint paint;
   paint.setAntiAlias(true);
@@ -220,12 +197,11 @@ void DrawSpinner(SkCanvas* canvas,
       static_cast<SkScalar>(frame % 120u) * (360.0F / 120.0F);
 
   canvas->save();
-  canvas->rotate(angle, center.x(), center.y());
+  canvas->rotate(angle, cx, cy);
   SkPathBuilder builder;
-  builder.addArc(SkRect::MakeLTRB(
-                     center.x() - kSpinnerRadius, center.y() - kSpinnerRadius,
-                     center.x() + kSpinnerRadius, center.y() + kSpinnerRadius),
-                 0.0F, 300.0F);
+  builder.addArc(
+      SkRect::MakeLTRB(cx - radius, cy - radius, cx + radius, cy + radius),
+      0.0F, 300.0F);
   canvas->drawPath(builder.detach(), paint);
   canvas->restore();
 }
@@ -234,26 +210,13 @@ void DrawSpinner(SkCanvas* canvas,
 
 void DemoScene::Render(SkCanvas* canvas,
                        const SceneState& state,
-                       std::vector<SkIRect>* out_damage) noexcept {
+                       const ViewTree& views) noexcept {
   canvas->clear(SkColorSetRGB(0x12, 0x14, 0x18));
 
-  const SkRect panel = PanelRect(state.width, state.height);
-  const SkRect button = ButtonRect(panel);
-
-  DrawBackgroundPanel(canvas, panel);
-  DrawTextCard(canvas, panel, state.draw_text);
-  DrawButton(canvas, button, state.button_active);
-  DrawSpinner(canvas, panel, state.frame);
-
-  if (out_damage != nullptr) {
-    // The whole scene is redrawn every frame, so the reported damage is the
-    // difference between consecutive frames: the animated spinner always, plus
-    // the button on the frame its state changed.
-    out_damage->clear();
-    out_damage->push_back(SpinnerBounds(panel).roundOut());
-    if (state.button_dirty)
-      out_damage->push_back(button.roundOut());
-  }
+  DrawBackgroundPanel(canvas, views.Panel());
+  DrawTextCard(canvas, views.Bounds(View::kCard), state.draw_text);
+  DrawButton(canvas, views.Bounds(View::kButton), state.button_active);
+  DrawSpinner(canvas, views.Bounds(View::kSpinner), state.frame);
 }
 
 }  // namespace demo

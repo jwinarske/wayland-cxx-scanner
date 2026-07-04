@@ -46,6 +46,7 @@ extern "C" {
 // ────────────────────────────────────────────────────
 #include "frame_pacer.hpp"
 #include "scene.hpp"
+#include "view_tree.hpp"
 
 // ── Skia (Ganesh GL)
 // ──────────────────────────────────────────────────────────
@@ -205,6 +206,7 @@ class App {
 
   demo::SceneState scene_;
   demo::FramePacer pacer_;
+  demo::ViewTree view_tree_;
 };
 
 void WlCallbackHandler::OnDone(std::uint32_t time_ms) {
@@ -437,9 +439,8 @@ void App::RenderFrame() noexcept {
       kRGBA_8888_SkColorType, nullptr, nullptr);
   scene_.frame = pacer_.frame();
   if (surface != nullptr) {
-    scene_.width = width_;
-    scene_.height = height_;
-    demo::DemoScene::Render(surface->getCanvas(), scene_, nullptr);
+    view_tree_.Layout(width_, height_);
+    demo::DemoScene::Render(surface->getCanvas(), scene_, view_tree_);
     gr_context_->flushAndSubmit();
   }
 

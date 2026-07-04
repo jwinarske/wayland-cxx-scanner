@@ -12,6 +12,7 @@
 //   golden_check <golden.png>
 
 #include "scene.hpp"
+#include "view_tree.hpp"
 
 #include "include/codec/SkCodec.h"
 #include "include/codec/SkPngDecoder.h"
@@ -48,10 +49,10 @@ void RenderShapes(SkBitmap& out) {
   out.allocN32Pixels(kWidth, kHeight);
   SkCanvas canvas(out);
   demo::SceneState state;
-  state.width = kWidth;
-  state.height = kHeight;
   state.draw_text = false;
-  demo::DemoScene::Render(&canvas, state, nullptr);
+  demo::ViewTree views;
+  views.Layout(kWidth, kHeight);
+  demo::DemoScene::Render(&canvas, state, views);
 }
 
 bool WritePng(const SkBitmap& bmp, const std::string& path) {
