@@ -15,8 +15,10 @@
 //   SPACE                toggles the button-active scene state
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
-#include "wayland_client.hpp"    // namespace wayland::client
-#include "xdg_shell_client.hpp"  // namespace xdg_shell::client
+#include "fractional_scale_client.hpp"  // namespace fractional_scale_v1::client
+#include "viewporter_client.hpp"        // namespace viewporter::client
+#include "wayland_client.hpp"           // namespace wayland::client
+#include "xdg_shell_client.hpp"         // namespace xdg_shell::client
 
 // ── Framework headers
 // ─────────────────────────────────────────────────────────
@@ -28,8 +30,10 @@
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
 
-// ── Shared scene
-// ──────────────────────────────────────────────────────────────
+// ── Shared scene + policy helpers
+// ─────────────────────────────────────────────
+#include "damage.hpp"
+#include "scale.hpp"
 #include "scene.hpp"
 
 // ── Skia
@@ -38,6 +42,7 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColorType.h"
 #include "include/core/SkImageInfo.h"
+#include "include/core/SkRect.h"
 #include "include/core/SkSurface.h"
 
 // ── System Wayland C headers
@@ -60,6 +65,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
+#include <vector>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces used by this example.
@@ -174,6 +180,28 @@ class WlCallbackHandler
   void OnDone(std::uint32_t time_ms) override;
 };
 
+// wp_viewporter / wp_viewport and the fractional-scale manager have no events;
+// they are held only for their requests.
+class WpViewporterHandler
+    : public viewporter::client::CWpViewporter<WpViewporterHandler> {};
+
+class WpViewportHandler
+    : public viewporter::client::CWpViewport<WpViewportHandler> {};
+
+class WpFractionalScaleManagerHandler
+    : public fractional_scale_v1::client::CWpFractionalScaleManagerV1<
+          WpFractionalScaleManagerHandler> {};
+
+// wp_fractional_scale_v1 delivers the compositor's preferred scale in 1/120
+// units via preferred_scale.
+class WpFractionalScaleHandler
+    : public fractional_scale_v1::client::CWpFractionalScaleV1<
+          WpFractionalScaleHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnPreferredScale(std::uint32_t scale) override;
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // Buffer pool — a fixed number of wl_shm buffers from a single pool, recreated
 // when the surface size changes.  Skia renders directly into the mapping.
@@ -281,11 +309,11 @@ class App {
   void OnToplevelClose() { running_ = false; }
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(std::uint32_t stamp_ms) noexcept;
+  void OnPreferredScale(int scale_120) noexcept;
 
  private:
   static constexpr int kDefaultWidth = 480;
   static constexpr int kDefaultHeight = 320;
-  static constexpr int kRoundtripTimeoutMs = 5000;
 
   bool ConnectDisplay();
   bool ScanGlobals();
@@ -293,10 +321,20 @@ class App {
   bool CreateWindow();
   bool MainLoop();
 
-  bool EnsurePool();
+  // Physical buffer size for the current logical size and scale.
+  [[nodiscard]] demo::BufferSize BufferPx() const noexcept {
+    return demo::ScalePolicy::ToBuffer(width_, height_, scale_120_);
+  }
+  [[nodiscard]] bool CanScale() const noexcept {
+    return viewport_.Get()->GetProxy() != nullptr;
+  }
+
+  bool EnsurePool() noexcept;
   void RenderFrame(int idx) noexcept;
   void CommitFrame() noexcept;
+  void SubmitDamage() noexcept;
   void RequestFrameCallback() noexcept;
+  void ApplyViewport() noexcept;
 
   wl::DisplayHandle display_;
   wl::CRegistry registry_;
@@ -304,11 +342,15 @@ class App {
   wl::WlPtr<WlCompositorHandler> compositor_;
   wl::WlPtr<WlShmHandler> shm_;
   wl::WlPtr<wl::XdgWmBaseHandler> xdg_wm_base_;
+  wl::WlPtr<WpViewporterHandler> viewporter_;
+  wl::WlPtr<WpFractionalScaleManagerHandler> fractional_manager_;
   wl::SeatManager<App> seat_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
+  wl::WlPtr<WpViewportHandler> viewport_;
+  wl::WlPtr<WpFractionalScaleHandler> fractional_scale_;
   wl::WlPtr<WlCallbackHandler> frame_cb_;
 
   BufferPool pool_;
@@ -316,18 +358,30 @@ class App {
   std::uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   std::uint32_t shm_name_ = 0, shm_ver_ = 0;
   std::uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
+  std::uint32_t viewporter_name_ = 0, viewporter_ver_ = 0;
+  std::uint32_t fractional_name_ = 0, fractional_ver_ = 0;
 
   bool running_ = true;
   bool configured_ = false;
   bool frame_pending_ = false;
+  // Set when the buffer size, scale, or viewport destination must be
+  // reapplied; forces a full-surface damage for the next frame.
+  bool geometry_dirty_ = true;
 
   int width_ = kDefaultWidth;
   int height_ = kDefaultHeight;
   int pending_width_ = kDefaultWidth;
   int pending_height_ = kDefaultHeight;
+  int scale_120_ = demo::ScalePolicy::kUnityScale120;
 
   demo::SceneState scene_;
+  std::vector<SkIRect> damage_logical_;  // scene's dirty rects, logical px
+  std::vector<SkIRect> damage_buffer_;   // mapped to buffer px for submission
 };
+
+void WpFractionalScaleHandler::OnPreferredScale(std::uint32_t scale) {
+  app_->OnPreferredScale(static_cast<int>(scale));
+}
 
 void WlCallbackHandler::OnDone(std::uint32_t time_ms) {
   app_->OnFrameDone(time_ms);
@@ -387,6 +441,15 @@ bool App::ScanGlobals() {
     } else if (iface == xdg_wm_base_traits::interface_name) {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
+    } else if (iface ==
+               viewporter::client::wp_viewporter_traits::interface_name) {
+      viewporter_name_ = name;
+      viewporter_ver_ = ver;
+    } else if (iface ==
+               fractional_scale_v1::client::
+                   wp_fractional_scale_manager_v1_traits::interface_name) {
+      fractional_name_ = name;
+      fractional_ver_ = ver;
     } else if (iface == wl_seat_traits::interface_name) {
       seat_.Record(name, ver);
     }
@@ -426,6 +489,23 @@ bool App::BindGlobals() {
           registry_, xdg_wm_base_, xdg_wm_base_name_, xdg_wm_base_ver_)) {
     std::fprintf(stderr, "skia-shm-canvas: xdg_wm_base bind failed\n");
     return false;
+  }
+
+  // wp_viewporter and the fractional-scale manager are optional and have no
+  // events, so bind and attach them like wl_compositor.  Without both, the
+  // client stays at integer scale 1.
+  if (viewporter_name_) {
+    using T = viewporter::client::wp_viewporter_traits;
+    if (wl_proxy* raw = registry_.Bind<T>(
+            viewporter_name_, std::min(viewporter_ver_, T::version)))
+      viewporter_.Attach(raw);
+  }
+  if (fractional_name_) {
+    using T =
+        fractional_scale_v1::client::wp_fractional_scale_manager_v1_traits;
+    if (wl_proxy* raw = registry_.Bind<T>(
+            fractional_name_, std::min(fractional_ver_, T::version)))
+      fractional_manager_.Attach(raw);
   }
 
   if (!seat_.Bind(registry_, this)) {
@@ -483,6 +563,31 @@ bool App::CreateWindow() {
   toplevel->SetTitle("skia-shm-canvas");
   toplevel->SetAppId("org.wayland-cxx.skia-shm-canvas");
 
+  // A viewport lets the surface present a physical-pixel buffer at a logical
+  // destination size; the fractional-scale object reports the preferred scale.
+  // Both are needed for fractional scaling — create them together or not.
+  if (viewporter_.Get()->GetProxy() != nullptr &&
+      fractional_manager_.Get()->GetProxy() != nullptr) {
+    if (wl_proxy* raw = wl::construct<
+            viewporter::client::wp_viewport_traits,
+            viewporter::client::wp_viewporter_traits::Op::GetViewport>(
+            *viewporter_.Get(), surface_.Get()->GetProxy())) {
+      viewport_.Attach(raw);
+    }
+    if (!wl::SetupHandler(
+            fractional_scale_,
+            wl::construct<
+                fractional_scale_v1::client::wp_fractional_scale_v1_traits,
+                fractional_scale_v1::client::
+                    wp_fractional_scale_manager_v1_traits::Op::
+                        GetFractionalScale>(*fractional_manager_.Get(),
+                                            surface_.Get()->GetProxy()))) {
+      std::fprintf(stderr, "skia-shm-canvas: get_fractional_scale failed\n");
+      return false;
+    }
+    fractional_scale_.Get()->app_ = this;
+  }
+
   surface_.Get()->Commit();
   if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "skia-shm-canvas: timed out waiting for configure\n");
@@ -494,18 +599,19 @@ bool App::CreateWindow() {
 // ── Rendering
 // ─────────────────────────────────────────────────────────────────
 
-bool App::EnsurePool() {
-  if (pool_.width == width_ && pool_.height == height_ &&
+bool App::EnsurePool() noexcept {
+  const demo::BufferSize px = BufferPx();
+  if (pool_.width == px.width && pool_.height == px.height &&
       pool_.mem.data != MAP_FAILED)
     return true;
-  return pool_.Create(width_, height_, *shm_.Get());
+  return pool_.Create(px.width, px.height, *shm_.Get());
 }
 
 void App::RenderFrame(int idx) noexcept {
   // wl_shm XRGB8888 is little-endian 0xXXRRGGBB: bytes B,G,R,X in memory, which
   // matches Skia's BGRA_8888 with an opaque alpha channel.
   const SkImageInfo info = SkImageInfo::Make(
-      width_, height_, kBGRA_8888_SkColorType, kOpaque_SkAlphaType);
+      pool_.width, pool_.height, kBGRA_8888_SkColorType, kOpaque_SkAlphaType);
 
   sk_sp<SkSurface> surface =
       SkSurfaces::WrapPixels(info, pool_.PixelData(idx), pool_.Stride());
@@ -514,9 +620,16 @@ void App::RenderFrame(int idx) noexcept {
     return;
   }
 
+  // The buffer is physical pixels; the scene draws in logical units, so scale
+  // the canvas once at the top.  Damage comes back in logical pixels.
+  const auto canvas_scale =
+      static_cast<SkScalar>(demo::ScalePolicy::CanvasScale(scale_120_));
+  SkCanvas* canvas = surface->getCanvas();
+  canvas->scale(canvas_scale, canvas_scale);
+
   scene_.width = width_;
   scene_.height = height_;
-  demo::DemoScene::Render(surface->getCanvas(), scene_, nullptr);
+  demo::DemoScene::Render(canvas, scene_, &damage_logical_);
 }
 
 void App::CommitFrame() noexcept {
@@ -536,12 +649,48 @@ void App::CommitFrame() noexcept {
   auto& buf = *pool_.bufs.at(static_cast<std::size_t>(idx)).Get();
   auto* surface = surface_.Get();
   surface->Attach(buf.GetProxy(), 0, 0);
-  surface->DamageBuffer(0, 0, width_, height_);
+  if (geometry_dirty_) {
+    ApplyViewport();
+    surface->DamageBuffer(0, 0, pool_.width, pool_.height);
+    geometry_dirty_ = false;
+  } else {
+    SubmitDamage();
+  }
   RequestFrameCallback();
   surface->Commit();
   buf.busy = true;
   frame_pending_ = true;
+  scene_.button_dirty = false;
   ++scene_.frame;
+}
+
+// Maps the scene's logical dirty rects to buffer pixels and emits one
+// damage_buffer per rect, clamped to the buffer and coalesced.
+void App::SubmitDamage() noexcept {
+  const auto scale =
+      static_cast<float>(demo::ScalePolicy::CanvasScale(scale_120_));
+
+  damage_buffer_.clear();
+  damage_buffer_.reserve(damage_logical_.size());
+  for (const SkIRect& r : damage_logical_) {
+    const SkRect scaled = SkRect::MakeLTRB(
+        static_cast<float>(r.fLeft) * scale, static_cast<float>(r.fTop) * scale,
+        static_cast<float>(r.fRight) * scale,
+        static_cast<float>(r.fBottom) * scale);
+    damage_buffer_.push_back(scaled.roundOut());
+  }
+
+  demo::ClampToBounds(damage_buffer_,
+                      SkIRect::MakeWH(pool_.width, pool_.height));
+  demo::Coalesce(damage_buffer_);
+
+  for (const SkIRect& r : damage_buffer_)
+    surface_.Get()->DamageBuffer(r.fLeft, r.fTop, r.width(), r.height());
+}
+
+void App::ApplyViewport() noexcept {
+  if (viewport_.Get()->GetProxy() != nullptr)
+    viewport_.Get()->SetDestination(width_, height_);
 }
 
 void App::RequestFrameCallback() noexcept {
@@ -564,6 +713,8 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) noexcept {
 
 void App::OnXdgSurfaceConfigure(std::uint32_t /*serial*/) {
   // XdgSurfaceHandler acks the configure for us; apply the negotiated size.
+  if (pending_width_ != width_ || pending_height_ != height_)
+    geometry_dirty_ = true;
   width_ = pending_width_;
   height_ = pending_height_;
   configured_ = true;
@@ -571,13 +722,26 @@ void App::OnXdgSurfaceConfigure(std::uint32_t /*serial*/) {
     CommitFrame();
 }
 
+void App::OnPreferredScale(int scale_120) noexcept {
+  // Only honor fractional scale when a viewport is available to present the
+  // physical buffer at the logical size.
+  if (!CanScale() || scale_120 <= 0 || scale_120 == scale_120_)
+    return;
+  scale_120_ = scale_120;
+  geometry_dirty_ = true;
+  if (!frame_pending_ && configured_)
+    CommitFrame();
+}
+
 void App::OnKey(const wl::KeyEvent& ev) {
   if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED)
     return;
-  if (ev.key == KEY_ESC)
+  if (ev.key == KEY_ESC) {
     running_ = false;
-  else if (ev.key == KEY_SPACE)
+  } else if (ev.key == KEY_SPACE) {
     scene_.button_active = !scene_.button_active;
+    scene_.button_dirty = true;
+  }
 }
 
 void App::OnFrameDone(std::uint32_t /*stamp_ms*/) noexcept {

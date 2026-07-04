@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 class SkCanvas;
 struct SkIRect;
@@ -23,16 +24,19 @@ struct SceneState {
   int height = 0;              // logical height in pixels
   std::uint32_t frame = 0;     // monotone frame counter; drives animation
   bool button_active = false;  // true while the button is held
+  bool button_dirty = false;   // button changed since the last rendered frame
 };
 
 class DemoScene {
  public:
   // Draws the scene into `canvas` in logical coordinates.  When `out_damage`
-  // is non-null it receives the logical-pixel bounds that changed this frame;
-  // the caller maps that to buffer pixels and to wl_surface.damage_buffer.
+  // is non-null it is cleared and filled with the logical-pixel rectangles
+  // that changed this frame (the animated spinner every frame, plus the button
+  // when it toggled).  The caller maps these to buffer pixels and to
+  // wl_surface.damage_buffer.
   static void Render(SkCanvas* canvas,
                      const SceneState& state,
-                     SkIRect* out_damage) noexcept;
+                     std::vector<SkIRect>* out_damage) noexcept;
 };
 
 }  // namespace demo
