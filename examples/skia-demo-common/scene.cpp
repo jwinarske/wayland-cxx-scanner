@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// DemoScene implementation.  Core Skia only (no module dependencies yet): the
-// rich text card built on SkParagraph and the bundled deterministic fonts land
-// together with the golden-image harness.  What is here already exercises the
-// paths that matter for the raster backend: rounded-rect clipping, a gradient
-// shader, and a dashed-arc path effect.
+// DemoScene implementation.  Exercises the paths that matter for the raster
+// backend: rounded-rect clipping, a gradient shader, a dashed-arc path effect,
+// and a mixed-script text card laid out with SkParagraph.
+//
+// The text card resolves fonts through the system fontconfig manager for now;
+// a bundled, deterministic font set will replace it when byte-exact golden
+// images are required.
 
 #include "scene.hpp"
 
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColor.h"
+#include "include/core/SkFontMgr.h"
+#include "include/core/SkFontStyle.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
 #include "include/core/SkPathBuilder.h"
@@ -18,14 +22,26 @@
 #include "include/core/SkPoint.h"
 #include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
+#include "include/core/SkRefCnt.h"
 #include "include/core/SkScalar.h"
 #include "include/core/SkShader.h"
 #include "include/core/SkSpan.h"
+#include "include/core/SkString.h"
 #include "include/core/SkTileMode.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradient.h"
+#include "include/ports/SkFontMgr_fontconfig.h"
+#include "include/ports/SkFontScanner_FreeType.h"
+#include "modules/skparagraph/include/FontCollection.h"
+#include "modules/skparagraph/include/Paragraph.h"
+#include "modules/skparagraph/include/ParagraphBuilder.h"
+#include "modules/skparagraph/include/ParagraphStyle.h"
+#include "modules/skparagraph/include/TextStyle.h"
+#include "modules/skunicode/include/SkUnicode.h"
+#include "modules/skunicode/include/SkUnicode_icu.h"
 
 #include <array>
+#include <vector>
 
 namespace demo {
 
@@ -70,16 +86,81 @@ void DrawButton(SkCanvas* canvas, const SkRect& panel, bool active) noexcept {
                     paint);
 }
 
-// Placeholder for the text card.  Replaced by an SkParagraph-rendered card
-// (mixed-weight runs, emoji, an RTL span) when the deterministic font stack
-// and golden harness are introduced.
+// A text card laid out with SkParagraph: mixed-weight runs, a color-emoji
+// fallback, and an RTL span, over a translucent rounded panel.  This is the
+// primary reason Skia's text stack (SkParagraph / SkShaper / SkUnicode) is
+// exercised here.
 void DrawTextCard(SkCanvas* canvas, const SkRect& panel) noexcept {
+  namespace para = skia::textlayout;
+
   const SkRect rect = SkRect::MakeXYWH(
       panel.left() + 24.0F, panel.top() + 24.0F, panel.width() - 48.0F, 96.0F);
-  SkPaint paint;
-  paint.setAntiAlias(true);
-  paint.setColor(SkColorSetARGB(0x22, 0xFF, 0xFF, 0xFF));
-  canvas->drawRRect(SkRRect::MakeRectXY(rect, 8.0F, 8.0F), paint);
+
+  SkPaint bg;
+  bg.setAntiAlias(true);
+  bg.setColor(SkColorSetARGB(0x22, 0xFF, 0xFF, 0xFF));
+  canvas->drawRRect(SkRRect::MakeRectXY(rect, 8.0F, 8.0F), bg);
+
+  // The unicode implementation and font collection are independent of the
+  // frame, so build them once.  A null result (no fontconfig / ICU) degrades
+  // to a card with no text rather than a crash.
+  static const sk_sp<SkUnicode> unicode = SkUnicodes::ICU::Make();
+  static const sk_sp<para::FontCollection> fonts = [] {
+    auto collection = sk_make_sp<para::FontCollection>();
+    collection->setDefaultFontManager(
+        SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType()));
+    collection->enableFontFallback();
+    return collection;
+  }();
+  if (unicode == nullptr || fonts == nullptr)
+    return;
+
+  const para::ParagraphStyle paragraph_style;
+  std::unique_ptr<para::ParagraphBuilder> builder =
+      para::ParagraphBuilder::make(paragraph_style, fonts, unicode);
+  if (builder == nullptr)
+    return;
+
+  const std::vector<SkString> families = {SkString("sans-serif")};
+  constexpr SkScalar kTextSize = 21.0F;
+
+  para::TextStyle heading;
+  heading.setColor(SK_ColorWHITE);
+  heading.setFontFamilies(families);
+  heading.setFontSize(kTextSize);
+  heading.setFontStyle(SkFontStyle::Bold());
+  builder->pushStyle(heading);
+  builder->addText("Wayland");
+  builder->pop();
+
+  para::TextStyle body;
+  body.setColor(SkColorSetRGB(0xC8, 0xD2, 0xE0));
+  body.setFontFamilies(families);
+  body.setFontSize(kTextSize);
+  builder->pushStyle(body);
+  builder->addText(" + Skia ");
+  builder->pop();
+
+  // U+1F680 rocket — resolved through color-emoji fallback.
+  para::TextStyle emoji;
+  emoji.setFontFamilies(families);
+  emoji.setFontSize(kTextSize);
+  builder->pushStyle(emoji);
+  builder->addText("\xF0\x9F\x9A\x80  ");
+  builder->pop();
+
+  // Arabic "marhaba" (hello) — exercises RTL shaping and bidi.
+  para::TextStyle rtl;
+  rtl.setColor(SkColorSetRGB(0x9E, 0xE4, 0xB0));
+  rtl.setFontFamilies(families);
+  rtl.setFontSize(kTextSize);
+  builder->pushStyle(rtl);
+  builder->addText("\xD9\x85\xD8\xB1\xD8\xAD\xD8\xA8\xD8\xA7");
+  builder->pop();
+
+  std::unique_ptr<para::Paragraph> paragraph = builder->Build();
+  paragraph->layout(rect.width() - 24.0F);
+  paragraph->paint(canvas, rect.left() + 12.0F, rect.top() + 12.0F);
 }
 
 // A rotating dashed-stroke arc — the classic path-effect corner case.
