@@ -11,9 +11,11 @@
 
 #include <wl/seat.hpp>  // also pulls in keyboard.hpp
 
-#include <fcntl.h>     // F_GETFD, fcntl
-#include <sys/mman.h>  // memfd_create, mmap, munmap
-#include <unistd.h>    // pipe, ftruncate, close
+#include <fcntl.h>                    // F_GETFD, fcntl
+#include <linux/input-event-codes.h>  // BTN_LEFT
+#include <sys/mman.h>                 // memfd_create, mmap, munmap
+#include <unistd.h>                   // pipe, ftruncate, close
+#include <wayland-client-protocol.h>  // WL_POINTER_BUTTON_STATE_PRESSED
 
 #include <gtest/gtest.h>
 #include <cerrno>
@@ -23,6 +25,23 @@
 
 // ── Minimal App stubs
 // ─────────────────────────────────────────────────────────
+
+// App with a pointer button hook; also tracks motion + enter to check the
+// position the handler carries into button events.
+struct FakePointerApp {
+  wl::PointerButtonEvent last_button{};
+  int button_count = 0;
+  wl::PointerEvent last_motion{};
+  bool left = false;
+
+  void OnPointerEnter(const wl::PointerEvent& ev) { last_motion = ev; }
+  void OnPointerMotion(const wl::PointerEvent& ev) { last_motion = ev; }
+  void OnPointerButton(const wl::PointerButtonEvent& ev) {
+    last_button = ev;
+    ++button_count;
+  }
+  void OnPointerLeave() { left = true; }
+};
 
 // Minimal App: implements only the required OnKey(const wl::KeyEvent&) sink.
 struct FakeSeatApp {
@@ -240,4 +259,57 @@ TEST(SeatManager, BindWithRecordAndNullRegistryReturnsFalse) {
 TEST(SeatManager, ReleaseOnEmptySeatIsNoOp) {
   wl::SeatManager<FakeSeatApp> sm;
   sm.Release();  // must not crash
+}
+
+// ── PointerHandler tests ─────────────────────────────────────────────────────
+
+TEST(PointerHandler, ButtonCarriesLastMotionPosition) {
+  wl::PointerHandler<FakePointerApp> ptr;
+  FakePointerApp app;
+  ptr.app_ = &app;
+
+  // 12.5, 34.25 in wl_fixed (24.8): *256.
+  ptr.OnMotion(0u, static_cast<wl_fixed_t>(12.5 * 256),
+               static_cast<wl_fixed_t>(34.25 * 256));
+  EXPECT_DOUBLE_EQ(app.last_motion.x, 12.5);
+  EXPECT_DOUBLE_EQ(app.last_motion.y, 34.25);
+
+  ptr.OnButton(7u, 100u, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+  EXPECT_EQ(app.button_count, 1);
+  EXPECT_DOUBLE_EQ(app.last_button.x, 12.5);
+  EXPECT_DOUBLE_EQ(app.last_button.y, 34.25);
+  EXPECT_EQ(app.last_button.serial, 7u);
+  EXPECT_EQ(app.last_button.button, static_cast<uint32_t>(BTN_LEFT));
+  EXPECT_EQ(app.last_button.state,
+            static_cast<uint32_t>(WL_POINTER_BUTTON_STATE_PRESSED));
+}
+
+TEST(PointerHandler, EnterSeedsPositionAndLeaveFires) {
+  wl::PointerHandler<FakePointerApp> ptr;
+  FakePointerApp app;
+  ptr.app_ = &app;
+
+  ptr.OnEnter(3u, nullptr, static_cast<wl_fixed_t>(5 * 256),
+              static_cast<wl_fixed_t>(6 * 256));
+  ptr.OnButton(3u, 0u, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+  EXPECT_DOUBLE_EQ(app.last_button.x, 5.0);
+  EXPECT_DOUBLE_EQ(app.last_button.y, 6.0);
+
+  EXPECT_FALSE(app.left);
+  ptr.OnLeave(4u, nullptr);
+  EXPECT_TRUE(app.left);
+}
+
+TEST(PointerHandler, NullAppIsNoOp) {
+  wl::PointerHandler<FakePointerApp> ptr;  // app_ left null
+  ptr.OnMotion(0u, 0, 0);
+  ptr.OnButton(0u, 0u, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);  // no crash
+}
+
+TEST(PointerHandler, WantsPointerDetectsHooks) {
+  static_assert(wl::detail::WantsPointer<FakePointerApp>,
+                "App with pointer hooks should be detected");
+  static_assert(!wl::detail::WantsPointer<FakeSeatApp>,
+                "keyboard-only App must not request a pointer");
+  SUCCEED();
 }
