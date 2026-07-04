@@ -5,9 +5,10 @@
 // backend: rounded-rect clipping, a gradient shader, a dashed-arc path effect,
 // and a mixed-script text card laid out with SkParagraph.
 //
-// The text card resolves fonts through the system fontconfig manager for now;
-// a bundled, deterministic font set will replace it when byte-exact golden
-// images are required.
+// The text card resolves fonts through the system fontconfig manager, so its
+// glyphs are not reproducible across machines.  Golden-image tests render the
+// scene with the text card's glyphs suppressed; everything else is
+// deterministic.
 
 #include "scene.hpp"
 
@@ -114,7 +115,13 @@ void DrawButton(SkCanvas* canvas, const SkRect& rect, bool active) noexcept {
 // fallback, and an RTL span, over a translucent rounded panel.  This is the
 // primary reason Skia's text stack (SkParagraph / SkShaper / SkUnicode) is
 // exercised here.
-void DrawTextCard(SkCanvas* canvas, const SkRect& panel) noexcept {
+//
+// Fonts come from the system fontconfig manager, so the glyphs are not
+// reproducible across machines; `with_text` lets golden-image tests draw just
+// the (deterministic) card panel.
+void DrawTextCard(SkCanvas* canvas,
+                  const SkRect& panel,
+                  bool with_text) noexcept {
   namespace para = skia::textlayout;
 
   const SkRect rect = SkRect::MakeXYWH(
@@ -124,6 +131,9 @@ void DrawTextCard(SkCanvas* canvas, const SkRect& panel) noexcept {
   bg.setAntiAlias(true);
   bg.setColor(SkColorSetARGB(0x22, 0xFF, 0xFF, 0xFF));
   canvas->drawRRect(SkRRect::MakeRectXY(rect, 8.0F, 8.0F), bg);
+
+  if (!with_text)
+    return;
 
   // The unicode implementation and font collection are independent of the
   // frame, so build them once.  A null result (no fontconfig / ICU) degrades
@@ -231,7 +241,7 @@ void DemoScene::Render(SkCanvas* canvas,
   const SkRect button = ButtonRect(panel);
 
   DrawBackgroundPanel(canvas, panel);
-  DrawTextCard(canvas, panel);
+  DrawTextCard(canvas, panel, state.draw_text);
   DrawButton(canvas, button, state.button_active);
   DrawSpinner(canvas, panel, state.frame);
 

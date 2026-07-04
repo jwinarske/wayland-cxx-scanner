@@ -40,6 +40,24 @@ test(
     suite: 'skia',
 )
 
+# ── Golden-image regression ───────────────────────────────────────────────────
+#
+# Renders the scene without its (system-font) text card and compares it against
+# a committed golden PNG.  Regenerate the golden deliberately with:
+#   SKIA_REGOLDEN=1 meson test -C build skia-demo-golden
+skia_demo_golden_check = executable(
+    'skia_demo_golden_check',
+    sources: ['golden_check.cpp'],
+    dependencies: [skia_demo_common_dep],
+)
+
+test(
+    'skia-demo-golden',
+    skia_demo_golden_check,
+    args: [meson.current_source_dir() / 'golden' / 'scene-shapes.png'],
+    suite: 'skia',
+)
+
 # ── Unit tests ────────────────────────────────────────────────────────────────
 #
 # Cover the pure logic in the shared library — the fractional-scale policy and
