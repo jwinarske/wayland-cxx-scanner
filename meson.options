@@ -9,3 +9,9 @@ option('ime_backend', type: 'combo',
               'input-method-v1', 'input-method-v2', 'virtual-keyboard-v1'],
     value: 'text-input-v1',
     description: 'IME protocol backend to generate, wrap, build and test (exactly one). Implemented: none, text-input-v1, text-input-v3.')
+# Skia-backed rendering examples. Disabled by default: Skia is a heavyweight
+# out-of-tree dependency and examples=true alone must never require it.
+option('skia_examples', type: 'feature', value: 'disabled',
+    description: 'Build the Skia-backed rendering examples (requires a Skia build; see scripts/build-skia.sh)')
+option('skia_prefix', type: 'string', value: '',
+    description: 'Path to an out-of-tree Skia build prefix (headers reachable as include/core/..., static libs under lib/) used when Skia is not found via pkg-config')

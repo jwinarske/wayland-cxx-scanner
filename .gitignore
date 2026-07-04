@@ -5,6 +5,9 @@ _build/
 _doxygen/
 docs/_build/
 
+# Skia checkout created by scripts/build-skia.sh (default --src location)
+skia-src/
+
 # emb cross-build workspace (toolchain/sysroot cache, downloads) + lock
 .config/
 .cache/
