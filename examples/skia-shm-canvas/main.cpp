@@ -14,6 +14,7 @@
 //   ESC / window close   quit
 //   SPACE / left-click  toggles the button-active scene state (click the
 //   button)
+//   F1                  toggles the performance overlay (also --hud)
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
 #include "fractional_scale_client.hpp"  // namespace fractional_scale_v1::client
@@ -37,6 +38,7 @@
 // ─────────────────────────────────────────────
 #include "damage.hpp"
 #include "frame_pacer.hpp"
+#include "perf_hud.hpp"
 #include "scale.hpp"
 #include "scene.hpp"
 #include "view_tree.hpp"
@@ -315,11 +317,12 @@ bool BufferPool::Create(const int w, const int h, WlShmHandler& shm) noexcept {
 
 class App {
  public:
-  explicit App(demo::PacerConfig pacer_cfg) : pacer_(pacer_cfg) {
-    // Views are the only damage sources, so the per-frame damage lists never
-    // exceed the view count.  Reserve once so steady-state frames allocate
-    // nothing.
-    const auto max_rects = static_cast<std::size_t>(demo::View::kCount);
+  App(demo::PacerConfig pacer_cfg, bool hud) : pacer_(pacer_cfg) {
+    hud_.set_visible(hud);
+    // Views plus the optional HUD are the only damage sources, so the per-frame
+    // damage lists never exceed the view count + 1.  Reserve once so
+    // steady-state frames allocate nothing.
+    const auto max_rects = static_cast<std::size_t>(demo::View::kCount) + 1u;
     damage_logical_.reserve(max_rects);
     damage_buffer_.reserve(max_rects);
   }
@@ -375,6 +378,8 @@ class App {
   void RenderFrame(int idx) noexcept;
   void CommitFrame(bool arm_callback) noexcept;
   void SubmitDamage() noexcept;
+  void AddHudDamage() noexcept;
+  void ToggleHud() noexcept;
   void RequestFrameCallback() noexcept;
   void ApplyViewport() noexcept;
 
@@ -420,6 +425,11 @@ class App {
   demo::SceneState scene_;
   demo::FramePacer pacer_;
   demo::ViewTree view_tree_;
+  demo::PerfHud hud_;
+  demo::FpsMeter fps_;
+  // Frames remaining over which the HUD region must stay damaged after a
+  // visibility change, so the overlay clears from every rotating buffer.
+  int hud_damage_frames_ = 0;
   std::vector<SkIRect> damage_logical_;  // dirty view rects, logical px
   std::vector<SkIRect> damage_buffer_;   // mapped to buffer px for submission
 };
@@ -682,6 +692,9 @@ void App::RenderFrame(int idx) noexcept {
   canvas->scale(canvas_scale, canvas_scale);
 
   demo::DemoScene::Render(canvas, scene_, view_tree_);
+  // The HUD draws in the same logical space as the scene (the canvas is already
+  // scaled); it is a no-op while hidden.
+  hud_.Render(canvas, pacer_, fps_.fps());
 }
 
 void App::CommitFrame(bool arm_callback) noexcept {
@@ -697,6 +710,7 @@ void App::CommitFrame(bool arm_callback) noexcept {
   }
 
   scene_.frame = pacer_.frame();
+  fps_.Tick(NowMs());
   // Lay out the views for the current logical size and mark the animated
   // spinner dirty; the button is marked dirty by input.
   view_tree_.Layout(width_, height_);
@@ -713,6 +727,7 @@ void App::CommitFrame(bool arm_callback) noexcept {
   } else {
     damage_logical_.clear();
     view_tree_.CollectDamage(damage_logical_);
+    AddHudDamage();
     SubmitDamage();
   }
   if (arm_callback)
@@ -749,6 +764,26 @@ void App::SubmitDamage() noexcept {
 
   for (const SkIRect& r : damage_buffer_)
     surface_.Get()->DamageBuffer(r.fLeft, r.fTop, r.width(), r.height());
+}
+
+// Adds the HUD's fixed region to the per-frame damage list.  While visible the
+// FPS counter changes every frame, so the region is damaged continuously; after
+// the HUD is hidden it is damaged for a few more frames so the overlay clears
+// from every rotating buffer (each buffer must be repainted once).
+void App::AddHudDamage() noexcept {
+  if (hud_.visible()) {
+    damage_logical_.push_back(demo::PerfHud::Bounds());
+  } else if (hud_damage_frames_ > 0) {
+    damage_logical_.push_back(demo::PerfHud::Bounds());
+    --hud_damage_frames_;
+  }
+}
+
+void App::ToggleHud() noexcept {
+  hud_.toggle();
+  // Repaint the HUD region across all buffers so a hidden HUD leaves no residue
+  // and a shown one appears at once.
+  hud_damage_frames_ = kNumBuffers;
 }
 
 void App::ApplyViewport() noexcept {
@@ -806,6 +841,8 @@ void App::OnKey(const wl::KeyEvent& ev) {
   } else if (ev.key == KEY_SPACE) {
     scene_.button_active = !scene_.button_active;
     view_tree_.MarkDirty(demo::View::kButton);
+  } else if (ev.key == KEY_F1) {
+    ToggleHud();
   }
 }
 
@@ -932,16 +969,18 @@ namespace {
 void PrintUsage() {
   std::printf(
       "usage: skia_shm_canvas [--frames N] [--exit] [--fixed-dt]\n"
-      "                       [--benchmark N]\n"
+      "                       [--benchmark N] [--hud]\n"
       "  --frames N     render at most N frames\n"
       "  --exit         quit once the frame limit is reached\n"
       "  --fixed-dt     deterministic 60 Hz animation clock\n"
       "  --benchmark N  render N frames self-paced and print frame-time "
-      "stats\n");
+      "stats\n"
+      "  --hud          show the performance overlay (toggle with F1)\n");
 }
 
 [[nodiscard]] bool ParseArgs(const std::vector<std::string_view>& args,
-                             demo::PacerConfig& cfg) {
+                             demo::PacerConfig& cfg,
+                             bool& hud) {
   for (std::size_t i = 1; i < args.size(); ++i) {
     const std::string_view a = args[i];
     // Parses the next argument as a positive frame count.  Rejecting <= 0 (and
@@ -972,6 +1011,8 @@ void PrintUsage() {
         return false;
       cfg.benchmark = true;
       cfg.exit_on_limit = true;
+    } else if (a == "--hud") {
+      hud = true;
     } else {
       return false;
     }
@@ -987,11 +1028,12 @@ int main(int argc, char* argv[]) {
 
   const std::vector<std::string_view> args(argv, std::next(argv, argc));
   demo::PacerConfig cfg;
-  if (!ParseArgs(args, cfg)) {
+  bool hud = false;
+  if (!ParseArgs(args, cfg, hud)) {
     PrintUsage();
     return EXIT_FAILURE;
   }
 
-  App app(cfg);
+  App app(cfg, hud);
   return app.Run();
 }
