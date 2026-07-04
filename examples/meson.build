@@ -116,4 +116,7 @@ endif
 if have_skia
     subdir('skia-demo-common')
     subdir('skia-shm-canvas')
+    # skia-egl-canvas uses subdir_done() internally if EGL/GLES/wayland-egl deps
+    # are absent.
+    subdir('skia-egl-canvas')
 endif

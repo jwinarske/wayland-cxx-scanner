@@ -247,6 +247,7 @@ passed to `meson setup` (requires `wayland-client` and `wayland-server`).
 | [xdg-csd](examples/xdg-csd)                                   | Client-side decorations (Cairo / GTK back-ends)  | cairo or gtk+-3.0            |
 | [xdg-simple-dmabuf-vulkan](examples/xdg-simple-dmabuf-vulkan) | Vulkan rendering with DMA-BUF export             | Vulkan                       |
 | [skia-shm-canvas](examples/skia-shm-canvas)                   | Skia CPU raster into `wl_shm`, fractional scale + damage | Skia (`-Dskia_examples=enabled`) |
+| [skia-egl-canvas](examples/skia-egl-canvas)                   | Skia Ganesh GL rendering the same scene via EGL  | Skia, EGL, GLESv2, wayland-egl |
 
 ## Testing
 
