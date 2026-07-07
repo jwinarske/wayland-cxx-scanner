@@ -237,6 +237,40 @@ else
     warning('wayland-client/server not found — skipping test_server_event_new_id_roundtrip')
 endif
 
+# ── DataDevice clipboard-paste live-dispatch test ────────────────────────────
+# A hand-rolled compositor pushes a clipboard selection to wl::DataDevice and
+# serves the receive() pipe; the client must see the MIME set and read the
+# bytes. Generated from the real wayland.xml so it exercises the actual
+# wl_data_device family.
+if wayland_client_dep.found() and wayland_server_dep.found() and _wl_scanner_dep.found()
+    _wayland_xml = _wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
+    dd_client_hdr = custom_target(
+        'test-dd-client-header',
+        input:   _wayland_xml,
+        output:  'dd_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+
+    _test_data_device_exe = executable(
+        'test_data_device_roundtrip',
+        ['integration/test_data_device_roundtrip.cpp', dd_client_hdr],
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('data_device_roundtrip', _test_data_device_exe,
+        args: [
+            '--gtest_output=xml:results/test_data_device_roundtrip.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 60,
+        suite: 'integration',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
+else
+    warning('wayland-client/server/scanner not found — skipping test_data_device_roundtrip')
+endif
+
 # ── IME facade contract test (ime_backend=none) ──────────────────────────────
 # Includes backend.hpp, which only resolves cleanly without a selected backend.
 if ime_backend == 'none'
