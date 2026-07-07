@@ -23,8 +23,8 @@ set(IVI_APPLICATION_XML    "${PROJECT_SOURCE_DIR}/protocols/ivi-application.xml"
 set(SIMPLE_SHELL_XML       "${PROJECT_SOURCE_DIR}/protocols/simpleshell.xml")
 
 # Optional dependency imported targets (PkgConfig::<name> when present).
-foreach(_m wayland-client wayland-server xkbcommon egl glesv2 wayland-egl
-           vulkan libdrm sdl3 cairo pangocairo shadertoy-cxx)
+foreach(_m wayland-client wayland-server wayland-cursor xkbcommon egl glesv2
+           wayland-egl vulkan libdrm sdl3 cairo pangocairo shadertoy-cxx)
     string(MAKE_C_IDENTIFIER "${_m}" _id)
     pkg_check_modules(${_id} QUIET IMPORTED_TARGET ${_m})
 endforeach()
@@ -174,7 +174,8 @@ if (WAYLAND_CXX_IME_BACKEND MATCHES "^text-input-v[13]$"
 endif ()
 
 # ── xdg-csd — CSD plugin chosen highest-fidelity-first (GTK → Cairo → none) ───
-if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
+if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
+    AND TARGET PkgConfig::wayland_cursor)
     set(_csd_src   "")
     set(_csd_deps  "")
     set(_csd_defs  "")
@@ -192,7 +193,7 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
         message(STATUS "xdg-csd: no Cairo/GTK → fallback CSD plugin")
     endif ()
     wlcxx_example(xdg_csd xdg-csd/main.cpp ${_csd_src})
-    target_link_libraries(xdg_csd PRIVATE PkgConfig::wayland_client PkgConfig::xkbcommon ${_csd_deps})
+    target_link_libraries(xdg_csd PRIVATE PkgConfig::wayland_client PkgConfig::wayland_cursor PkgConfig::xkbcommon ${_csd_deps})
     if (_csd_defs)
         target_compile_definitions(xdg_csd PRIVATE ${_csd_defs})
     endif ()
