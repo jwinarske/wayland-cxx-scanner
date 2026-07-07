@@ -24,9 +24,20 @@ scanner_lib_dep = declare_dependency(
     dependencies: [pugixml_dep],
 )
 
+# Static-link the C++ runtime so the codegen tool is self-contained and runs
+# during any consumer's build, including toolchains that keep libc++abi outside
+# the system loader path. See src/CMakeLists.txt for the full rationale.
+_scanner_cxx = meson.get_compiler('cpp')
+_scanner_link_args = []
+if (_scanner_cxx.get_id() in ['gcc', 'clang']
+        and _scanner_cxx.has_link_argument('-static-libstdc++'))
+    _scanner_link_args += '-static-libstdc++'
+endif
+
 scanner_exe = executable(
     'wayland-cxx-scanner',
     'main.cpp',
     dependencies: [scanner_lib_dep],
+    link_args: _scanner_link_args,
     install: get_option('install_tool'),
 )
