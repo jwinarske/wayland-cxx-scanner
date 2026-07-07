@@ -20,11 +20,18 @@ struct FakeHelperTraits {
 static_assert(wl::WlProxyTraits<FakeHelperTraits>);
 
 struct FakeHandler : wl::CProxyImpl<FakeHandler, FakeHelperTraits> {
-  // Required by _SetProxy when proxy is non-null; a null-entry table is
-  // sufficient for these null-path tests.
-  static const void* s_listener_table_[];
+  // Required by _SetProxy: it installs this as the proxy's event dispatcher.
+  // A stub is sufficient for these null-path tests (it is never invoked).  The
+  // name is fixed by the framework contract (_SetProxy names
+  // Derived::_Dispatch). NOLINTNEXTLINE(bugprone-reserved-identifier)
+  static int _Dispatch(const void* /*impl*/,
+                       void* /*target*/,
+                       uint32_t /*opcode*/,
+                       const wl_message* /*msg*/,
+                       wl_argument* /*args*/) {
+    return 0;
+  }
 };
-const void* FakeHandler::s_listener_table_[] = {nullptr};
 
 // ── SetupHandler tests
 // ────────────────────────────────────────────────────────

@@ -121,9 +121,14 @@ TEST(CodegenClientCxx, ContainsRequestMethod) {
 TEST(CodegenClientCxx, ContainsDirectDispatchEventHandler) {
   const auto out = generate_client_cxx_header(make_proto());
   EXPECT_THAT(out, HasSubstr("virtual void OnPing("));
-  // Direct CRTP dispatch — _EvtPing calls OnPing directly, no event map.
-  EXPECT_THAT(out, HasSubstr("static void _EvtPing("));
-  EXPECT_THAT(out, HasSubstr("->OnPing("));
+  // A single dispatcher installed via wl_proxy_add_dispatcher switches on the
+  // opcode and calls OnPing directly — no event map, no per-event trampolines.
+  EXPECT_THAT(out, HasSubstr("static int _Dispatch("));
+  EXPECT_THAT(out, HasSubstr("switch (opcode)"));
+  EXPECT_THAT(out, HasSubstr("self->OnPing("));
+  // No per-event listener thunks / listener table any more.
+  EXPECT_THAT(out, Not(HasSubstr("_EvtPing")));
+  EXPECT_THAT(out, Not(HasSubstr("s_listener_table_")));
   // No WTL message-map machinery.
   EXPECT_THAT(out, Not(HasSubstr("BEGIN_EVENT_MAP")));
   EXPECT_THAT(out, Not(HasSubstr("ProcessEvent")));
@@ -235,13 +240,14 @@ TEST(CodegenClientCxx, EventNewIdIsPointerWidthVirtual) {
   EXPECT_THAT(out, Not(HasSubstr("virtual void OnSpawn(uint32_t")));
 }
 
-TEST(CodegenClientCxx, EventNewIdIsPointerWidthThunk) {
+TEST(CodegenClientCxx, EventNewIdReadsObjectSlotAsProxy) {
   const auto out = generate_client_cxx_header(make_new_id_event_proto());
-  // The static dispatch thunk's slot must be pointer-width so it matches the
-  // pointer libwayland actually passes through the C listener ABI.
-  EXPECT_THAT(out, HasSubstr("_EvtSpawn(void* data, wl_proxy* /*proxy*/, "
-                             "wl_proxy* a0)"));
-  EXPECT_THAT(out, Not(HasSubstr("uint32_t a0)")));
+  // In the dispatcher, a new_id event arg is read from the wl_argument object
+  // slot (.o) as a wl_proxy* — not from the 32-bit .u slot, which would
+  // truncate the pointer libwayland already resolved.
+  EXPECT_THAT(out,
+              HasSubstr("OnSpawn(reinterpret_cast<wl_proxy*>(args[0].o))"));
+  EXPECT_THAT(out, Not(HasSubstr("OnSpawn(args[0].u)")));
 }
 
 // Regression guard for the direction-aware mapper: a new_id in a *request*

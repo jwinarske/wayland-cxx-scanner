@@ -78,6 +78,39 @@ std::string_view cpp_arg_type(const Arg& arg, MsgDir dir) {
   return "void*";
 }
 
+/// Expression that reads argument @p idx of an EVENT out of libwayland's
+/// `union wl_argument args[]`, converted to the same C++ type cpp_arg_type()
+/// emits for the virtual On* handler.  Used by the add_dispatcher path: unlike
+/// the add_listener trampolines (where libwayland+libffi demarshal into typed
+/// C params for us), a dispatcher receives the raw union and must pick the
+/// right member per arg type.
+std::string wl_arg_read(const Arg& arg, std::size_t idx) {
+  const std::string a = "args[" + std::to_string(idx) + "].";
+  switch (arg.type) {
+    case ArgType::Int:
+      return a + "i";
+    case ArgType::Uint:
+    case ArgType::Enum:
+      return a + "u";
+    case ArgType::Fixed:
+      return a + "f";
+    case ArgType::String:
+      return a + "s";
+    case ArgType::Object:
+    case ArgType::NewId:
+      // In an event libwayland has already constructed/resolved the object and
+      // stores it in the `.o` slot as wl_object* (== wl_proxy* for a client
+      // proxy); cpp_arg_type() types the handler param as wl_proxy*.
+      return "reinterpret_cast<wl_proxy*>(" + a + "o)";
+    case ArgType::Array:
+      return a + "a";
+    case ArgType::Fd:
+      return a + "h";
+  }
+  assert(false && "unhandled ArgType in wl_arg_read");
+  return "{}";
+}
+
 /// True if the request has a dynamic new_id — a <arg type="new_id"> with no
 /// `interface` attribute, i.e. the wl_registry.bind pattern where the target
 /// interface is chosen at runtime.  Such a request cannot be marshaled like a
@@ -286,40 +319,40 @@ void emit_client_class(std::ostringstream& os,
 
   if (!iface.events.empty()) {
     os << "\n private:\n";
-    // Allow the CRTP base to access the private listener table.
+    // Allow the CRTP base (_SetProxy) to reach the private dispatcher.
     os << "  friend class wl::CProxyImpl<Derived, " << traits_name << ">;\n\n";
 
-    // Direct-dispatch static callbacks — the Wayland C library already
-    // dispatches by opcode via the listener table, so we call the virtual
-    // handler directly without an intermediate ProcessEvent / opcode scan.
-    for (const auto& e : iface.events) {
-      // Forwarded arguments use positional names (a0, a1, ...) so they can
-      // never collide with the fixed `data` parameter, regardless of the
-      // protocol's argument names.
-      os << "  static void _Evt" << snake_to_pascal(e.name)
-         << "(void* data, wl_proxy* /*proxy*/";
-      for (std::size_t i = 0; i < e.args.size(); ++i)
-        os << ", " << cpp_arg_type(e.args.at(i), MsgDir::Event) << " a" << i;
-      os << ") {\n";
-      os << "    static_cast<" << cls_name << "*>(data)->On"
-         << snake_to_pascal(e.name) << "(";
+    // Single event dispatcher installed via wl_proxy_add_dispatcher (NOT
+    // add_listener).  It receives the raw `union wl_argument args[]` and
+    // demarshals by opcode, then calls the virtual On* handler.  Using a
+    // dispatcher leaves the proxy's user_data free for the consumer to own —
+    // add_listener would overwrite it with the handler pointer, breaking host
+    // toolkits that reverse-map proxy->object via wl_proxy_get_user_data.
+    os << "  static int _Dispatch(const void* impl, void* /*target*/,\n";
+    os << "                       uint32_t opcode, const wl_message* "
+          "/*msg*/,\n";
+    os << "                       wl_argument* args) {\n";
+    os << "    auto* self = static_cast<" << cls_name
+       << "*>(const_cast<void*>(impl));\n";
+    os << "    (void)args;\n";
+    os << "    switch (opcode) {\n";
+    for (std::size_t ei = 0; ei < iface.events.size(); ++ei) {
+      const auto& e = iface.events.at(ei);
+      os << "      case " << ei << ":\n";
+      os << "        self->On" << snake_to_pascal(e.name) << "(";
       for (std::size_t i = 0; i < e.args.size(); ++i) {
         if (i > 0)
           os << ", ";
-        os << "a" << i;
+        os << wl_arg_read(e.args.at(i), i);
       }
       os << ");\n";
-      os << "  }\n";
+      os << "        break;\n";
     }
-    // reinterpret_cast is not a constant expression, so we cannot use
-    // constexpr here.  The inline keyword makes the definition valid inside
-    // the class body for all C++17+.
-    // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays)
-    os << "  inline static const void* s_listener_table_[] = {\n";
-    for (const auto& e : iface.events)
-      os << "      reinterpret_cast<const void*>(&_Evt"
-         << snake_to_pascal(e.name) << "),\n";
-    os << "  };\n";
+    os << "      default:\n";
+    os << "        break;\n";
+    os << "    }\n";
+    os << "    return 0;\n";
+    os << "  }\n";
   }
 
   os << "};\n\n";

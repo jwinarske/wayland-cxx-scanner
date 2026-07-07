@@ -27,23 +27,21 @@ class CProxyImpl : public CProxy<Traits> {
  public:
   virtual ~CProxyImpl() = default;
 
-  /// Bind an already-created wl_proxy and install the static event listener.
+  /// Bind an already-created wl_proxy and install the generated event
+  /// dispatcher.
+  ///
+  /// Uses wl_proxy_add_dispatcher rather than wl_proxy_add_listener so the
+  /// proxy's user_data stays under the consumer's control.  add_listener would
+  /// overwrite user_data with the handler pointer (its 3rd arg), which breaks
+  /// host toolkits that reverse-map a proxy back to their own object via
+  /// wl_proxy_get_user_data.  With a dispatcher the two are separate: the
+  /// `implementation` pointer (this handler) is passed to the generated
+  /// Derived::_Dispatch, while `user_data` is preserved verbatim.
   void _SetProxy(wl_proxy* proxy) noexcept {
     Base::Attach(proxy);
     if (proxy) {
-      // s_listener_table_ is an inline static const void*[] of function
-      // pointers.  wl_proxy_add_listener expects void(**)(void) — a pointer
-      // to an array of void function pointers.  The reinterpret_cast is the
-      // standard-compliant way to pass C function pointers through the
-      // Wayland C API (S3: was previously cast to wl_dispatcher_func_t*
-      // which is the wrong type).
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-      wl_proxy_add_listener(
-          proxy,
-          // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
-          reinterpret_cast<void (**)(void)>(
-              const_cast<void**>(Derived::s_listener_table_)),
-          this);
+      wl_proxy_add_dispatcher(proxy, &Derived::_Dispatch, this,
+                              wl_proxy_get_user_data(proxy));
     }
   }
 
