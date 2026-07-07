@@ -19,7 +19,12 @@
 #
 # Usage:
 #   scripts/build-skia.sh --prefix <install-dir> [--src <checkout-dir>]
-#                         [--jobs N] [--config release|debug]
+#                         [--jobs N] [--config release|debug] [--with-skottie]
+#
+# --with-skottie additively builds the Skottie (Lottie) module + sksg +
+# skresources and installs their headers, for examples/skia-skottie-canvas.  It
+# is opt-in so existing cached prefixes stay valid; enabling it produces a
+# superset prefix (nothing is removed).
 
 set -euo pipefail
 
@@ -36,6 +41,7 @@ PREFIX=""
 SRC_DIR=""
 JOBS="$(nproc 2>/dev/null || echo 4)"
 CONFIG="release"
+WITH_SKOTTIE="false"
 
 die() {
     echo "build-skia: $*" >&2
@@ -53,6 +59,7 @@ while [ $# -gt 0 ]; do
         --src)    SRC_DIR="${2:-}"; shift 2 ;;
         --jobs)   JOBS="${2:-}"; shift 2 ;;
         --config) CONFIG="${2:-}"; shift 2 ;;
+        --with-skottie) WITH_SKOTTIE="true"; shift ;;
         -h|--help) usage 0 ;;
         *) die "unknown argument: $1 (see --help)" ;;
     esac
@@ -106,7 +113,7 @@ skia_use_system_expat=false \
 skia_use_gl=true skia_use_vulkan=true skia_use_egl=true \
 skia_use_icu=true skia_use_harfbuzz=true \
 skia_enable_skparagraph=true \
-skia_enable_svg=false skia_enable_pdf=false skia_enable_skottie=false \
+skia_enable_svg=false skia_enable_pdf=false skia_enable_skottie=${WITH_SKOTTIE} \
 extra_cflags=[\"-fPIC\"]"
 
 echo "build-skia: gn gen $OUT_DIR"
@@ -115,9 +122,13 @@ echo "build-skia: gn gen $OUT_DIR"
 "$GN" gen "$OUT_DIR" --root="$SRC_DIR" --args="$GN_ARGS"
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-echo "build-skia: ninja (-j$JOBS)"
-"$NINJA" -C "$OUT_DIR" -j "$JOBS" \
-    skia skparagraph skshaper skunicode_core skunicode_icu
+NINJA_TARGETS="skia skparagraph skshaper skunicode_core skunicode_icu"
+if [ "$WITH_SKOTTIE" = "true" ]; then
+    NINJA_TARGETS="$NINJA_TARGETS skottie sksg skresources"
+fi
+echo "build-skia: ninja (-j$JOBS) [$NINJA_TARGETS]"
+# shellcheck disable=SC2086
+"$NINJA" -C "$OUT_DIR" -j "$JOBS" $NINJA_TARGETS
 
 # ── Install ───────────────────────────────────────────────────────────────────
 echo "build-skia: installing into $PREFIX"
@@ -138,10 +149,25 @@ else
 fi
 
 mkdir -p "$PREFIX/modules"
-for m in skparagraph skshaper skunicode; do
+SKIA_MODULES="skparagraph skshaper skunicode"
+if [ "$WITH_SKOTTIE" = "true" ]; then
+    SKIA_MODULES="$SKIA_MODULES skottie sksg skresources"
+fi
+for m in $SKIA_MODULES; do
     if [ -d "$SRC_DIR/modules/$m/include" ]; then
         mkdir -p "$PREFIX/modules/$m"
         cp -a "$SRC_DIR/modules/$m/include" "$PREFIX/modules/$m/"
+    fi
+    # Some module public headers (notably skottie) reference private headers
+    # under their own src/ as "modules/<m>/src/...", so ship those headers too.
+    if [ -d "$SRC_DIR/modules/$m/src" ]; then
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -am --include='*/' --include='*.h' --exclude='*' \
+                "$SRC_DIR/modules/$m/src/" "$PREFIX/modules/$m/src/"
+        else
+            ( cd "$SRC_DIR" && find "modules/$m/src" -name '*.h' -print0 \
+                | cpio -0 -pdm --quiet "$PREFIX" )
+        fi
     fi
 done
 
