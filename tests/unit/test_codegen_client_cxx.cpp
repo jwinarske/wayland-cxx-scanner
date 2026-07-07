@@ -207,3 +207,46 @@ TEST(CodegenClientCxx, RegularNewIdIsNotDynamicBind) {
   EXPECT_THAT(out, Not(HasSubstr("_MarshalBind(")));
   EXPECT_THAT(out, Not(HasSubstr("BindTraits")));
 }
+
+// A new_id argument in an *event* must map to a pointer-width slot: libwayland
+// constructs the object and hands the listener a typed `wl_foo *`.  Mapping it
+// to `uint32_t` (as a request-side new_id) is a 4-byte read of an 8-byte
+// pointer on LP64 — a C-ABI mismatch / UB in the generated static thunk.
+static Protocol make_new_id_event_proto() {
+  return parse_protocol_from_string(R"(
+<protocol name="minimal">
+  <interface name="wl_thing_manager" version="1">
+    <request name="create_thing">
+      <arg name="id" type="new_id" interface="wl_thing"/>
+    </request>
+  </interface>
+  <interface name="wl_thing" version="1">
+    <event name="spawn">
+      <arg name="child" type="new_id" interface="wl_thing"/>
+    </event>
+  </interface>
+</protocol>)");
+}
+
+TEST(CodegenClientCxx, EventNewIdIsPointerWidthVirtual) {
+  const auto out = generate_client_cxx_header(make_new_id_event_proto());
+  // The virtual handler receives a pointer, not a 32-bit id.
+  EXPECT_THAT(out, HasSubstr("virtual void OnSpawn(wl_proxy*"));
+  EXPECT_THAT(out, Not(HasSubstr("virtual void OnSpawn(uint32_t")));
+}
+
+TEST(CodegenClientCxx, EventNewIdIsPointerWidthThunk) {
+  const auto out = generate_client_cxx_header(make_new_id_event_proto());
+  // The static dispatch thunk's slot must be pointer-width so it matches the
+  // pointer libwayland actually passes through the C listener ABI.
+  EXPECT_THAT(out, HasSubstr("_EvtSpawn(void* data, wl_proxy* /*proxy*/, "
+                             "wl_proxy* a0)"));
+  EXPECT_THAT(out, Not(HasSubstr("uint32_t a0)")));
+}
+
+// Regression guard for the direction-aware mapper: a new_id in a *request*
+// still supplies a client-chosen 32-bit id, unchanged by the event-side fix.
+TEST(CodegenClientCxx, RequestNewIdStaysUint32) {
+  const auto out = generate_client_cxx_header(make_new_id_event_proto());
+  EXPECT_THAT(out, HasSubstr("void CreateThing(uint32_t id)"));
+}
