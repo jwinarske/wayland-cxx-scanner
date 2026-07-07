@@ -107,45 +107,10 @@ class WlCompositorHandler
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
-// ── Pointer → iMouse
-// ──────────────────────────────────────────────────────────
-class PointerHandler : public wayland::client::CWlPointer<PointerHandler> {
- public:
-  App* app_ = nullptr;
-  void OnEnter(uint32_t serial,
-               wl_proxy* surface,
-               wl_fixed_t x,
-               wl_fixed_t y) override;
-  void OnMotion(uint32_t time, wl_fixed_t x, wl_fixed_t y) override;
-  void OnButton(uint32_t serial,
-                uint32_t time,
-                uint32_t button,
-                uint32_t state) override;
-};
-
-// ── Touch → iMouse (and tap-to-advance) ──────────────────────────────────────
-class TouchHandler : public wayland::client::CWlTouch<TouchHandler> {
- public:
-  App* app_ = nullptr;
-  void OnDown(uint32_t serial,
-              uint32_t time,
-              wl_proxy* surface,
-              int32_t id,
-              wl_fixed_t x,
-              wl_fixed_t y) override;
-  void OnUp(uint32_t serial, uint32_t time, int32_t id) override;
-  void OnMotion(uint32_t time, int32_t id, wl_fixed_t x, wl_fixed_t y) override;
-};
-
-// A second wl_seat bound solely to obtain the pointer and touch devices,
-// leaving the keyboard to wl::SeatManager.  Binding a global more than once is
-// part of the standard registry model and is supported by every compositor.
-class PointerSeat : public wayland::client::CWlSeat<PointerSeat> {
- public:
-  App* app_ = nullptr;
-  void OnCapabilities(uint32_t caps) override;
-  void OnName(const char* /*name*/) override {}
-};
+// Pointer (iMouse) and touch (iMouse + tap-to-advance) are handled by
+// wl::SeatManager<App>: it binds the pointer/touch on the seat capabilities
+// event because App defines the OnPointer*/OnTouch* hooks below, and forwards
+// typed wl::PointerEvent / wl::TouchPoint values to them.
 
 // ══════════════════════════════════════════════════════════════════════════════
 // App
@@ -173,13 +138,12 @@ class App {
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameReady(uint32_t time_ms) noexcept;
 
-  // Pointer / touch callbacks (called by the input handlers / PointerSeat).
-  void CreatePointer();
-  void OnPointerMotion(wl_fixed_t x, wl_fixed_t y) noexcept;
-  void OnPointerButton(uint32_t button, uint32_t state) noexcept;
-  void CreateTouch();
-  void OnTouchDown(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept;
-  void OnTouchMotion(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept;
+  // ── Pointer / touch hooks (dispatched by wl::SeatManager) ─────────────────
+  void OnPointerEnter(const wl::PointerEvent& ev) noexcept;
+  void OnPointerMotion(const wl::PointerEvent& ev) noexcept;
+  void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
+  void OnTouchDown(const wl::TouchPoint& p) noexcept;
+  void OnTouchMotion(const wl::TouchPoint& p) noexcept;
   void OnTouchUp(int32_t id) noexcept;
 
  private:
@@ -215,10 +179,7 @@ class App {
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
-  wl::SeatManager<App> seat_;            // keyboard (ESC)
-  wl::WlPtr<PointerSeat> pointer_seat_;  // pointer + touch (iMouse)
-  wl::WlPtr<PointerHandler> pointer_;
-  wl::WlPtr<TouchHandler> touch_;
+  wl::SeatManager<App> seat_;  // keyboard (ESC) + pointer + touch (iMouse)
 
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
@@ -254,7 +215,6 @@ class App {
 
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
-  uint32_t seat_name_ = 0, seat_ver_ = 0;
 
   bool ConnectDisplay();
   bool ScanGlobals();
@@ -278,68 +238,14 @@ class App {
 void WlCallbackHandler::OnDone(const uint32_t time_ms) {
   app_->OnFrameReady(time_ms);
 }
-void PointerHandler::OnEnter(uint32_t /*serial*/,
-                             wl_proxy* /*surface*/,
-                             wl_fixed_t x,
-                             wl_fixed_t y) {
-  app_->OnPointerMotion(x, y);
-}
-void PointerHandler::OnMotion(uint32_t /*time*/, wl_fixed_t x, wl_fixed_t y) {
-  app_->OnPointerMotion(x, y);
-}
-void PointerHandler::OnButton(uint32_t /*serial*/,
-                              uint32_t /*time*/,
-                              uint32_t button,
-                              uint32_t state) {
-  app_->OnPointerButton(button, state);
-}
-void TouchHandler::OnDown(uint32_t /*serial*/,
-                          uint32_t /*time*/,
-                          wl_proxy* /*surface*/,
-                          int32_t id,
-                          wl_fixed_t x,
-                          wl_fixed_t y) {
-  app_->OnTouchDown(id, x, y);
-}
-void TouchHandler::OnUp(uint32_t /*serial*/, uint32_t /*time*/, int32_t id) {
-  app_->OnTouchUp(id);
-}
-void TouchHandler::OnMotion(uint32_t /*time*/,
-                            int32_t id,
-                            wl_fixed_t x,
-                            wl_fixed_t y) {
-  app_->OnTouchMotion(id, x, y);
-}
-void PointerSeat::OnCapabilities(uint32_t caps) {
-  if ((caps & WL_SEAT_CAPABILITY_POINTER) != 0u)
-    app_->CreatePointer();
-  if ((caps & WL_SEAT_CAPABILITY_TOUCH) != 0u)
-    app_->CreateTouch();
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // App implementation
 // ══════════════════════════════════════════════════════════════════════════════
 App::~App() {
+  // SeatManager sends the versioned keyboard/pointer/touch releases before its
+  // WlPtr members are destroyed.
   seat_.Release();
-  if (!touch_.IsNull()) {
-    using T = wayland::client::wl_touch_traits;
-    if (seat_ver_ >= T::Op::Since::Release)
-      touch_.Get()->Release();
-    touch_.Reset();
-  }
-  if (!pointer_.IsNull()) {
-    using P = wayland::client::wl_pointer_traits;
-    if (seat_ver_ >= P::Op::Since::Release)
-      pointer_.Get()->Release();
-    pointer_.Reset();
-  }
-  if (!pointer_seat_.IsNull()) {
-    using S = wayland::client::wl_seat_traits;
-    if (seat_ver_ >= S::Op::Since::Release)
-      pointer_seat_.Get()->Release();
-    pointer_seat_.Reset();
-  }
 }
 
 int App::Run() {
@@ -375,8 +281,6 @@ bool App::ScanGlobals() {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
     } else if (iface == wl_s::interface_name) {
-      seat_name_ = name;
-      seat_ver_ = std::min(ver, wl_s::version);
       seat_.Record(name, ver);
     }
   });
@@ -411,14 +315,11 @@ bool App::BindGlobals() {
     return false;
   }
 
+  // SeatManager binds keyboard and — since App defines OnPointer*/OnTouch*
+  // hooks — the pointer and touch, on the seat capabilities event.
   if (!seat_.Bind(registry_, this)) {
     std::fprintf(stderr, "shadertoy-egl: wl_seat bind failed\n");
     return false;
-  }
-  // Second seat bind for the pointer (optional).
-  if (seat_name_ && wl::BindHandler<wl_seat_traits>(registry_, pointer_seat_,
-                                                    seat_name_, seat_ver_)) {
-    pointer_seat_.Get()->app_ = this;
   }
 
   if (!wl::RoundtripWithTimeout(display_.Get())) {
@@ -428,48 +329,23 @@ bool App::BindGlobals() {
   return true;
 }
 
-void App::CreatePointer() {
-  if (!pointer_.IsNull() || pointer_seat_.IsNull())
-    return;
-  using namespace wayland::client;
-  if (wl::SetupHandler(
-          pointer_,
-          wl::construct<wl_pointer_traits, wl_seat_traits::Op::GetPointer>(
-              *pointer_seat_.Get()))) {
-    pointer_.Get()->app_ = this;
-  }
-}
-
-void App::CreateTouch() {
-  if (!touch_.IsNull() || pointer_seat_.IsNull())
-    return;
-  using namespace wayland::client;
-  if (wl::SetupHandler(
-          touch_, wl::construct<wl_touch_traits, wl_seat_traits::Op::GetTouch>(
-                      *pointer_seat_.Get()))) {
-    touch_.Get()->app_ = this;
-  }
-}
-
-void App::OnTouchDown(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept {
+void App::OnTouchDown(const wl::TouchPoint& p) noexcept {
   if (touch_id_ != -1)
     return;  // track only the first active point
-  touch_id_ = id;
+  touch_id_ = p.id;
   touch_moved_ = 0.0f;
-  mouse_cur_x_ = static_cast<float>(wl_fixed_to_double(x));
-  mouse_cur_y_ =
-      static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+  mouse_cur_x_ = static_cast<float>(p.x);
+  mouse_cur_y_ = static_cast<float>(height_) - static_cast<float>(p.y);
   mouse_click_x_ = mouse_cur_x_;
   mouse_click_y_ = mouse_cur_y_;
   mouse_down_ = true;
 }
 
-void App::OnTouchMotion(int32_t id, wl_fixed_t x, wl_fixed_t y) noexcept {
-  if (id != touch_id_)
+void App::OnTouchMotion(const wl::TouchPoint& p) noexcept {
+  if (p.id != touch_id_)
     return;
-  const float nx = static_cast<float>(wl_fixed_to_double(x));
-  const float ny =
-      static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+  const float nx = static_cast<float>(p.x);
+  const float ny = static_cast<float>(height_) - static_cast<float>(p.y);
   touch_moved_ += std::abs(nx - mouse_cur_x_) + std::abs(ny - mouse_cur_y_);
   mouse_cur_x_ = nx;
   mouse_cur_y_ = ny;
@@ -821,11 +697,15 @@ void App::OnKey(const wl::KeyEvent& ev) {
   }
 }
 
-void App::OnPointerMotion(wl_fixed_t x, wl_fixed_t y) noexcept {
-  mouse_live_x_ = static_cast<float>(wl_fixed_to_double(x));
+// The pointer enter carries a position too; treat it like the first motion.
+void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+  OnPointerMotion(ev);
+}
+
+void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
+  mouse_live_x_ = static_cast<float>(ev.x);
   // Flip Y to Shadertoy's bottom-left origin.
-  mouse_live_y_ =
-      static_cast<float>(height_) - static_cast<float>(wl_fixed_to_double(y));
+  mouse_live_y_ = static_cast<float>(height_) - static_cast<float>(ev.y);
   // Shadertoy only moves iMouse.xy while a button is held (a drag); plain
   // hovering leaves it where the last drag ended.
   if (mouse_down_) {
@@ -834,10 +714,10 @@ void App::OnPointerMotion(wl_fixed_t x, wl_fixed_t y) noexcept {
   }
 }
 
-void App::OnPointerButton(uint32_t button, uint32_t state) noexcept {
-  if (button != BTN_LEFT)
+void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+  if (ev.button != BTN_LEFT)
     return;
-  mouse_down_ = (state == WL_POINTER_BUTTON_STATE_PRESSED);
+  mouse_down_ = (ev.state == WL_POINTER_BUTTON_STATE_PRESSED);
   if (mouse_down_) {
     mouse_cur_x_ = mouse_live_x_;  // jump iMouse.xy to the click point
     mouse_cur_y_ = mouse_live_y_;

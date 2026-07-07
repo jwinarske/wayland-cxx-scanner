@@ -223,30 +223,6 @@ class WlCallbackHandler
   void OnDone(uint32_t time_ms) override;
 };
 
-// ── WlPointerHandler ────────────────────────────────────────────────────────
-
-class WlPointerHandler : public wayland::client::CWlPointer<WlPointerHandler> {
- public:
-  App* app_ = nullptr;
-  void OnEnter(uint32_t serial,
-               wl_proxy* surface,
-               wl_fixed_t sx,
-               wl_fixed_t sy) override;
-  void OnLeave(uint32_t serial, wl_proxy* surface) override;
-  void OnMotion(uint32_t time, wl_fixed_t sx, wl_fixed_t sy) override;
-  void OnButton(uint32_t serial,
-                uint32_t time,
-                uint32_t button,
-                uint32_t state) override;
-  void OnAxis(uint32_t, uint32_t, wl_fixed_t) override {}
-  void OnFrame() override {}
-  void OnAxisSource(uint32_t) override {}
-  void OnAxisStop(uint32_t, uint32_t) override {}
-  void OnAxisDiscrete(uint32_t, int32_t) override {}
-  void OnAxisValue120(uint32_t, int32_t) override {}
-  void OnAxisRelativeDirection(uint32_t, uint32_t) override {}
-};
-
 // ── XDG shell handlers provided by <wl/xdg_shell.hpp> ──────────────────────
 //   wl::XdgWmBaseHandler        — responds to ping automatically
 //   wl::XdgSurfaceHandler<App>  — acks configure, calls OnXdgSurfaceConfigure
@@ -255,14 +231,9 @@ class WlPointerHandler : public wayland::client::CWlPointer<WlPointerHandler> {
 // ── XDG decoration handlers provided by <wl/xdg_decoration.hpp> ─────────────
 //   wl::XdgDecorationHandler<App>   — delegates configure to App
 
-// ── Seat handler (custom — manages both keyboard and pointer) ───────────────
-
-class SeatHandler : public wayland::client::CWlSeat<SeatHandler> {
- public:
-  App* app_ = nullptr;
-  void OnCapabilities(uint32_t caps) override;
-  void OnName(const char*) override {}
-};
+// ── Seat/keyboard/pointer handled by wl::SeatManager<App> (<wl/seat.hpp>) ────
+//   Binds the keyboard and — because App defines OnPointer* hooks — the
+//   pointer, dispatching typed events to the App's hooks below.
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Buffer pool — pre-allocates 2 double-buffered wl_shm buffers
@@ -420,16 +391,11 @@ class App {
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(uint32_t stamp_ms) noexcept;
 
-  // ── Pointer callbacks ─────────────────────────────────────────────────────
-  void OnPointerEnter(uint32_t serial, wl_fixed_t sx, wl_fixed_t sy) noexcept;
+  // ── Pointer callbacks (dispatched by wl::SeatManager) ─────────────────────
+  void OnPointerEnter(const wl::PointerEvent& ev) noexcept;
   void OnPointerLeave() noexcept;
-  void OnPointerMotion(wl_fixed_t sx, wl_fixed_t sy) noexcept;
-  void OnPointerButton(uint32_t serial,
-                       uint32_t button,
-                       uint32_t state) noexcept;
-
-  // ── Seat capability callback ──────────────────────────────────────────────
-  void OnSeatCapabilities(uint32_t caps) noexcept;
+  void OnPointerMotion(const wl::PointerEvent& ev) noexcept;
+  void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
 
  private:
   // ── Configuration ─────────────────────────────────────────────────────────
@@ -469,12 +435,8 @@ class App {
   wl::WlPtr<wl::XdgDecorationManagerHandler> decoration_mgr_;
   wl::WlPtr<wl::XdgDecorationHandler<App>> decoration_;
 
-  // Input: seat + keyboard + pointer.
+  // Input: seat + keyboard + pointer, all owned by SeatManager.
   wl::SeatManager<App> seat_;
-  wl::WlPtr<SeatHandler> seat_handler_;
-  wl::WlPtr<WlPointerHandler> pointer_;
-  uint32_t seat_name_ = 0;
-  uint32_t seat_ver_ = 0;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
@@ -492,7 +454,6 @@ class App {
   // ── Pointer state ─────────────────────────────────────────────────────────
   int pointer_x_ = 0;
   int pointer_y_ = 0;
-  uint32_t pointer_serial_ = 0;
 
   // ── Global IDs from registry scan ─────────────────────────────────────────
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
@@ -518,34 +479,6 @@ class App {
 
 void WlCallbackHandler::OnDone(uint32_t time_ms) {
   app_->OnFrameDone(time_ms);
-}
-
-void WlPointerHandler::OnEnter(uint32_t serial,
-                               wl_proxy* /*surface*/,
-                               wl_fixed_t sx,
-                               wl_fixed_t sy) {
-  app_->OnPointerEnter(serial, sx, sy);
-}
-
-void WlPointerHandler::OnLeave(uint32_t /*serial*/, wl_proxy* /*surface*/) {
-  app_->OnPointerLeave();
-}
-
-void WlPointerHandler::OnMotion(uint32_t /*time*/,
-                                wl_fixed_t sx,
-                                wl_fixed_t sy) {
-  app_->OnPointerMotion(sx, sy);
-}
-
-void WlPointerHandler::OnButton(uint32_t serial,
-                                uint32_t /*time*/,
-                                uint32_t button,
-                                uint32_t state) {
-  app_->OnPointerButton(serial, button, state);
-}
-
-void SeatHandler::OnCapabilities(uint32_t caps) {
-  app_->OnSeatCapabilities(caps);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -607,8 +540,6 @@ bool App::ScanGlobals() {
       decoration_mgr_ver_ = ver;
     } else if (iface == wl_seat_traits::interface_name) {
       seat_.Record(name, ver);
-      seat_name_ = name;
-      seat_ver_ = ver;
     }
   });
 
@@ -669,21 +600,11 @@ bool App::BindGlobals() {
                  "falling back to client-side decorations\n");
   }
 
-  // wl_seat — binds keyboard via SeatManager, pointer separately.
+  // wl_seat — SeatManager binds the keyboard and, since App defines OnPointer*
+  // hooks, the pointer too, on the seat capabilities event.
   if (!seat_.Bind(registry_, this)) {
     std::fprintf(stderr, "xdg-csd: wl_seat bind failed\n");
     return false;
-  }
-
-  // Bind seat separately for pointer management.
-  if (seat_name_) {
-    const uint32_t ver =
-        std::min(seat_ver_, wayland::client::wl_seat_traits::version);
-    if (wl_proxy* raw = registry_.Bind<wl_seat_traits>(seat_name_, ver)) {
-      if (wl::SetupHandler(seat_handler_, raw)) {
-        seat_handler_.Get()->app_ = this;
-      }
-    }
   }
 
   // Roundtrip to receive formats and capabilities.
@@ -842,12 +763,9 @@ void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
 
 // ── Pointer event implementations ───────────────────────────────────────────
 
-void App::OnPointerEnter(uint32_t serial,
-                         wl_fixed_t sx,
-                         wl_fixed_t sy) noexcept {
-  pointer_serial_ = serial;
-  pointer_x_ = wl_fixed_to_int(sx);
-  pointer_y_ = wl_fixed_to_int(sy);
+void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+  pointer_x_ = static_cast<int>(ev.x);
+  pointer_y_ = static_cast<int>(ev.y);
 }
 
 void App::OnPointerLeave() noexcept {
@@ -855,27 +773,27 @@ void App::OnPointerLeave() noexcept {
   pointer_y_ = -1;
 }
 
-void App::OnPointerMotion(wl_fixed_t sx, wl_fixed_t sy) noexcept {
-  pointer_x_ = wl_fixed_to_int(sx);
-  pointer_y_ = wl_fixed_to_int(sy);
+void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
+  pointer_x_ = static_cast<int>(ev.x);
+  pointer_y_ = static_cast<int>(ev.y);
 }
 
-void App::OnPointerButton(uint32_t serial,
-                          uint32_t button,
-                          uint32_t state) noexcept {
-  if (state != WL_POINTER_BUTTON_STATE_PRESSED)
+void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+  if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED)
     return;
-  if (button != BTN_LEFT)
+  if (ev.button != BTN_LEFT)
     return;
 
+  // The seat proxy backs interactive move/resize; the button serial authorizes
+  // the grab (see wl::SeatManager::Seat()).
+  wl_proxy* const seat = seat_.Seat();
   const HitZone zone = HitTest(pointer_x_, pointer_y_);
 
   switch (zone) {
     case HitZone::TitleBar:
       // Interactive move.
-      if (!seat_handler_.IsNull()) {
-        xdg_toplevel_.Get()->Move(seat_handler_.Get()->GetProxy(), serial);
-      }
+      if (seat != nullptr)
+        xdg_toplevel_.Get()->Move(seat, ev.serial);
       break;
 
     case HitZone::CloseButton:
@@ -899,30 +817,9 @@ void App::OnPointerButton(uint32_t serial,
     default: {
       // Resize zones.
       const uint32_t edge = wl::csd::HitZoneToResizeEdge(zone);
-      if (edge != 0 && !seat_handler_.IsNull()) {
-        xdg_toplevel_.Get()->Resize(seat_handler_.Get()->GetProxy(), serial,
-                                    edge);
-      }
+      if (edge != 0 && seat != nullptr)
+        xdg_toplevel_.Get()->Resize(seat, ev.serial, edge);
     } break;
-  }
-}
-
-// ── Seat capability handling ────────────────────────────────────────────────
-
-void App::OnSeatCapabilities(uint32_t caps) noexcept {
-  using namespace wayland::client;
-  const bool has_pointer = (caps & WL_SEAT_CAPABILITY_POINTER) != 0u;
-
-  if (has_pointer && pointer_.IsNull()) {
-    if (wl_proxy* raw =
-            wl::construct<wl_pointer_traits, wl_seat_traits::Op::GetPointer>(
-                *seat_handler_.Get())) {
-      if (wl::SetupHandler(pointer_, raw)) {
-        pointer_.Get()->app_ = this;
-      }
-    }
-  } else if (!has_pointer && !pointer_.IsNull()) {
-    pointer_.Reset();
   }
 }
 
@@ -979,12 +876,9 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
 // ── MainLoop ────────────────────────────────────────────────────────────────
 
 App::~App() {
-  // Release keyboard before members are destroyed.
+  // Release keyboard + pointer (SeatManager sends the versioned releases)
+  // before the WlPtr members are destroyed.
   seat_.Release();
-  // Release pointer.
-  if (!pointer_.IsNull()) {
-    pointer_.Reset();
-  }
   // Destroy decoration before toplevel (protocol requirement).
   decoration_.Reset();
 }
