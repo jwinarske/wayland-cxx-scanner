@@ -148,6 +148,14 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     wlcxx_gen(key_input key-input xdg_shell_client.hpp ${XDG_SHELL_XML})
 endif ()
 
+# ── clipboard ────────────────────────────────────────────────────────────────
+if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
+    wlcxx_example(clipboard clipboard/main.cpp)
+    target_link_libraries(clipboard PRIVATE PkgConfig::wayland_client PkgConfig::xkbcommon)
+    wlcxx_gen(clipboard clipboard wayland_client.hpp   ${WAYLAND_XML})
+    wlcxx_gen(clipboard clipboard xdg_shell_client.hpp ${XDG_SHELL_XML})
+endif ()
+
 # ── text-input — text-input-v1/v3 backends only ──────────────────────────────
 if (WAYLAND_CXX_IME_BACKEND MATCHES "^text-input-v[13]$"
     AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::wayland_client)
