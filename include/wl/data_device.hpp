@@ -107,16 +107,41 @@ struct HasDataCancelled<A,
 
 }  // namespace detail
 
+// Protocol-traits bundle for the core wl_data_device family.  DataDevice is
+// parameterized on a bundle like this so the one helper drives any
+// structurally-isomorphic clipboard family (e.g. ext-data-control) from a
+// different bundle — only the trait types, the CRTP bases, and two shape flags
+// differ.
+struct CoreDataProtocol {
+  using ManagerTraits = wayland::client::wl_data_device_manager_traits;
+  using DeviceTraits = wayland::client::wl_data_device_traits;
+  using OfferTraits = wayland::client::wl_data_offer_traits;
+  using SourceTraits = wayland::client::wl_data_source_traits;
+  template <class D>
+  using ManagerBase = wayland::client::CWlDataDeviceManager<D>;
+  template <class D>
+  using DeviceBase = wayland::client::CWlDataDevice<D>;
+  template <class D>
+  using OfferBase = wayland::client::CWlDataOffer<D>;
+  template <class D>
+  using SourceBase = wayland::client::CWlDataSource<D>;
+  // set_selection carries a serial; release is a since-2 destructor request
+  // (so it must be sent explicitly, version-gated, before the proxy is freed).
+  static constexpr bool set_selection_takes_serial = true;
+  static constexpr bool device_release_is_explicit = true;
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
-// wl::DataDevice<App>
+// wl::DataDevice<App, Protocol>
 //
-// Clipboard read side.  A selection arrives as a wl_data_offer introduced by
-// the data_offer event; its MIME types stream in via offer events; the
-// selection event marks it current.  The app is notified with the MIME set and
-// reads the bytes for a chosen type through Receive().
+// Clipboard helper for a data-device family (core wl_data_device by default).
+// Read side: a selection arrives as an offer introduced by the data_offer
+// event, its MIME types stream in via offer events, and the selection event
+// marks it current; the app reads a type through Receive().  Write side:
+// Offer(mimes, serial) publishes a source the app serves via OnSend.
 // ══════════════════════════════════════════════════════════════════════════════
 
-template <typename App>
+template <typename App, typename P = CoreDataProtocol>
 class DataDevice {
  public:
   DataDevice() noexcept = default;
@@ -141,7 +166,7 @@ class DataDevice {
   [[nodiscard]] bool Bind(wl::CRegistry& registry, App* app) noexcept {
     if (!name_)
       return true;  // optional
-    using M = wayland::client::wl_data_device_manager_traits;
+    using M = typename P::ManagerTraits;
     app_ = app;
     ver_ = std::min(ver_adv_, M::version);
     wl_proxy* raw = registry.Bind<M>(name_, ver_);
@@ -159,11 +184,12 @@ class DataDevice {
     if (manager_.IsNull() || seat == nullptr)
       return;
     display_ = display;
-    using M = wayland::client::wl_data_device_manager_traits;
+    using M = typename P::ManagerTraits;
     // get_data_device(new_id device, object seat): new_id is first, so plain
     // construct (nullptr, seat).
-    wl_proxy* raw = wl::construct<wayland::client::wl_data_device_traits,
-                                  M::Op::GetDataDevice>(*manager_.Get(), seat);
+    wl_proxy* raw =
+        wl::construct<typename P::DeviceTraits, M::Op::GetDataDevice>(
+            *manager_.Get(), seat);
     if (wl::SetupHandler(device_, raw))
       device_.Get()->owner_ = this;
   }
@@ -195,19 +221,24 @@ class DataDevice {
   /// wl::KeyEvent::serial or wl::PointerButtonEvent::serial).  The App produces
   /// the data on demand via OnSend and is told via OnCancelled when the offer
   /// is superseded.  No-op if the device has not been started.
-  void Offer(const MimeSet& mimes, std::uint32_t serial) noexcept {
+  void Offer(const MimeSet& mimes,
+             [[maybe_unused]] std::uint32_t serial) noexcept {
     if (manager_.IsNull() || device_.IsNull())
       return;
     source_.Reset();  // drop any previous offer we still own
-    using M = wayland::client::wl_data_device_manager_traits;
-    wl_proxy* raw = wl::construct<wayland::client::wl_data_source_traits,
-                                  M::Op::CreateDataSource>(*manager_.Get());
+    using M = typename P::ManagerTraits;
+    wl_proxy* raw =
+        wl::construct<typename P::SourceTraits, M::Op::CreateDataSource>(
+            *manager_.Get());
     if (!wl::SetupHandler(source_, raw))
       return;
     source_.Get()->owner_ = this;
     for (const std::string& mime : mimes)
       source_.Get()->Offer(mime.c_str());
-    device_.Get()->SetSelection(source_.Get()->GetProxy(), serial);
+    if constexpr (P::set_selection_takes_serial)
+      device_.Get()->SetSelection(source_.Get()->GetProxy(), serial);
+    else
+      device_.Get()->SetSelection(source_.Get()->GetProxy());
   }
 
   /// Send the versioned release and destroy the proxies.  Idempotent; call from
@@ -222,16 +253,15 @@ class DataDevice {
  private:
   // ── Nested handlers
   // ──────────────────────────────────────────────────────────
-  struct ManagerHandler
-      : wayland::client::CWlDataDeviceManager<ManagerHandler> {};
+  struct ManagerHandler : P::template ManagerBase<ManagerHandler> {};
 
-  struct OfferHandler : wayland::client::CWlDataOffer<OfferHandler> {
+  struct OfferHandler : P::template OfferBase<OfferHandler> {
     MimeSet mimes;
     void OnOffer(const char* mime) override { mimes.Add(mime); }
     // source_actions / action are DnD-only; the generated no-ops are fine.
   };
 
-  struct DeviceHandler : wayland::client::CWlDataDevice<DeviceHandler> {
+  struct DeviceHandler : P::template DeviceBase<DeviceHandler> {
     DataDevice* owner_ = nullptr;
     void OnDataOffer(wl_proxy* id) override {
       if (owner_ != nullptr)
@@ -244,7 +274,7 @@ class DataDevice {
     // enter / leave / motion / drop are DnD-only; no-ops are fine.
   };
 
-  struct SourceHandler : wayland::client::CWlDataSource<SourceHandler> {
+  struct SourceHandler : P::template SourceBase<SourceHandler> {
     DataDevice* owner_ = nullptr;
     void OnSend(const char* mime, std::int32_t fd) override {
       if (owner_ != nullptr)
@@ -310,9 +340,14 @@ class DataDevice {
   void ReleaseDevice() noexcept {
     if (device_.IsNull())
       return;
-    using D = wayland::client::wl_data_device_traits;
-    if (ver_ >= D::Op::Since::Release)
-      device_.Get()->Release();  // release request (since v2) + destroys proxy
+    // Core sends an explicit, version-gated release request; a family whose
+    // device teardown is a plain destructor request lets WlPtr::Reset (below)
+    // send it.
+    if constexpr (P::device_release_is_explicit) {
+      using D = typename P::DeviceTraits;
+      if (ver_ >= D::Op::Since::Release)
+        device_.Get()->Release();
+    }
     device_.Reset();
   }
 
