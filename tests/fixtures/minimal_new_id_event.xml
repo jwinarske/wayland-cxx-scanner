@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Isolates the event-created-object codegen path: a factory whose request
+     creates a `thingy` (client-side new_id, unchanged uint32_t path), and a
+     `thingy` whose `spawn` event carries a new_id (the case libwayland
+     constructs and passes to the listener as a pointer). Used by the live
+     wl_display dispatch test that would UBSan-fault if the event new_id slot
+     were mapped to uint32_t. No external interfaces so it links standalone. -->
+<protocol name="thingy">
+  <interface name="thingy_factory" version="1">
+    <request name="create">
+      <arg name="id" type="new_id" interface="thingy"/>
+    </request>
+  </interface>
+
+  <interface name="thingy" version="1">
+    <event name="spawn">
+      <arg name="child" type="new_id" interface="thingy"/>
+    </event>
+  </interface>
+</protocol>

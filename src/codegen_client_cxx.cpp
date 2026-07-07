@@ -39,11 +39,19 @@ void emit_since_versions(std::ostringstream& os, const Interface& iface) {
   os << "\n";
 }
 
-/// Map ArgType to a C++ parameter type string.
+/// Direction of the message an argument belongs to.  The C++ type of a
+/// `new_id` argument depends on it: in a request the client supplies the id (a
+/// `uint32_t` consumed by `construct<>` / `_MarshalNew`), but in an event
+/// libwayland has already constructed the object and passes the listener a
+/// pointer-width `wl_proxy*` — mapping it to `uint32_t` would read 4 bytes of
+/// an 8-byte pointer on LP64 (a C-ABI mismatch / UB).
+enum class MsgDir { Request, Event };
+
+/// Map ArgType to a C++ parameter type string, given the message direction.
 /// M3: every ArgType value is explicitly listed; the default branch is
 /// unreachable (asserts in debug, returns void* in release as a last resort
 /// to avoid silently emitting wrong code when a new ArgType is added).
-std::string_view cpp_arg_type(const Arg& arg) {
+std::string_view cpp_arg_type(const Arg& arg, MsgDir dir) {
   switch (arg.type) {
     case ArgType::Int:
       return "int32_t";
@@ -56,7 +64,9 @@ std::string_view cpp_arg_type(const Arg& arg) {
     case ArgType::Object:
       return "wl_proxy*";
     case ArgType::NewId:
-      return "uint32_t";
+      // Event: libwayland passes the object it constructed as a typed pointer;
+      // the slot must be pointer-width.  Request: the id the client chooses.
+      return dir == MsgDir::Event ? "wl_proxy*" : "uint32_t";
     case ArgType::Array:
       return "wl_array*";
     case ArgType::Fd:
@@ -96,7 +106,7 @@ void emit_bind_request(std::ostringstream& os,
     os << "this Derived& self, ";
   for (const auto& a : r.args)
     if (a.type != ArgType::NewId)
-      os << cpp_arg_type(a) << " " << a.name << ", ";
+      os << cpp_arg_type(a, MsgDir::Request) << " " << a.name << ", ";
   os << "uint32_t version) noexcept {\n";
   os << "    return "
      << (deducing_this ? "self._MarshalBind(" : "Base::_MarshalBind(")
@@ -197,7 +207,7 @@ void emit_client_class(std::ostringstream& os,
       // C++23: explicit-object parameter (P0847R7).
       os << "  void " << method << "(this Derived& self";
       for (const auto& a : r.args)
-        os << ", " << cpp_arg_type(a) << " " << a.name;
+        os << ", " << cpp_arg_type(a, MsgDir::Request) << " " << a.name;
       os << ") noexcept {\n";
       os << "    self._Marshal(" << traits_name << "::Op::" << method;
       for (const auto& a : r.args)
@@ -222,7 +232,7 @@ void emit_client_class(std::ostringstream& os,
         if (i > 0)
           os << ", ";
         const auto& arg = r.args.at(i);
-        os << cpp_arg_type(arg) << " " << arg.name;
+        os << cpp_arg_type(arg, MsgDir::Request) << " " << arg.name;
       }
       os << ") noexcept {\n";
       os << "    Base::_Marshal(" << traits_name << "::Op::" << method;
@@ -249,7 +259,7 @@ void emit_client_class(std::ostringstream& os,
         if (i > 0)
           os << ", ";
         const auto& arg = r.args.at(i);
-        os << cpp_arg_type(arg) << " " << arg.name;
+        os << cpp_arg_type(arg, MsgDir::Request) << " " << arg.name;
       }
       os << ") noexcept {\n";
       os << "    Base::_Marshal(" << traits_name << "::Op::" << method;
@@ -269,7 +279,7 @@ void emit_client_class(std::ostringstream& os,
       if (i > 0)
         os << ", ";
       const auto& arg = e.args.at(i);
-      os << cpp_arg_type(arg) << " /*" << arg.name << "*/";
+      os << cpp_arg_type(arg, MsgDir::Event) << " /*" << arg.name << "*/";
     }
     os << ") {}\n";
   }
@@ -289,7 +299,7 @@ void emit_client_class(std::ostringstream& os,
       os << "  static void _Evt" << snake_to_pascal(e.name)
          << "(void* data, wl_proxy* /*proxy*/";
       for (std::size_t i = 0; i < e.args.size(); ++i)
-        os << ", " << cpp_arg_type(e.args.at(i)) << " a" << i;
+        os << ", " << cpp_arg_type(e.args.at(i), MsgDir::Event) << " a" << i;
       os << ") {\n";
       os << "    static_cast<" << cls_name << "*>(data)->On"
          << snake_to_pascal(e.name) << "(";

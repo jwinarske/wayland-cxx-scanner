@@ -161,6 +161,39 @@ else
     warning('wayland-client not found — skipping test_interface_tables')
 endif
 
+# ── Event-created new_id live-dispatch test ──────────────────────────────────
+# Drives libwayland across a socketpair so the generated client thunk is invoked
+# through the real C listener ABI — the only tier that catches the new_id-in-
+# event pointer-width defect (run under ASan/UBSan in CI). Needs both the client
+# and server libraries.
+if wayland_client_dep.found() and wayland_server_dep.found()
+    thingy_client_hdr = custom_target(
+        'test-thingy-client-header',
+        input:   'fixtures/minimal_new_id_event.xml',
+        output:  'thingy_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+
+    _test_event_new_id_exe = executable(
+        'test_event_new_id_roundtrip',
+        ['integration/test_event_new_id_roundtrip.cpp', thingy_client_hdr],
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('event_new_id_roundtrip', _test_event_new_id_exe,
+        args: [
+            '--gtest_output=xml:results/test_event_new_id_roundtrip.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 60,
+        suite: 'integration',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
+else
+    warning('wayland-client/server not found — skipping test_event_new_id_roundtrip')
+endif
+
 # ── IME facade contract test (ime_backend=none) ──────────────────────────────
 # Includes backend.hpp, which only resolves cleanly without a selected backend.
 if ime_backend == 'none'
