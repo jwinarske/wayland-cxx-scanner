@@ -271,6 +271,46 @@ else
     warning('wayland-client/server/scanner not found — skipping test_data_device_roundtrip')
 endif
 
+# ── ext-data-control live-dispatch test (templatized DataDevice, 2nd protocol) ─
+_fs = import('fs')
+_ext_dc_xml = _wp_dep.found() ? _wp_dep.get_variable('pkgdatadir') / 'staging/ext-data-control/ext-data-control-v1.xml' : ''
+if wayland_client_dep.found() and wayland_server_dep.found() and _wl_scanner_dep.found() and _ext_dc_xml != '' and _fs.exists(_ext_dc_xml)
+    _wayland_xml = _wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
+    dc_client_hdr = custom_target(
+        'test-dc-client-header',
+        input:   _wayland_xml,
+        output:  'dc_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+    dc_ext_client_hdr = custom_target(
+        'test-dc-ext-client-header',
+        input:   _ext_dc_xml,
+        output:  'dc_ext_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+
+    _test_data_control_exe = executable(
+        'test_data_control_roundtrip',
+        ['integration/test_data_control_roundtrip.cpp', dc_client_hdr,
+         dc_ext_client_hdr],
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('data_control_roundtrip', _test_data_control_exe,
+        args: [
+            '--gtest_output=xml:results/test_data_control_roundtrip.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 60,
+        suite: 'integration',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
+else
+    warning('ext-data-control not found — skipping test_data_control_roundtrip')
+endif
+
 # ── IME facade contract test (ime_backend=none) ──────────────────────────────
 # Includes backend.hpp, which only resolves cleanly without a selected backend.
 if ime_backend == 'none'
