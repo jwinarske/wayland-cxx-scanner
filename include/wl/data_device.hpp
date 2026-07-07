@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// data_device — header-only wl_data_device helper for reading the clipboard
-// selection (paste).  It binds wl_data_device_manager, gets the seat's data
-// device, tracks the offered MIME types for the current selection, and hands
-// the app a pipe fd to read the data from.  The copy/send side (which needs a
-// serial from a real input event for set_selection) is intentionally not here.
+// data_device — header-only wl_data_device helper for the clipboard: reading
+// the current selection (paste) and taking ownership of it (copy).  It binds
+// wl_data_device_manager, gets the seat's data device, tracks the offered MIME
+// types and hands the app a read fd on the paste side, and on the copy side
+// creates a data source that serves the offered data on demand.
 //
 // This header must be included AFTER the generated wayland_client.hpp:
 //   #include "wayland_client.hpp"   // defines CWlDataDevice, CWlDataOffer, …
 //   #include <wl/data_device.hpp>   // wl::DataDevice<App>
 //
-// ── Optional App hook (detected via SFINAE)
-// ───────────────────────────────────
-//   void OnSelection(const wl::MimeSet& mimes);  // clipboard changed
+// ── Optional App hooks (detected via SFINAE)
+// ─────────────────────────────────────
+//   void OnSelection(const wl::MimeSet& mimes);      // a selection arrived
+//   void OnSend(const char* mime, wl::FdHandle fd);  // write the offered data
+//   void OnCancelled();                              // the offer was dropped
 //
 // ── Lifecycle
 // ─────────────────────────────────────────────────────────────────
@@ -23,7 +25,8 @@
 //   2. Bind(registry, app) — after the registry roundtrip.
 //   3. Start(display, seat) — once the display and seat proxy are available
 //   (e.g. SeatManager::Seat()).
-//   4. On a selection, the app calls Receive(mime) to get a read fd.
+//   4. Paste: on a selection, the app calls Receive(mime) to get a read fd.
+//      Copy:  the app calls Offer(mimes, serial) and produces data via OnSend.
 //   5. Release()           — before member destructors run (App::~App).
 
 #pragma once
@@ -45,7 +48,8 @@ extern "C" {
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <utility>  // std::declval
+#include <type_traits>  // std::void_t
+#include <utility>      // std::declval
 #include <vector>
 
 namespace wl {
@@ -72,6 +76,36 @@ class MimeSet {
  private:
   std::vector<std::string> items_;
 };
+
+namespace detail {
+
+// True when App wants the clipboard selection: OnSelection(const MimeSet&).
+template <typename A, typename = void>
+struct HasDataSelection : std::false_type {};
+template <typename A>
+struct HasDataSelection<A,
+                        std::void_t<decltype(std::declval<A&>().OnSelection(
+                            std::declval<const MimeSet&>()))>>
+    : std::true_type {};
+
+// True when App accepts a clipboard send request: OnSend(mime, FdHandle).
+template <typename A, typename = void>
+struct HasDataSend : std::false_type {};
+template <typename A>
+struct HasDataSend<A,
+                   std::void_t<decltype(std::declval<A&>().OnSend(
+                       std::declval<const char*>(),
+                       std::declval<wl::FdHandle>()))>> : std::true_type {};
+
+// True when App wants notice that its offered selection was superseded.
+template <typename A, typename = void>
+struct HasDataCancelled : std::false_type {};
+template <typename A>
+struct HasDataCancelled<A,
+                        std::void_t<decltype(std::declval<A&>().OnCancelled())>>
+    : std::true_type {};
+
+}  // namespace detail
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl::DataDevice<App>
@@ -156,10 +190,31 @@ class DataDevice {
   /// True when a selection offer is currently held.
   [[nodiscard]] bool HasSelection() const noexcept { return !offer_.IsNull(); }
 
+  /// Take ownership of the clipboard: create a data source offering @p mimes
+  /// and set it as the selection using @p serial from a real input event (e.g.
+  /// wl::KeyEvent::serial or wl::PointerButtonEvent::serial).  The App produces
+  /// the data on demand via OnSend and is told via OnCancelled when the offer
+  /// is superseded.  No-op if the device has not been started.
+  void Offer(const MimeSet& mimes, std::uint32_t serial) noexcept {
+    if (manager_.IsNull() || device_.IsNull())
+      return;
+    source_.Reset();  // drop any previous offer we still own
+    using M = wayland::client::wl_data_device_manager_traits;
+    wl_proxy* raw = wl::construct<wayland::client::wl_data_source_traits,
+                                  M::Op::CreateDataSource>(*manager_.Get());
+    if (!wl::SetupHandler(source_, raw))
+      return;
+    source_.Get()->owner_ = this;
+    for (const std::string& mime : mimes)
+      source_.Get()->Offer(mime.c_str());
+    device_.Get()->SetSelection(source_.Get()->GetProxy(), serial);
+  }
+
   /// Send the versioned release and destroy the proxies.  Idempotent; call from
   /// App::~App before member destructors run.
   void Release() noexcept {
-    offer_.Reset();  // wl_data_offer.destroy (destructor) via WlPtr
+    source_.Reset();  // wl_data_source.destroy (destructor) via WlPtr
+    offer_.Reset();   // wl_data_offer.destroy (destructor) via WlPtr
     ReleaseDevice();
     manager_.Reset();  // no destructor request — just frees the proxy
   }
@@ -189,6 +244,19 @@ class DataDevice {
     // enter / leave / motion / drop are DnD-only; no-ops are fine.
   };
 
+  struct SourceHandler : wayland::client::CWlDataSource<SourceHandler> {
+    DataDevice* owner_ = nullptr;
+    void OnSend(const char* mime, std::int32_t fd) override {
+      if (owner_ != nullptr)
+        owner_->SendRequested(mime, fd);
+    }
+    void OnCancelled() override {
+      if (owner_ != nullptr)
+        owner_->SourceCancelled();
+    }
+    // target / dnd_drop_performed / dnd_finished / action are DnD-only.
+  };
+
   // A new offer is being introduced; adopt it in place so its handler (and the
   // proxy's listener) accumulate the MIME types.  A single slot is correct for
   // the clipboard: each data_offer is immediately followed by its offer events
@@ -215,6 +283,30 @@ class DataDevice {
       CallSelection(offer_.Get()->mimes);
   }
 
+  // The compositor wants the offered data for @p mime written to @p fd (on
+  // behalf of a pasting client).  Hand the App a FdHandle that closes the fd
+  // when it returns; if the App has no OnSend hook, close it here so the reader
+  // sees EOF rather than blocking.
+  void SendRequested(const char* mime, int fd) noexcept {
+    if constexpr (detail::HasDataSend<App>::value) {
+      if (app_ != nullptr) {
+        app_->OnSend(mime, wl::FdHandle{fd});
+        return;
+      }
+    }
+    close(fd);
+  }
+
+  // Our offered selection was superseded or cleared; drop the source and
+  // notify.
+  void SourceCancelled() noexcept {
+    source_.Reset();
+    if constexpr (detail::HasDataCancelled<App>::value) {
+      if (app_ != nullptr)
+        app_->OnCancelled();
+    }
+  }
+
   void ReleaseDevice() noexcept {
     if (device_.IsNull())
       return;
@@ -224,21 +316,21 @@ class DataDevice {
     device_.Reset();
   }
 
-  // ── Optional App hook (SFINAE, mirroring PointerHandler)
-  // ─────────────────────
-  template <typename A = App>
-  auto CallSelection(const MimeSet& m)
-      -> decltype(std::declval<A&>().OnSelection(m), void()) {
-    app_->OnSelection(m);
+  // Deliver the selection to the App when it wants it.  The caller guarantees
+  // app_ is non-null.  if constexpr (not a variadic fallback) so a MimeSet is
+  // never passed through `...` — that would abort at runtime.
+  void CallSelection(const MimeSet& m) noexcept {
+    if constexpr (detail::HasDataSelection<App>::value)
+      app_->OnSelection(m);
   }
-  void CallSelection(...) noexcept {}
 
   // ── Members
   // ──────────────────────────────────────────────────────────────────
   wl::WlPtr<ManagerHandler> manager_;
   wl::WlPtr<DeviceHandler> device_;
-  wl::WlPtr<OfferHandler> offer_;  // the current selection's offer
-  wl_display* display_ = nullptr;  // for flushing the receive request
+  wl::WlPtr<OfferHandler> offer_;    // the current selection's offer (paste)
+  wl::WlPtr<SourceHandler> source_;  // the App's offered selection (copy)
+  wl_display* display_ = nullptr;    // for flushing the receive request
   std::uint32_t name_ = 0;
   std::uint32_t ver_adv_ = 0;
   std::uint32_t ver_ = 0;
