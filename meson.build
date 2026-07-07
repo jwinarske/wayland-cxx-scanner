@@ -61,6 +61,8 @@ install_headers(
     'include/wl/wl_ptr.hpp',
     'include/wl/resource_impl.hpp',
     'include/wl/registry.hpp',
+    'include/wl/scale_policy.hpp',
+    'include/wl/scale_policy_vectors.hpp',
     'include/wl/wayland.hpp',
     'include/wl/xdg_shell.hpp',
     'include/wl/xdg_decoration.hpp',

@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 wayland-cxx-scanner contributors
 #
-# skia-demo-common: the shared scene, scale policy, and damage helpers used by
-# the Skia examples so each example stays thin and diffable against its base.
+# skia-demo-common: the shared scene and damage helpers used by the Skia
+# examples so each example stays thin and diffable against its base. The scale
+# policy is now a framework header (<wl/scale_policy.hpp>).
 # Gated by the parent examples/meson.build, which only descends here once Skia
 # has been resolved into `skia_dep`.
 
@@ -12,7 +13,6 @@ skia_demo_common_lib = static_library(
     'skia_demo_common',
     sources: [
         'scene.cpp',
-        'scale.cpp',
         'damage.cpp',
         'frame_pacer.cpp',
         'perf_hud.cpp',
@@ -63,14 +63,16 @@ test(
 
 # ── Unit tests ────────────────────────────────────────────────────────────────
 #
-# Cover the pure logic in the shared library — the fractional-scale policy and
-# the damage-list helpers.  Built with -Dtests=true; they live here rather than
-# under tests/ because that subdir is processed before Skia is resolved.
+# Cover the pure logic in the shared library — the damage-list helpers, frame
+# pacer, perf HUD, and view tree.  Built with -Dtests=true; they live here
+# rather than under tests/ because that subdir is processed before Skia is
+# resolved. (The scale policy moved to a framework header and is covered by
+# tests/unit/test_scale_policy.cpp, which needs no Skia.)
 if get_option('tests')
     gtest_main_dep = dependency('gtest_main', required: false,
                                 fallback: ['gtest', 'gtest_main_dep'])
     if gtest_main_dep.found()
-        foreach case : ['scale', 'damage', 'frame_pacer', 'perf_hud', 'view_tree']
+        foreach case : ['damage', 'frame_pacer', 'perf_hud', 'view_tree']
             _exe = executable(
                 'skia_demo_test_' + case,
                 sources: ['test_' + case + '.cpp'],
