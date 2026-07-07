@@ -30,6 +30,7 @@
 #include <wl/presentation.hpp>
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
+#include <wl/scale_policy.hpp>
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
@@ -39,7 +40,6 @@
 #include "damage.hpp"
 #include "frame_pacer.hpp"
 #include "perf_hud.hpp"
-#include "scale.hpp"
 #include "scene.hpp"
 #include "view_tree.hpp"
 
@@ -367,8 +367,8 @@ class App {
   }
 
   // Physical buffer size for the current logical size and scale.
-  [[nodiscard]] demo::BufferSize BufferPx() const noexcept {
-    return demo::ScalePolicy::ToBuffer(width_, height_, scale_120_);
+  [[nodiscard]] wl::ScalePolicy::BufferSize BufferPx() const noexcept {
+    return wl::ScalePolicy::ToBuffer(width_, height_, scale_120_);
   }
   [[nodiscard]] bool CanScale() const noexcept {
     return viewport_.Get()->GetProxy() != nullptr;
@@ -420,7 +420,7 @@ class App {
   int height_ = kDefaultHeight;
   int pending_width_ = kDefaultWidth;
   int pending_height_ = kDefaultHeight;
-  int scale_120_ = demo::ScalePolicy::kUnityScale120;
+  int scale_120_ = wl::ScalePolicy::kUnityScale120;
 
   demo::SceneState scene_;
   demo::FramePacer pacer_;
@@ -664,7 +664,7 @@ bool App::CreateWindow() {
 // ─────────────────────────────────────────────────────────────────
 
 bool App::EnsurePool() noexcept {
-  const demo::BufferSize px = BufferPx();
+  const wl::ScalePolicy::BufferSize px = BufferPx();
   if (pool_.width == px.width && pool_.height == px.height &&
       pool_.mem.data != MAP_FAILED)
     return true;
@@ -687,7 +687,7 @@ void App::RenderFrame(int idx) noexcept {
   // The buffer is physical pixels; the scene draws in logical units, so scale
   // the canvas once at the top.  Damage comes back in logical pixels.
   const auto canvas_scale =
-      static_cast<SkScalar>(demo::ScalePolicy::CanvasScale(scale_120_));
+      static_cast<SkScalar>(wl::ScalePolicy::CanvasScale(scale_120_));
   SkCanvas* canvas = surface->getCanvas();
   canvas->scale(canvas_scale, canvas_scale);
 
@@ -746,7 +746,7 @@ void App::CommitFrame(bool arm_callback) noexcept {
 // damage_buffer per rect, clamped to the buffer and coalesced.
 void App::SubmitDamage() noexcept {
   const auto scale =
-      static_cast<float>(demo::ScalePolicy::CanvasScale(scale_120_));
+      static_cast<float>(wl::ScalePolicy::CanvasScale(scale_120_));
 
   damage_buffer_.clear();
   damage_buffer_.reserve(damage_logical_.size());

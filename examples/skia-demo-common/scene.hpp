@@ -22,7 +22,7 @@ class ViewTree;
 
 // Immutable per-frame inputs to the scene.  The caller applies any
 // fractional-scale transform on the canvas before calling Render (see
-// scale.hpp).
+// <wl/scale_policy.hpp>).
 struct SceneState {
   std::uint32_t frame = 0;     // monotone frame counter; drives animation
   bool button_active = false;  // true while the button is held
