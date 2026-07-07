@@ -34,11 +34,18 @@ static_assert(wl::WlProxyTraits<FakeChildTraits>);
 // ─────────────────────────────────────────
 
 struct FakeClient : wl::CProxyImpl<FakeClient, FakeClientTraits> {
-  // Required by _SetProxy: wl_proxy_add_listener reads s_listener_table_.
-  // An array of one null pointer is sufficient for null-path tests.
-  static const void* s_listener_table_[];
+  // Required by _SetProxy: it installs this as the proxy's event dispatcher.
+  // A stub is sufficient for these null-path tests (it is never invoked).  The
+  // name is fixed by the framework contract (_SetProxy names
+  // Derived::_Dispatch). NOLINTNEXTLINE(bugprone-reserved-identifier)
+  static int _Dispatch(const void* /*impl*/,
+                       void* /*target*/,
+                       uint32_t /*opcode*/,
+                       const wl_message* /*msg*/,
+                       wl_argument* /*args*/) {
+    return 0;
+  }
 };
-const void* FakeClient::s_listener_table_[] = {nullptr};
 
 // ── CProxyImpl tests
 // ──────────────────────────────────────────────────────────
