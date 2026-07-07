@@ -121,4 +121,7 @@ if have_skia
     # skia-egl-canvas uses subdir_done() internally if EGL/GLES/wayland-egl deps
     # are absent.
     subdir('skia-egl-canvas')
+    # skia-vulkan-dmabuf uses subdir_done() internally if vulkan/libdrm deps are
+    # absent.
+    subdir('skia-vulkan-dmabuf')
 endif
