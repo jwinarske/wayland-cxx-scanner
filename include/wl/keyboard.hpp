@@ -99,6 +99,10 @@ struct KeyEvent {
   uint32_t state;       ///< WL_KEYBOARD_KEY_STATE_PRESSED / _RELEASED.
   uint32_t modifiers;   ///< Serialized effective xkb modifier mask.
   bool repeat;          ///< True when synthesized by key repeat.
+  uint32_t serial;      ///< wl_keyboard.key serial; usable for requests that
+                        ///< need an input serial (e.g. set_selection).  For a
+                        ///< client-side repeat tick it carries the serial of
+                        ///< the originating press.
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -231,12 +235,15 @@ class KeyboardHandler
   /// Translates the evdev scancode to a keysym + modifier mask and delivers a
   /// KeyEvent to App::OnKey.  Arms the repeat timerfd on key-press for
   /// repeatable keys; disarms it on release of the currently repeating key.
-  void OnKey(uint32_t /*serial*/,
+  void OnKey(uint32_t serial,
              uint32_t /*time*/,
              uint32_t key,
              uint32_t state) override {
     if (!app_)
       return;
+    // Remember the most recent key serial; a client-side repeat tick reuses it
+    // (repeats carry no serial of their own).
+    last_serial_ = serial;
 
     // wl_keyboard v10 lets the compositor drive key repeat itself, delivering
     // key events with state "repeated" (value 2) instead of advertising a rate
@@ -248,7 +255,7 @@ class KeyboardHandler
         server_repeat ? static_cast<uint32_t>(WL_KEYBOARD_KEY_STATE_PRESSED)
                       : state;
 
-    KeyEvent ev{key, XKB_KEY_NoSymbol, app_state, 0u, server_repeat};
+    KeyEvent ev{key, XKB_KEY_NoSymbol, app_state, 0u, server_repeat, serial};
     xkb_keycode_t xkb_code = 0;
     if (xkb_state_) {
       // Translate Linux evdev scancode → XKB scancode (evdev offset is 8).
@@ -328,8 +335,9 @@ class KeyboardHandler
         static_cast<ssize_t>(sizeof(expirations)))
       return;
 
-    KeyEvent ev{repeat_.key, XKB_KEY_NoSymbol, WL_KEYBOARD_KEY_STATE_PRESSED,
-                0u, true};
+    KeyEvent ev{
+        repeat_.key, XKB_KEY_NoSymbol, WL_KEYBOARD_KEY_STATE_PRESSED, 0u,
+        true,        last_serial_};
     if (xkb_state_) {
       const xkb_keycode_t xkb_code =
           static_cast<xkb_keycode_t>(repeat_.key) + 8u;
@@ -348,6 +356,9 @@ class KeyboardHandler
   xkb_context* xkb_context_ = nullptr;
   xkb_keymap* xkb_keymap_ = nullptr;
   xkb_state* xkb_state_ = nullptr;
+
+  // Serial of the most recent wl_keyboard.key event; reused for repeat ticks.
+  uint32_t last_serial_ = 0;
 
   // ── Keyboard repeat state ─────────────────────────────────────────────────
   struct RepeatState {

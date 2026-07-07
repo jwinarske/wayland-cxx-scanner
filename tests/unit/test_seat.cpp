@@ -75,12 +75,14 @@ struct FakeSeatApp {
   uint32_t last_state = 0;
   xkb_keysym_t last_sym = XKB_KEY_NoSymbol;
   bool last_repeat = false;
+  uint32_t last_serial = 0;
 
   void OnKey(const wl::KeyEvent& ev) {
     last_key = ev.key;
     last_state = ev.state;
     last_sym = ev.keysym;
     last_repeat = ev.repeat;
+    last_serial = ev.serial;
   }
 };
 
@@ -126,6 +128,16 @@ TEST(KeyboardHandler, OnKeyWithAppAndNullXkbStateCallsApp) {
   kbd.OnKey(0u, 0u, 30u, 1u);
   EXPECT_EQ(app.last_key, 30u);
   EXPECT_EQ(app.last_state, 1u);
+}
+
+TEST(KeyboardHandler, OnKeyDeliversTheInputSerial) {
+  // The wl_keyboard.key serial reaches the App on the KeyEvent — consumers
+  // need it for requests that take an input serial (e.g. set_selection).
+  wl::KeyboardHandler<FakeSeatApp> kbd;
+  FakeSeatApp app;
+  kbd.app_ = &app;
+  kbd.OnKey(4242u, 0u, 30u, 1u);
+  EXPECT_EQ(app.last_serial, 4242u);
 }
 
 TEST(KeyboardHandler, OnKeyWithAppWithKeySymAndNullXkbStateCallsApp) {
