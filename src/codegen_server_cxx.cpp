@@ -19,10 +19,19 @@ uint32_t msg_since(const Message& m) {
   return m.since.empty() ? 1u : static_cast<uint32_t>(std::stoul(m.since));
 }
 
-/// Map ArgType to a C++ parameter type for server-side code.
-/// M3: every ArgType value is explicitly listed; the default branch is
-/// unreachable and asserts in debug builds.
-std::string_view cpp_server_arg_type(const Arg& arg) {
+/// Direction of the message an argument belongs to.  On the server the C++ type
+/// of a `new_id` argument depends on it, mirroring the client (but with server
+/// types): in an incoming request libwayland-server passes the client-chosen id
+/// as a `uint32_t` (the server then calls wl_resource_create), while in an
+/// outgoing event the server supplies the resource it created and
+/// wl_resource_post_event marshals a pointer — so the slot must be a
+/// `wl_resource*`, not a `uint32_t` passed through varargs.
+enum class MsgDir { Request, Event };
+
+/// Map ArgType to a C++ parameter type for server-side code, given the message
+/// direction.  M3: every ArgType value is explicitly listed; the default branch
+/// is unreachable and asserts in debug builds.
+std::string_view cpp_server_arg_type(const Arg& arg, MsgDir dir) {
   switch (arg.type) {
     case ArgType::Int:
       return "int32_t";
@@ -35,7 +44,10 @@ std::string_view cpp_server_arg_type(const Arg& arg) {
     case ArgType::Object:
       return "wl_resource*";
     case ArgType::NewId:
-      return "uint32_t";
+      // Event: the server passes the resource it created;
+      // wl_resource_post_event marshals a pointer.  Request: the client-chosen
+      // id the server binds.
+      return dir == MsgDir::Event ? "wl_resource*" : "uint32_t";
     case ArgType::Array:
       return "wl_array*";
     case ArgType::Fd:
@@ -122,7 +134,7 @@ void emit_server_class(std::ostringstream& os,
       // C++23: explicit-object parameter (P0847R7).
       os << "  void " << method << "(this Derived& self";
       for (const auto& a : e.args)
-        os << ", " << cpp_server_arg_type(a) << " " << a.name;
+        os << ", " << cpp_server_arg_type(a, MsgDir::Event) << " " << a.name;
       os << ") noexcept {\n";
       os << "    self._PostEvent(" << traits_name
          << "::Evt::" << snake_to_pascal(e.name);
@@ -141,7 +153,7 @@ void emit_server_class(std::ostringstream& os,
         if (i > 0)
           os << ", ";
         const auto& arg = e.args.at(i);
-        os << cpp_server_arg_type(arg) << " " << arg.name;
+        os << cpp_server_arg_type(arg, MsgDir::Event) << " " << arg.name;
       }
       os << ") noexcept {\n";
       os << "    Base::_PostEvent(" << traits_name
@@ -163,7 +175,7 @@ void emit_server_class(std::ostringstream& os,
         if (i > 0)
           os << ", ";
         const auto& arg = e.args.at(i);
-        os << cpp_server_arg_type(arg) << " " << arg.name;
+        os << cpp_server_arg_type(arg, MsgDir::Event) << " " << arg.name;
       }
       os << ") noexcept {\n";
       os << "    Base::_PostEvent(" << traits_name
@@ -179,7 +191,8 @@ void emit_server_class(std::ostringstream& os,
     os << "  virtual void On" << snake_to_pascal(r.name)
        << "(wl_client* /*client*/, wl_resource* /*resource*/";
     for (const auto& a : r.args)
-      os << ", " << cpp_server_arg_type(a) << " /*" << a.name << "*/";
+      os << ", " << cpp_server_arg_type(a, MsgDir::Request) << " /*" << a.name
+         << "*/";
     os << ") {}\n";
   }
 
@@ -200,7 +213,8 @@ void emit_server_class(std::ostringstream& os,
       os << "  static void _Req" << snake_to_pascal(r.name)
          << "(wl_client* client, wl_resource* resource";
       for (std::size_t i = 0; i < r.args.size(); ++i)
-        os << ", " << cpp_server_arg_type(r.args.at(i)) << " a" << i;
+        os << ", " << cpp_server_arg_type(r.args.at(i), MsgDir::Request) << " a"
+           << i;
       os << ") {\n";
       os << "    auto* self = static_cast<" << cls_name
          << "*>(wl_resource_get_user_data(resource));\n";

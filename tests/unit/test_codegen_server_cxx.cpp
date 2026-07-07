@@ -106,3 +106,41 @@ TEST(CodegenServerCxx, EmptyProtocol) {
   EXPECT_THAT(out, HasSubstr("#pragma once"));
   EXPECT_THAT(out, HasSubstr("namespace empty::server"));
 }
+
+// The server mirror of the client event new_id fix: a new_id in an *event* the
+// server sends is a resource the server created, and wl_resource_post_event
+// marshals it as a pointer — so the Send* slot must be wl_resource*, not a
+// uint32_t passed through varargs.
+static Protocol make_new_id_event_proto() {
+  return parse_protocol_from_string(R"(
+<protocol name="minimal">
+  <interface name="wl_thing_manager" version="1">
+    <request name="create_thing">
+      <arg name="id" type="new_id" interface="wl_thing"/>
+    </request>
+  </interface>
+  <interface name="wl_thing" version="1">
+    <event name="spawn">
+      <arg name="child" type="new_id" interface="wl_thing"/>
+    </event>
+  </interface>
+</protocol>)");
+}
+
+TEST(CodegenServerCxx, EventNewIdSendIsResourcePointer) {
+  const auto out = generate_server_cxx_header(make_new_id_event_proto());
+  EXPECT_THAT(out, HasSubstr("void SendSpawn(wl_resource* child)"));
+  EXPECT_THAT(out, Not(HasSubstr("void SendSpawn(uint32_t")));
+}
+
+// Regression guard: a new_id in an incoming *request* is still the
+// client-chosen id (a uint32_t the server binds via wl_resource_create) —
+// unchanged by the event-side fix, in both the virtual handler and the dispatch
+// thunk.
+TEST(CodegenServerCxx, RequestNewIdStaysUint32) {
+  const auto out = generate_server_cxx_header(make_new_id_event_proto());
+  EXPECT_THAT(out, HasSubstr("OnCreateThing(wl_client* /*client*/, "
+                             "wl_resource* /*resource*/, uint32_t /*id*/)"));
+  EXPECT_THAT(out, HasSubstr("_ReqCreateThing(wl_client* client, "
+                             "wl_resource* resource, uint32_t a0)"));
+}

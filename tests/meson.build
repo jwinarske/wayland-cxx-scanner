@@ -194,6 +194,49 @@ else
     warning('wayland-client/server not found — skipping test_event_new_id_roundtrip')
 endif
 
+# ── Server event-created new_id live-dispatch test ───────────────────────────
+# Mirror of the client test on the server's opposite direction: a generated
+# server sends a new_id event (SendSpawn(wl_resource*)) to a generated client
+# over a socketpair. Only the server header emits interface tables; the client's
+# wl_iface() is bridged to them in the test.
+if wayland_client_dep.found() and wayland_server_dep.found()
+    srv_thingy_server_hdr = custom_target(
+        'test-srv-thingy-server-header',
+        input:   'fixtures/minimal_new_id_event.xml',
+        output:  'srv_thingy_server.hpp',
+        command: [scanner_exe, '--mode=server-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+    srv_thingy_client_hdr = custom_target(
+        'test-srv-thingy-client-header',
+        input:   'fixtures/minimal_new_id_event.xml',
+        output:  'srv_thingy_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    )
+
+    _test_server_event_new_id_exe = executable(
+        'test_server_event_new_id_roundtrip',
+        [
+            'integration/test_server_event_new_id_roundtrip.cpp',
+            srv_thingy_server_hdr,
+            srv_thingy_client_hdr,
+        ],
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('server_event_new_id_roundtrip', _test_server_event_new_id_exe,
+        args: [
+            '--gtest_output=xml:results/test_server_event_new_id_roundtrip.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 60,
+        suite: 'integration',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
+else
+    warning('wayland-client/server not found — skipping test_server_event_new_id_roundtrip')
+endif
+
 # ── IME facade contract test (ime_backend=none) ──────────────────────────────
 # Includes backend.hpp, which only resolves cleanly without a selected backend.
 if ime_backend == 'none'
