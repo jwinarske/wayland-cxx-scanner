@@ -171,6 +171,7 @@ if (NOT WAYLAND_CXX_SCANNER_TOOL_ONLY)
         include/wl/csd_plugin.hpp
         include/wl/data_device.hpp
         include/wl/display.hpp
+        include/wl/ext_data_control.hpp
         include/wl/fd_handle.hpp
         include/wl/linux_dmabuf.hpp
         include/wl/raii.hpp
