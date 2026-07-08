@@ -772,9 +772,9 @@ void App::SubmitDamage() noexcept {
 // from every rotating buffer (each buffer must be repainted once).
 void App::AddHudDamage() noexcept {
   if (hud_.visible()) {
-    damage_logical_.push_back(demo::PerfHud::Bounds());
+    damage_logical_.push_back(hud_.Bounds());
   } else if (hud_damage_frames_ > 0) {
-    damage_logical_.push_back(demo::PerfHud::Bounds());
+    damage_logical_.push_back(hud_.Bounds());
     --hud_damage_frames_;
   }
 }

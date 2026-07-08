@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+using demo::DamageMeter;
 using demo::FpsMeter;
 using demo::PerfHud;
 
@@ -49,6 +50,51 @@ TEST(FpsMeter, SaturatesAtCapacity) {
   EXPECT_DOUBLE_EQ(m.fps(), static_cast<double>(FpsMeter::kCapacity));
 }
 
+TEST(DamageMeter, EmptyIsZero) {
+  DamageMeter m;
+  EXPECT_DOUBLE_EQ(m.mean_fraction(), 0.0);
+}
+
+TEST(DamageMeter, AveragesSamplesInWindow) {
+  DamageMeter m;
+  // Three samples inside the window: mean of 0.2, 0.4, 0.6 = 0.4.
+  m.Tick(1000.0, 0.2);
+  m.Tick(1010.0, 0.4);
+  m.Tick(1020.0, 0.6);
+  EXPECT_NEAR(m.mean_fraction(), 0.4, 1e-9);
+}
+
+TEST(DamageMeter, EvictsSamplesOlderThanWindow) {
+  DamageMeter m;
+  m.Tick(1000.0, 1.0);  // will age out
+  m.Tick(1010.0, 1.0);  // will age out
+  // Jump forward past the window: only the latest sample remains.
+  m.Tick(3000.0, 0.25);
+  EXPECT_NEAR(m.mean_fraction(), 0.25, 1e-9);
+}
+
+TEST(DamageMeter, ClampsFractionToUnitRange) {
+  DamageMeter m;
+  m.Tick(1000.0, 5.0);   // clamps to 1.0
+  m.Tick(1010.0, -3.0);  // clamps to 0.0
+  EXPECT_NEAR(m.mean_fraction(), 0.5, 1e-9);
+}
+
+TEST(DamageMeter, DecaysToZeroWhenIdle) {
+  DamageMeter m;
+  for (int i = 0; i < 60; ++i)
+    m.Tick(1000.0 + static_cast<double>(i) * (1000.0 / 60.0), 0.5);
+  EXPECT_NEAR(m.mean_fraction(), 0.5, 1e-9);
+  // A held animation stops ticking; the next observation a window later reads
+  // 0.
+  DamageMeter idle = m;
+  // No further Ticks — mean stays until samples would be evicted by a new Tick.
+  // Model a resumed tick well past the window to force eviction of the old
+  // ones.
+  idle.Tick(5000.0, 0.0);
+  EXPECT_NEAR(idle.mean_fraction(), 0.0, 1e-9);
+}
+
 TEST(PerfHud, HiddenByDefault) {
   PerfHud hud;
   EXPECT_FALSE(hud.visible());
@@ -65,11 +111,39 @@ TEST(PerfHud, ToggleAndSetVisible) {
 }
 
 TEST(PerfHud, BoundsAreNonEmptyAndStable) {
-  const SkIRect a = PerfHud::Bounds();
-  const SkIRect b = PerfHud::Bounds();
+  PerfHud hud;
+  const SkIRect a = hud.Bounds();
+  const SkIRect b = hud.Bounds();
   EXPECT_EQ(a, b);
   EXPECT_GT(a.width(), 0);
   EXPECT_GT(a.height(), 0);
+}
+
+TEST(PerfHud, ExtraLinesGrowBounds) {
+  PerfHud hud;
+  const int base = hud.Bounds().height();
+
+  hud.SetExtraLine(0, "commit  60/s");
+  const int one = hud.Bounds().height();
+  EXPECT_GT(one, base);
+
+  hud.SetExtraLine(1, "damage  12.3%");
+  const int two = hud.Bounds().height();
+  EXPECT_GT(two, one);
+  // Two equal-height rows added: each grew the panel by the same amount.
+  EXPECT_EQ(two - one, one - base);
+
+  // Clearing the last line shrinks it back; width is unaffected throughout.
+  hud.SetExtraLine(1, nullptr);
+  EXPECT_EQ(hud.Bounds().height(), one);
+  EXPECT_EQ(hud.Bounds().width(), PerfHud().Bounds().width());
+}
+
+TEST(PerfHud, ExtraLineIndexOutOfRangeIsIgnored) {
+  PerfHud hud;
+  const int base = hud.Bounds().height();
+  hud.SetExtraLine(PerfHud::kMaxExtraLines, "overflow");  // ignored
+  EXPECT_EQ(hud.Bounds().height(), base);
 }
 
 }  // namespace

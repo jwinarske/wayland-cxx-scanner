@@ -45,6 +45,30 @@ class FpsMeter {
   std::size_t count_ = 0;  // number of retained stamps
 };
 
+// Rolling mean of a per-event fraction over a fixed time window — the same
+// ring-buffer eviction as FpsMeter, but each retained sample carries a value in
+// [0, 1] and the meter reports their average.  The Skottie example feeds it the
+// per-commit damaged-area fraction, so the reported mean is the animation's
+// average dirty coverage over the last second; an empty window reads 0.
+class DamageMeter {
+ public:
+  static constexpr double kWindowMs = 1000.0;
+  static constexpr std::size_t kCapacity = 240;
+
+  // Record a sample at now_ms (any monotonic ms clock); fraction is clamped to
+  // [0, 1].
+  void Tick(double now_ms, double fraction) noexcept;
+
+  // Mean of the samples still inside the window, or 0 when none remain.
+  [[nodiscard]] double mean_fraction() const noexcept;
+
+ private:
+  std::array<double, kCapacity> stamps_{};
+  std::array<double, kCapacity> fracs_{};
+  std::size_t head_ = 0;
+  std::size_t count_ = 0;
+};
+
 // On-screen performance overlay.  Hidden by default; the example toggles it.
 // Rendering is a no-op while hidden, so it costs nothing when off.
 class PerfHud {
@@ -53,10 +77,21 @@ class PerfHud {
   void toggle() noexcept { visible_ = !visible_; }
   [[nodiscard]] bool visible() const noexcept { return visible_; }
 
-  // The overlay's bounding rectangle in logical pixels (fixed, top-left).
-  // Used by the SHM example to damage exactly the HUD region each frame.
-  [[nodiscard]] static SkIRect Bounds() noexcept {
-    return SkIRect::MakeXYWH(kOriginX, kOriginY, kWidth, kHeight);
+  // Up to this many application-specific lines may be appended under the
+  // standard stats (e.g. the Skottie example's commit rate and damage
+  // coverage).  Each non-empty line grows the panel by one row.
+  static constexpr std::size_t kMaxExtraLines = 2;
+
+  // Set (or clear, with nullptr/"") the extra line at idx.  A non-empty line is
+  // drawn below the standard stats and included in Bounds(), so a consumer that
+  // keeps a line populated gets a stable, larger panel to damage.
+  void SetExtraLine(std::size_t idx, const char* text) noexcept;
+
+  // The overlay's bounding rectangle in logical pixels (top-left origin).  Used
+  // by the SHM/Skottie examples to damage exactly the HUD region each frame;
+  // the height tracks how many extra lines are currently populated.
+  [[nodiscard]] SkIRect Bounds() const noexcept {
+    return SkIRect::MakeXYWH(kOriginX, kOriginY, kWidth, HeightPx());
   }
 
   // Draw the overlay onto canvas in logical pixels.  No-op when hidden.  fps is
@@ -70,14 +105,21 @@ class PerfHud {
   static constexpr int kPad = 6;
   static constexpr int kLineH = 17;
   static constexpr int kLines = 3;
-  static constexpr int kHeight = kPad * 2 + kLineH * kLines;
+  static constexpr std::size_t kExtraLineCap = 32;
   static constexpr float kFontSize = 14.0F;
 
   void EnsureFont();
 
+  // Number of extra lines currently populated (drawn contiguously from idx 0).
+  [[nodiscard]] std::size_t ActiveExtra() const noexcept;
+  [[nodiscard]] int HeightPx() const noexcept {
+    return kPad * 2 + kLineH * (kLines + static_cast<int>(ActiveExtra()));
+  }
+
   bool visible_ = false;
   bool font_ready_ = false;
   SkFont font_;
+  std::array<std::array<char, kExtraLineCap>, kMaxExtraLines> extra_{};
 };
 
 }  // namespace demo

@@ -38,6 +38,54 @@ void FpsMeter::Tick(double now_ms) noexcept {
   ++count_;
 }
 
+void DamageMeter::Tick(double now_ms, double fraction) noexcept {
+  const double clamped =
+      fraction < 0.0 ? 0.0 : (fraction > 1.0 ? 1.0 : fraction);
+  const double cutoff = now_ms - kWindowMs;
+  while (count_ > 0 && stamps_.at(head_) < cutoff) {
+    head_ = (head_ + 1) % kCapacity;
+    --count_;
+  }
+  if (count_ == kCapacity) {
+    head_ = (head_ + 1) % kCapacity;
+    --count_;
+  }
+  const std::size_t slot = (head_ + count_) % kCapacity;
+  stamps_.at(slot) = now_ms;
+  fracs_.at(slot) = clamped;
+  ++count_;
+}
+
+double DamageMeter::mean_fraction() const noexcept {
+  if (count_ == 0)
+    return 0.0;
+  double sum = 0.0;
+  for (std::size_t i = 0; i < count_; ++i)
+    sum += fracs_.at((head_ + i) % kCapacity);
+  return sum / static_cast<double>(count_);
+}
+
+void PerfHud::SetExtraLine(std::size_t idx, const char* text) noexcept {
+  if (idx >= kMaxExtraLines)
+    return;
+  auto& slot = extra_.at(idx);
+  if (text == nullptr) {
+    slot[0] = '\0';
+    return;
+  }
+  std::snprintf(slot.data(), slot.size(), "%s", text);
+}
+
+std::size_t PerfHud::ActiveExtra() const noexcept {
+  std::size_t n = 0;
+  for (const auto& line : extra_) {
+    if (line[0] == '\0')
+      break;
+    ++n;
+  }
+  return n;
+}
+
 void PerfHud::EnsureFont() {
   if (font_ready_)
     return;
@@ -95,6 +143,13 @@ void PerfHud::Render(SkCanvas* canvas, const FramePacer& pacer, double fps) {
   else
     std::snprintf(line.data(), line.size(), "refresh    n/a");
   draw();
+
+  // Application-specific lines (e.g. the Skottie example's commit rate and
+  // damage coverage), drawn under the standard stats.
+  for (std::size_t i = 0; i < ActiveExtra(); ++i) {
+    std::snprintf(line.data(), line.size(), "%s", extra_.at(i).data());
+    draw();
+  }
 }
 
 }  // namespace demo

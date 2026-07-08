@@ -28,6 +28,13 @@ skia-skottie-canvas: 50 commits/s  playhead=2.00s
 skia-skottie-canvas:  0 commits/s  playhead=3.00s  [paused]
 ```
 
+The performance overlay (`F1` / `--hud`) surfaces the same two numbers on the
+canvas — a `commit N/s` rate and a `damage N%` coverage, each a rolling
+one-second average. They count **only frames the animation actually produced**,
+not the extra repaints the visible HUD itself forces, so on a hold or pause
+both fall to zero even while the overlay's FPS line keeps ticking — the
+suppression stays visible without turning the HUD off.
+
 ## No bundled asset
 
 The example ships **no animation** — supply your own Lottie/Bodymovin `.json`

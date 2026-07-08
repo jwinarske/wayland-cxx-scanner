@@ -466,6 +466,12 @@ class App {
   demo::FramePacer pacer_;
   demo::PerfHud hud_;
   demo::FpsMeter fps_;
+  // Content-only rate/coverage (ticked in CommitFrame only when the animation
+  // actually moved, never on HUD-forced repaints), so the on-canvas commit/s
+  // and damage% stay honest — they fall to zero on a hold even while the
+  // visible HUD keeps repainting.  Mirrors the once-a-second terminal readout.
+  demo::FpsMeter commit_meter_;
+  demo::DamageMeter damage_meter_;
   // Frames remaining over which the HUD region must stay damaged after a
   // visibility change, so the overlay clears from every rotating buffer.
   int hud_damage_frames_ = 0;
@@ -844,7 +850,39 @@ void App::CommitFrame(bool arm_callback,
   if (idx < 0)
     return;  // every buffer held by the compositor; drop the frame
 
-  fps_.Tick(NowMs());
+  const double now = NowMs();
+  fps_.Tick(now);
+
+  // A frame carries real content when the geometry changed or the animation
+  // reported a non-empty dirty region; a HUD-forced repaint (empty dirty, no
+  // geometry change) must not count, or the on-canvas commit/s and damage%
+  // would never fall to zero on a hold.  The damage fraction is the animation's
+  // own dirty area over the logical surface (a full geometry repaint is 100%).
+  const bool content = geometry_dirty_ || !dirty_logical.isEmpty();
+  if (content) {
+    commit_meter_.Tick(now);
+    const double area =
+        static_cast<double>(width_) * static_cast<double>(height_);
+    const double frac = geometry_dirty_ || area <= 0.0
+                            ? 1.0
+                            : static_cast<double>(dirty_logical.width()) *
+                                  static_cast<double>(dirty_logical.height()) /
+                                  area;
+    damage_meter_.Tick(now, frac);
+  }
+
+  // Refresh the HUD's extra lines before it is drawn.  Kept populated so the
+  // panel (and Bounds()) stays a stable two rows taller than the standard
+  // stats, which lets AddHudDamage clear the whole overlay when it is hidden.
+  std::array<char, 32> commit_line{};
+  std::array<char, 32> damage_line{};
+  std::snprintf(commit_line.data(), commit_line.size(), "commit %3.0f/s",
+                commit_meter_.fps());
+  std::snprintf(damage_line.data(), damage_line.size(), "damage %5.1f%%",
+                damage_meter_.mean_fraction() * 100.0);
+  hud_.SetExtraLine(0, commit_line.data());
+  hud_.SetExtraLine(1, damage_line.data());
+
   RenderFrame(idx);
 
   auto& buf = *pool_.bufs.at(static_cast<std::size_t>(idx)).Get();
@@ -902,9 +940,9 @@ void App::SubmitDamage() noexcept {
 // from every rotating buffer (each buffer must be repainted once).
 void App::AddHudDamage() noexcept {
   if (hud_.visible()) {
-    damage_logical_.push_back(demo::PerfHud::Bounds());
+    damage_logical_.push_back(hud_.Bounds());
   } else if (hud_damage_frames_ > 0) {
-    damage_logical_.push_back(demo::PerfHud::Bounds());
+    damage_logical_.push_back(hud_.Bounds());
     --hud_damage_frames_;
   }
 }
