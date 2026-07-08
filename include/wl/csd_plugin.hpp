@@ -81,6 +81,32 @@ inline uint32_t HitZoneToResizeEdge(HitZone zone) noexcept {
   }
 }
 
+/// Map a HitZone to an Xcursor shape name for wl::CursorManager::Set (resize
+/// edges get directional resize cursors, the window buttons a pointer/hand, and
+/// everything else the default arrow).
+inline const char* HitZoneToCursorName(HitZone zone) noexcept {
+  switch (zone) {
+    case HitZone::ResizeTop:
+    case HitZone::ResizeBottom:
+      return "ns-resize";
+    case HitZone::ResizeLeft:
+    case HitZone::ResizeRight:
+      return "ew-resize";
+    case HitZone::ResizeTopLeft:
+    case HitZone::ResizeBottomRight:
+      return "nwse-resize";
+    case HitZone::ResizeTopRight:
+    case HitZone::ResizeBottomLeft:
+      return "nesw-resize";
+    case HitZone::CloseButton:
+    case HitZone::MaximizeButton:
+    case HitZone::MinimizeButton:
+      return "pointer";
+    default:
+      return "default";
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // CsdPlugin — abstract decoration plugin interface
 // ══════════════════════════════════════════════════════════════════════════════

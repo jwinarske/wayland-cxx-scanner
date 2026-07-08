@@ -173,6 +173,17 @@ class SeatManager {
     return seat_.IsNull() ? nullptr : seat_.Get()->GetProxy();
   }
 
+  /// The bound wl_pointer proxy, or nullptr when no pointer is bound (the App
+  /// defines no pointer hook, or the seat has no pointer capability).
+  ///
+  /// Exposed so a consumer can attach a cursor with wl_pointer.set_cursor (see
+  /// wl::CursorManager), which SeatManager does not do itself — the pointer's
+  /// lifetime is managed here, but the cursor surface, its wl_shm buffers, and
+  /// the theme belong to the consumer.
+  [[nodiscard]] wl_proxy* Pointer() const noexcept {
+    return pointer_.IsNull() ? nullptr : pointer_.Get()->GetProxy();
+  }
+
   /// Returns the read end of the self-pipe used for key-repeat signaling.
   ///
   /// Returns -1 when no keyboard is bound or when repeat setup failed.

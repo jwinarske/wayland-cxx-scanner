@@ -43,6 +43,7 @@
 // ── Framework headers ────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
 #include <wl/csd_plugin.hpp>
+#include <wl/cursor.hpp>
 #ifdef USE_GTK_CSD
 #include <wl/csd_gtk.hpp>
 #elif defined(USE_CAIRO_CSD)
@@ -423,6 +424,12 @@ class App {
   // ── Hit testing ───────────────────────────────────────────────────────────
   [[nodiscard]] HitZone HitTest(int x, int y) const noexcept;
 
+  // Point the cursor at the shape for the zone currently under the pointer.
+  void UpdateCursor() noexcept {
+    cursor_.Set(seat_.Pointer(), enter_serial_,
+                wl::csd::HitZoneToCursorName(HitTest(pointer_x_, pointer_y_)));
+  }
+
   // ── Wayland objects ───────────────────────────────────────────────────────
   wl::DisplayHandle display_;
   wl::CRegistry registry_;
@@ -437,6 +444,9 @@ class App {
 
   // Input: seat + keyboard + pointer, all owned by SeatManager.
   wl::SeatManager<App> seat_;
+  // Cursor for the seat's pointer (SeatManager owns the pointer but not the
+  // cursor); the shape follows the hit-tested decoration zone.
+  wl::CursorManager cursor_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
@@ -454,6 +464,7 @@ class App {
   // ── Pointer state ─────────────────────────────────────────────────────────
   int pointer_x_ = 0;
   int pointer_y_ = 0;
+  uint32_t enter_serial_ = 0;  // last wl_pointer.enter serial, for set_cursor
 
   // ── Global IDs from registry scan ─────────────────────────────────────────
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
@@ -618,6 +629,11 @@ bool App::BindGlobals() {
     std::fprintf(stderr, "xdg-csd: WL_SHM_FORMAT_XRGB8888 not supported\n");
     return false;
   }
+
+  // Load the cursor theme; optional — decorations still work without a cursor.
+  if (!cursor_.Init(shm_.Get()->GetProxy(), compositor_.Get()->GetProxy())) {
+    std::fprintf(stderr, "xdg-csd: cursor theme unavailable (no set_cursor)\n");
+  }
   return true;
 }
 
@@ -764,8 +780,11 @@ void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
 // ── Pointer event implementations ───────────────────────────────────────────
 
 void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+  enter_serial_ = ev.serial;  // set_cursor must carry an enter serial
   pointer_x_ = static_cast<int>(ev.x);
   pointer_y_ = static_cast<int>(ev.y);
+  cursor_.Reset();  // the compositor resets the cursor on enter; re-apply
+  UpdateCursor();
 }
 
 void App::OnPointerLeave() noexcept {
@@ -776,6 +795,7 @@ void App::OnPointerLeave() noexcept {
 void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
   pointer_x_ = static_cast<int>(ev.x);
   pointer_y_ = static_cast<int>(ev.y);
+  UpdateCursor();
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
