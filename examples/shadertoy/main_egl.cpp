@@ -38,6 +38,7 @@ extern "C" {
 
 // ── Framework headers ────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
+#include <wl/cursor.hpp>
 #include <wl/display.hpp>
 #include <wl/registry.hpp>
 #include <wl/seat.hpp>
@@ -79,6 +80,9 @@ const wl_interface& wl_callback_traits::wl_iface() noexcept {
 const wl_interface& wl_compositor_traits::wl_iface() noexcept {
   return wl_compositor_interface;
 }
+const wl_interface& wl_shm_traits::wl_iface() noexcept {
+  return wl_shm_interface;
+}
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
 }
@@ -103,6 +107,10 @@ class WlCallbackHandler
 
 class WlCompositorHandler
     : public wayland::client::CWlCompositor<WlCompositorHandler> {};
+
+// Bound only so libwayland-cursor can allocate the cursor theme's buffers; the
+// format event is not needed.
+class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {};
 
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
@@ -179,7 +187,10 @@ class App {
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
-  wl::SeatManager<App> seat_;  // keyboard (ESC) + pointer + touch (iMouse)
+  wl::SeatManager<App> seat_;    // keyboard (ESC) + pointer + touch (iMouse)
+  wl::WlPtr<WlShmHandler> shm_;  // bound only for the cursor theme
+  wl::CursorManager cursor_;     // set_cursor for the seat's pointer
+  uint32_t enter_serial_ = 0;    // last wl_pointer.enter serial, for set_cursor
 
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
@@ -214,6 +225,7 @@ class App {
       program_start_{};  // when the current shader began (cycling)
 
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
+  uint32_t shm_name_ = 0, shm_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
 
   bool ConnectDisplay();
@@ -272,11 +284,15 @@ bool App::ScanGlobals() {
   registry_.OnGlobal([this](wl::CRegistry& /*reg*/, uint32_t name,
                             std::string_view iface, uint32_t ver) {
     using wl_comp = wayland::client::wl_compositor_traits;
+    using wl_shm = wayland::client::wl_shm_traits;
     using xdg_base = xdg_shell::client::xdg_wm_base_traits;
     using wl_s = wayland::client::wl_seat_traits;
     if (iface == wl_comp::interface_name) {
       compositor_name_ = name;
       compositor_ver_ = ver;
+    } else if (iface == wl_shm::interface_name) {
+      shm_name_ = name;
+      shm_ver_ = ver;
     } else if (iface == xdg_base::interface_name) {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
@@ -325,6 +341,13 @@ bool App::BindGlobals() {
   if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "shadertoy-egl: timed out waiting for seat caps\n");
     return false;
+  }
+
+  // wl_shm + cursor theme are optional (the demo renders via EGL): bind wl_shm
+  // only to give libwayland-cursor a place for the cursor buffers.
+  if (shm_name_ &&
+      wl::BindHandler<wl_shm_traits>(registry_, shm_, shm_name_, shm_ver_)) {
+    (void)cursor_.Init(shm_.Get()->GetProxy(), compositor_.Get()->GetProxy());
   }
   return true;
 }
@@ -699,6 +722,9 @@ void App::OnKey(const wl::KeyEvent& ev) {
 
 // The pointer enter carries a position too; treat it like the first motion.
 void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+  enter_serial_ = ev.serial;
+  cursor_.Reset();
+  cursor_.Set(seat_.Pointer(), enter_serial_, "default");
   OnPointerMotion(ev);
 }
 

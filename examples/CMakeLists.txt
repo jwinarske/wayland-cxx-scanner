@@ -235,15 +235,16 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     if (TARGET PkgConfig::egl AND TARGET PkgConfig::glesv2 AND TARGET PkgConfig::wayland_egl)
         wlcxx_example(shadertoy_egl shadertoy/main_egl.cpp)
         target_link_libraries(shadertoy_egl PRIVATE PkgConfig::wayland_client
-            PkgConfig::egl PkgConfig::glesv2 PkgConfig::wayland_egl
-            PkgConfig::xkbcommon PkgConfig::shadertoy_cxx)
+            PkgConfig::wayland_cursor PkgConfig::egl PkgConfig::glesv2
+            PkgConfig::wayland_egl PkgConfig::xkbcommon PkgConfig::shadertoy_cxx)
         wlcxx_gen(shadertoy_egl shadertoy-egl wayland_client.hpp   ${WAYLAND_XML})
         wlcxx_gen(shadertoy_egl shadertoy-egl xdg_shell_client.hpp ${XDG_SHELL_XML})
     endif ()
     if (TARGET PkgConfig::vulkan)
         wlcxx_example(shadertoy_vulkan shadertoy/main_vulkan.cpp)
         target_link_libraries(shadertoy_vulkan PRIVATE PkgConfig::wayland_client
-            PkgConfig::vulkan PkgConfig::xkbcommon PkgConfig::shadertoy_cxx)
+            PkgConfig::wayland_cursor PkgConfig::vulkan PkgConfig::xkbcommon
+            PkgConfig::shadertoy_cxx)
         wlcxx_gen(shadertoy_vulkan shadertoy-vulkan wayland_client.hpp   ${WAYLAND_XML})
         wlcxx_gen(shadertoy_vulkan shadertoy-vulkan xdg_shell_client.hpp ${XDG_SHELL_XML})
     endif ()

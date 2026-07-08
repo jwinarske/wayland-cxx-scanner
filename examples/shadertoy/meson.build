@@ -11,6 +11,7 @@
 wp_dep         = dependency('wayland-protocols', required: false)
 wl_scanner_dep = dependency('wayland-scanner',   required: false)
 xkbcommon_dep  = dependency('xkbcommon',         required: false)
+wl_cursor_dep  = dependency('wayland-cursor',    required: false)
 
 # The agnostic renderer.  Resolves to a system install (pkg-config) or builds
 # from the subprojects/shadertoy-cxx.wrap fallback.
@@ -20,7 +21,7 @@ shadertoy_dep = dependency('shadertoy-cxx',
 )
 
 if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found() and
-        shadertoy_dep.found())
+        wl_cursor_dep.found() and shadertoy_dep.found())
     subdir_done()
 endif
 
@@ -60,6 +61,7 @@ if egl_dep.found() and glesv2_dep.found() and wayland_egl_dep.found()
             glesv2_dep,
             wayland_egl_dep,
             xkbcommon_dep,
+            wl_cursor_dep,
             shadertoy_dep,
         ],
         cpp_args: ['-Wno-unused-parameter'],
@@ -78,6 +80,7 @@ if vulkan_dep.found()
             wayland_client_dep,
             vulkan_dep,
             xkbcommon_dep,
+            wl_cursor_dep,
             shadertoy_dep,
         ],
         cpp_args: ['-Wno-unused-parameter'],
