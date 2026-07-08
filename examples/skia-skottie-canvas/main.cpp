@@ -16,10 +16,10 @@
 // while playing.
 //
 // Controls:
-//   ESC / window close  quit
-//   SPACE / tap          pause / resume
-//   Left / Right         scrub -/+ 1 s
-//   F1                   toggle the performance overlay (also --hud)
+//   ESC / window close        quit
+//   SPACE / left-click / tap  pause / resume
+//   Left / Right              scrub -/+ 1 s
+//   F1                        toggle the performance overlay (also --hud)
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
 #include "fractional_scale_client.hpp"  // namespace fractional_scale_v1::client
@@ -31,6 +31,7 @@
 // ── Framework headers
 // ─────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
+#include <wl/cursor.hpp>
 #include <wl/display.hpp>
 #include <wl/presentation.hpp>
 #include <wl/raii.hpp>
@@ -358,11 +359,11 @@ class App {
   // wp_presentation feedback: the frame committed for `fb.frame` turned to
   // light.  wl::PresentationManager creates the feedback when this hook exists.
   void OnPresented(const wl::PresentFeedback& fb) noexcept;
-  // A touch tap pauses/resumes (SeatManager creates the wl_touch when this hook
-  // is present).  Deliberately no pointer hook: a wl_pointer with no cursor set
-  // makes the compositor show a stale cursor over the surface, and SeatManager
-  // does not expose the pointer for wl_pointer.set_cursor — so pause on the
-  // pointer path is via the keyboard (Space) instead.
+  // Pointer/touch input (SeatManager binds the wl_pointer / wl_touch when these
+  // hooks are present).  Click or tap pauses/resumes; the enter hook caches the
+  // serial and points the cursor at the default shape via wl::CursorManager.
+  void OnPointerEnter(const wl::PointerEvent& ev) noexcept;
+  void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
   void OnTouchDown(const wl::TouchPoint& p) noexcept;
 
  private:
@@ -391,6 +392,12 @@ class App {
   }
   [[nodiscard]] bool CanScale() const noexcept {
     return viewport_.Get()->GetProxy() != nullptr;
+  }
+  // Integer cursor scale: round the fractional scale up so the cursor stays
+  // crisp (a 1.5 surface uses a 2× cursor).
+  [[nodiscard]] int CursorScale() const noexcept {
+    return (scale_120_ + wl::ScalePolicy::kUnityScale120 - 1) /
+           wl::ScalePolicy::kUnityScale120;
   }
 
   bool EnsurePool() noexcept;
@@ -424,6 +431,7 @@ class App {
   wl::WlPtr<WpViewporterHandler> viewporter_;
   wl::WlPtr<WpFractionalScaleManagerHandler> fractional_manager_;
   wl::SeatManager<App> seat_;
+  wl::CursorManager cursor_;  // set_cursor for the seat's pointer (HiDPI-aware)
   wl::PresentationManager<App> presentation_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
@@ -453,6 +461,7 @@ class App {
   int pending_width_ = kDefaultWidth;
   int pending_height_ = kDefaultHeight;
   int scale_120_ = wl::ScalePolicy::kUnityScale120;
+  uint32_t enter_serial_ = 0;  // last wl_pointer.enter serial, for set_cursor
 
   demo::FramePacer pacer_;
   demo::PerfHud hud_;
@@ -632,6 +641,13 @@ bool App::BindGlobals() {
     std::fprintf(stderr,
                  "skia-skottie-canvas: WL_SHM_FORMAT_XRGB8888 not supported\n");
     return false;
+  }
+
+  // Cursor theme (optional): points the pointer at the default shape and
+  // tracks the fractional scale for a crisp HiDPI cursor.
+  if (!cursor_.Init(shm_.Get()->GetProxy(), compositor_.Get()->GetProxy(),
+                    CursorScale())) {
+    std::fprintf(stderr, "skia-skottie-canvas: cursor theme unavailable\n");
   }
   return true;
 }
@@ -942,6 +958,7 @@ void App::OnPreferredScale(int scale_120) noexcept {
   if (!CanScale() || scale_120 <= 0 || scale_120 == scale_120_)
     return;
   scale_120_ = scale_120;
+  cursor_.SetScale(CursorScale());  // keep the cursor crisp at the new scale
   geometry_dirty_ = true;
   if (!pacer_.self_paced() && !frame_pending_ && configured_)
     Produce(/*arm_callback=*/false);
@@ -985,6 +1002,20 @@ void App::OnKey(const wl::KeyEvent& ev) {
     default:
       return;
   }
+}
+
+void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+  enter_serial_ = ev.serial;  // set_cursor must carry an enter serial
+  cursor_.Reset();            // the compositor resets the cursor on enter
+  cursor_.Set(seat_.Pointer(), enter_serial_, "default");
+}
+
+void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+  if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED || ev.button != BTN_LEFT)
+    return;
+  paused_ = !paused_;  // click anywhere pauses/resumes
+  geometry_dirty_ = true;
+  Wake();
 }
 
 void App::OnTouchDown(const wl::TouchPoint& /*p*/) noexcept {
@@ -1132,7 +1163,7 @@ bool App::MainLoop() {
   }
 
   std::printf(
-      "skia-skottie-canvas: playing (%.1fs @ %.0f fps).  SPACE/tap = pause, "
+      "skia-skottie-canvas: playing (%.1fs @ %.0f fps).  SPACE/click = pause, "
       "arrows = scrub, ESC = quit\n",
       anim_ ? anim_->duration() : 0.0, anim_ ? anim_->fps() : 0.0);
   last_advance_ms_ = NowMs();
@@ -1144,7 +1175,9 @@ bool App::MainLoop() {
       "skia-skottie-canvas",
       {wl::FdSource{[this] { return seat_.GetRepeatFd(); },
                     [this] { seat_.DispatchRepeat(); }},
-       wl::FdSource{[this] { return timer_fd_; }, [this] { OnTimerTick(); }}});
+       wl::FdSource{[this] { return timer_fd_; }, [this] { OnTimerTick(); }},
+       wl::FdSource{[this] { return cursor_.FrameFd(); },
+                    [this] { cursor_.DispatchFrame(); }}});
   PrintPresentSummary();
   return ok;
 }

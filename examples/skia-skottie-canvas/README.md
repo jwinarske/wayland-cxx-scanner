@@ -40,14 +40,13 @@ with `--lottie FILE`. Permissively-licensed sample corpora include Skia's own
 | Key | Action |
 |---|---|
 | `Esc` / window close | quit |
-| `Space` / tap | pause / resume |
+| `Space` / left-click / tap | pause / resume |
 | `Left` / `Right` | scrub -/+ 1 s |
 | `F1` | toggle the performance overlay (also `--hud`) |
 
-> The player deliberately does not bind a `wl_pointer`: a pointer with no
-> `wl_pointer.set_cursor` leaves a stale cursor over the surface, and
-> `wl::SeatManager` does not expose the pointer for cursor setting (that's a
-> pending `wl_cursor` helper). Pause is on the keyboard (`Space`) and touch.
+> The pointer sets a proper cursor via `wl::CursorManager` (kept crisp at the
+> compositor's fractional scale), so binding it no longer leaves a stale
+> cursor over the surface.
 
 ## Options
 
