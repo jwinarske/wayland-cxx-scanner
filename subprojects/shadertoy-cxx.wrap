@@ -1,7 +1,7 @@
 [wrap-git]
 directory = shadertoy-cxx
 url = https://github.com/jwinarske/shadertoy-cxx.git
-revision = main
+revision = aa272f254ed6f396a7d9c489637064d0fc404b7e
 depth = 1
 
 # For local development against a sibling checkout instead of cloning, run:
