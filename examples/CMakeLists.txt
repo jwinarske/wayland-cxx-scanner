@@ -18,6 +18,7 @@ set(PRESENTATION_TIME_XML  "${WAYLAND_PROTOCOLS_DIR}/stable/presentation-time/pr
 set(XDG_OUTPUT_XML         "${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-output/xdg-output-unstable-v1.xml")
 set(XDG_DECORATION_XML     "${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml")
 set(LINUX_DMABUF_XML       "${WAYLAND_PROTOCOLS_DIR}/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml")
+set(EXT_DATA_CONTROL_XML   "${WAYLAND_PROTOCOLS_DIR}/staging/ext-data-control/ext-data-control-v1.xml")
 set(AGL_SHELL_XML          "${PROJECT_SOURCE_DIR}/protocols/agl-shell.xml")
 set(IVI_APPLICATION_XML    "${PROJECT_SOURCE_DIR}/protocols/ivi-application.xml")
 set(SIMPLE_SHELL_XML       "${PROJECT_SOURCE_DIR}/protocols/simpleshell.xml")
@@ -154,6 +155,16 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     target_link_libraries(clipboard PRIVATE PkgConfig::wayland_client PkgConfig::xkbcommon)
     wlcxx_gen(clipboard clipboard wayland_client.hpp   ${WAYLAND_XML})
     wlcxx_gen(clipboard clipboard xdg_shell_client.hpp ${XDG_SHELL_XML})
+endif ()
+
+# ── ext-data-control — focus-free clipboard CLI ──────────────────────────────
+# No xkbcommon: the protocol is focus-free, so this CLI binds no keyboard.
+if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND EXISTS "${EXT_DATA_CONTROL_XML}"
+    AND TARGET PkgConfig::wayland_client)
+    wlcxx_example(ext-data-control ext-data-control/main.cpp)
+    target_link_libraries(ext-data-control PRIVATE PkgConfig::wayland_client)
+    wlcxx_gen(ext-data-control ext-data-control wayland_client.hpp         ${WAYLAND_XML})
+    wlcxx_gen(ext-data-control ext-data-control ext_data_control_client.hpp ${EXT_DATA_CONTROL_XML} TABLES)
 endif ()
 
 # ── text-input — text-input-v1/v3 backends only ──────────────────────────────
