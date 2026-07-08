@@ -41,6 +41,7 @@ namespace ec = ext_data_control_v1::client;
 namespace {
 
 constexpr std::string_view kPayload = "control-hello";
+constexpr std::string_view kPrimaryPayload = "primary-hello";
 
 // Protocol-traits bundle selecting the ext-data-control family: no serial on
 // set_selection, and the device is torn down by a plain destroy request (so
@@ -62,6 +63,7 @@ struct ExtDataControlProtocol {
   // by this paste-only test, so clang's -Wunused-const-variable would fire.
   [[maybe_unused]] static constexpr bool set_selection_takes_serial = false;
   [[maybe_unused]] static constexpr bool device_release_is_explicit = false;
+  static constexpr bool has_primary = true;
 };
 
 const wl_interface* SeatIface() {
@@ -79,11 +81,16 @@ const wl_interface* OfferIface() {
 
 // ── Server: raw libwayland as an ext-data-control compositor ─────────────────
 
+// Each offer resource carries the payload it should serve (regular vs primary)
+// as its user data, so a single receive handler serves both channels.
 void ServerReceive(wl_client* /*client*/,
-                   wl_resource* /*offer*/,
+                   wl_resource* offer,
                    const char* /*mime*/,
                    int32_t fd) {
-  const ssize_t n = write(fd, kPayload.data(), kPayload.size());
+  const auto* payload =
+      static_cast<const std::string_view*>(wl_resource_get_user_data(offer));
+  const std::string_view data = payload != nullptr ? *payload : kPayload;
+  const ssize_t n = write(fd, data.data(), data.size());
   (void)n;
   close(fd);
 }
@@ -107,6 +114,23 @@ struct DeviceImpl {
 };
 constexpr DeviceImpl kDeviceImpl{nullptr, &ServerDestroyResource, nullptr};
 
+// Introduce one offer carrying @p payload and mark it the selection named by
+// @p selection_evt (Selection or PrimarySelection).
+void PostOffer(wl_client* client,
+               wl_resource* device,
+               int ver,
+               const std::string_view* payload,
+               uint32_t selection_evt) {
+  wl_resource* offer = wl_resource_create(client, OfferIface(), ver, 0);
+  wl_resource_set_implementation(
+      offer, &kOfferImpl, const_cast<std::string_view*>(payload), nullptr);
+  wl_resource_post_event(
+      device, ec::ext_data_control_device_v1_traits::Evt::DataOffer, offer);
+  wl_resource_post_event(
+      offer, ec::ext_data_control_offer_v1_traits::Evt::Offer, "text/plain");
+  wl_resource_post_event(device, selection_evt, offer);
+}
+
 void ServerGetDataDevice(wl_client* client,
                          wl_resource* mgr,
                          uint32_t id,
@@ -116,14 +140,14 @@ void ServerGetDataDevice(wl_client* client,
       wl_resource_create(client, DeviceIface(), ver, static_cast<int>(id));
   wl_resource_set_implementation(device, &kDeviceImpl, nullptr, nullptr);
 
-  wl_resource* offer = wl_resource_create(client, OfferIface(), ver, 0);
-  wl_resource_set_implementation(offer, &kOfferImpl, nullptr, nullptr);
-  wl_resource_post_event(
-      device, ec::ext_data_control_device_v1_traits::Evt::DataOffer, offer);
-  wl_resource_post_event(
-      offer, ec::ext_data_control_offer_v1_traits::Evt::Offer, "text/plain");
-  wl_resource_post_event(
-      device, ec::ext_data_control_device_v1_traits::Evt::Selection, offer);
+  // Announce the regular selection, then the primary.  This ordering is the one
+  // that would clobber a single offer slot (the primary data_offer arriving
+  // after the regular selection was committed) — the client must keep the two
+  // channels in separate slots.
+  PostOffer(client, device, ver, &kPayload,
+            ec::ext_data_control_device_v1_traits::Evt::Selection);
+  PostOffer(client, device, ver, &kPrimaryPayload,
+            ec::ext_data_control_device_v1_traits::Evt::PrimarySelection);
 }
 
 // ext_data_control_manager_v1 requests: create_data_source, get_data_device,
@@ -157,14 +181,29 @@ void SeatBind(wl_client* client,
 struct App {
   wl::DataDevice<App, ExtDataControlProtocol> data_device;
   wl::MimeSet mimes;
+  wl::MimeSet primary_mimes;
   bool got_selection = false;
+  bool got_primary = false;
   void OnSelection(const wl::MimeSet& m) {
     got_selection = true;
     mimes = m;
   }
+  void OnPrimarySelection(const wl::MimeSet& m) {
+    got_primary = true;
+    primary_mimes = m;
+  }
 };
 
-TEST(DataControlRoundtrip, ExtProtocolReceivesSelectionAndPayload) {
+std::string DrainFd(int fd) {
+  std::string got;
+  std::array<char, 64> buf{};
+  ssize_t n = 0;
+  while ((n = read(fd, buf.data(), buf.size())) > 0)
+    got.append(buf.data(), static_cast<std::size_t>(n));
+  return got;
+}
+
+TEST(DataControlRoundtrip, ExtProtocolSeparatesRegularAndPrimarySelections) {
   std::array<int, 2> sv{-1, -1};
   ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv.data()), 0);
 
@@ -208,16 +247,22 @@ TEST(DataControlRoundtrip, ExtProtocolReceivesSelectionAndPayload) {
     ASSERT_NE(wl_display_roundtrip(client), -1);
 
     EXPECT_TRUE(app.got_selection);
+    EXPECT_TRUE(app.got_primary);
     EXPECT_TRUE(app.mimes.Contains("text/plain"));
+    EXPECT_TRUE(app.primary_mimes.Contains("text/plain"));
+    EXPECT_TRUE(app.data_device.HasSelection());
+    EXPECT_TRUE(app.data_device.HasPrimarySelection());
 
+    // Separation: the regular offer must still yield the regular payload even
+    // though the primary selection was announced afterward (a single offer slot
+    // would have let the primary offer overwrite it).
     wl::FdHandle fd = app.data_device.Receive("text/plain");
     ASSERT_GE(fd.Get(), 0);
-    std::string got;
-    std::array<char, 64> buf{};
-    ssize_t n = 0;
-    while ((n = read(fd.Get(), buf.data(), buf.size())) > 0)
-      got.append(buf.data(), static_cast<std::size_t>(n));
-    EXPECT_EQ(got, kPayload);
+    EXPECT_EQ(DrainFd(fd.Get()), kPayload);
+
+    wl::FdHandle pfd = app.data_device.ReceivePrimary("text/plain");
+    ASSERT_GE(pfd.Get(), 0);
+    EXPECT_EQ(DrainFd(pfd.Get()), kPrimaryPayload);
 
     app.data_device.Release();
     if (seat != nullptr)

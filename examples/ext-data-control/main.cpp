@@ -10,16 +10,20 @@
 // selection with no surface and no focus at all.  So this is a headless CLI in
 // the shape of wl-copy / wl-paste:
 //
-//   ext-data-control --paste [--mime TYPE] [--list]
+//   ext-data-control --paste [--primary] [--mime TYPE] [--list]
 //       Write the current selection to stdout.  --list instead prints the
 //       offered MIME types, one per line.  With no --mime a text flavor is
 //       chosen automatically.
 //
-//   ext-data-control --copy [--mime TYPE] [--] [TEXT ...]
+//   ext-data-control --copy [--primary] [--mime TYPE] [--] [TEXT ...]
 //       Take the selection.  The data is the TEXT arguments (joined with a
 //       space) or, if none are given, everything read from stdin.  The process
 //       stays in the foreground serving the data on demand until another client
 //       takes the selection or it is interrupted (Ctrl-C).
+//
+// --primary acts on the primary (middle-click) selection, which
+// ext-data-control carries on the same device as the regular one;
+// wl::DataDevice keeps the two in separate slots.
 //
 // The entire clipboard mechanism is wl::DataDevice<App,
 // wl::ExtDataControlProtocol> — the same helper the core clipboard uses,
@@ -100,7 +104,8 @@ struct Options {
   Mode mode = Mode::kNone;
   const char* mime = nullptr;  // explicit --mime, or nullptr for auto
   bool list = false;           // --list (paste): print offered types
-  std::string payload;         // --copy data, when given as TEXT arguments
+  bool primary = false;  // --primary: the primary (middle-click) selection
+  std::string payload;   // --copy data, when given as TEXT arguments
   bool payload_from_args = false;
 };
 
@@ -139,7 +144,13 @@ class App {
     // Record the offered flavors for the paste path.  In --copy this also fires
     // for our own selection; we simply don't read it back.
     offered_.assign(mimes.begin(), mimes.end());
-    selection_seen_ = true;
+  }
+
+  // The primary-selection counterpart, delivered by the same device.  The CLI
+  // acts on one channel per run, so paste reads from whichever list --primary
+  // selected.
+  void OnPrimarySelection(const wl::MimeSet& mimes) {
+    primary_offered_.assign(mimes.begin(), mimes.end());
   }
 
   void OnSend(const char* /*mime*/, wl::FdHandle fd) {
@@ -239,16 +250,21 @@ class App {
 
   // ── Paste ──────────────────────────────────────────────────────────────────
   int RunPaste() {
-    if (!data_device_.HasSelection()) {
-      std::fprintf(stderr, "ext-data-control: the clipboard is empty\n");
+    const bool has = opts_.primary ? data_device_.HasPrimarySelection()
+                                   : data_device_.HasSelection();
+    if (!has) {
+      std::fprintf(stderr, "ext-data-control: the %s selection is empty\n",
+                   opts_.primary ? "primary" : "clipboard");
       return EXIT_FAILURE;
     }
+    const std::vector<std::string>& offered =
+        opts_.primary ? primary_offered_ : offered_;
     if (opts_.list) {
-      for (const std::string& m : offered_)
+      for (const std::string& m : offered)
         std::printf("%s\n", m.c_str());
       return EXIT_SUCCESS;
     }
-    const char* mime = ChooseReadMime();
+    const char* mime = ChooseReadMime(offered);
     if (mime == nullptr) {
       if (opts_.mime != nullptr)
         std::fprintf(stderr,
@@ -261,7 +277,8 @@ class App {
                      "flavor (try --mime TYPE or --list)\n");
       return EXIT_FAILURE;
     }
-    wl::FdHandle fd = data_device_.Receive(mime);
+    wl::FdHandle fd = opts_.primary ? data_device_.ReceivePrimary(mime)
+                                    : data_device_.Receive(mime);
     if (fd.Get() < 0) {
       std::fprintf(stderr, "ext-data-control: receive failed\n");
       return EXIT_FAILURE;
@@ -269,17 +286,18 @@ class App {
     return CopyFdToStdout(fd.Get()) ? EXIT_SUCCESS : EXIT_FAILURE;
   }
 
-  // The MIME type to receive: the explicit --mime when offered, else the first
-  // preferred text flavor the selection carries.  nullptr if neither applies.
-  [[nodiscard]] const char* ChooseReadMime() const noexcept {
+  // The MIME type to receive from @p offered: the explicit --mime when offered,
+  // else the first preferred text flavor present.  nullptr if neither applies.
+  [[nodiscard]] const char* ChooseReadMime(
+      const std::vector<std::string>& offered) const noexcept {
     if (opts_.mime != nullptr) {
-      for (const std::string& m : offered_)
+      for (const std::string& m : offered)
         if (m == opts_.mime)
           return opts_.mime;
       return nullptr;
     }
     for (const char* want : kTextMimes)
-      for (const std::string& m : offered_)
+      for (const std::string& m : offered)
         if (m == want)
           return want;
     return nullptr;
@@ -332,8 +350,11 @@ class App {
       for (const char* m : kTextMimes)
         mimes.Add(m);
     }
-    data_device_.Offer(mimes,
-                       0);  // serial ignored: set_selection is focus-free
+    if (opts_.primary)
+      data_device_.OfferPrimary(mimes);
+    else
+      data_device_.Offer(mimes,
+                         0);  // serial ignored: set_selection is focus-free
 
     // Serve OnSend until a peer supersedes us (OnCancelled) or we are signaled.
     const bool ok = wl::RunEventLoop(
@@ -370,13 +391,13 @@ class App {
   wl::WlPtr<WlSeatHandler> seat_;
   wl::DataDevice<App, wl::ExtDataControlProtocol> data_device_;
 
-  std::vector<std::string> offered_;  // MIME types of the current selection
-  std::string payload_;               // data served in --copy
+  std::vector<std::string> offered_;          // regular selection MIME types
+  std::vector<std::string> primary_offered_;  // primary selection MIME types
+  std::string payload_;                       // data served in --copy
   std::uint32_t seat_name_ = 0;
   std::uint32_t seat_ver_ = 0;
   std::uint64_t served_ = 0;
   bool have_manager_ = false;
-  bool selection_seen_ = false;
   bool cancelled_ = false;
 };
 
@@ -388,12 +409,13 @@ void Usage(const char* argv0) {
   std::fprintf(
       stderr,
       "usage:\n"
-      "  %s --paste [--mime TYPE] [--list]\n"
-      "  %s --copy  [--mime TYPE] [--] [TEXT ...]\n"
+      "  %s --paste [--primary] [--mime TYPE] [--list]\n"
+      "  %s --copy  [--primary] [--mime TYPE] [--] [TEXT ...]\n"
       "\n"
       "  --paste            write the current selection to stdout\n"
       "  --copy             take the selection; data from TEXT args "
       "or stdin\n"
+      "  --primary          act on the primary (middle-click) selection\n"
       "  --mime TYPE        MIME type to receive/offer "
       "(default: a text flavor)\n"
       "  --list             (paste) print offered MIME types instead\n",
@@ -411,6 +433,8 @@ bool ParseArgs(int argc, char** argv, Options& out) {
       out.mode = Mode::kPaste;
     } else if (a == "--list") {
       out.list = true;
+    } else if (a == "--primary") {
+      out.primary = true;
     } else if (a == "--mime") {
       if (i + 1 >= argc) {
         std::fprintf(stderr, "ext-data-control: --mime needs an argument\n");

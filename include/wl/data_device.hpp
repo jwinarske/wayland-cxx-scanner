@@ -13,9 +13,10 @@
 //
 // ── Optional App hooks (detected via SFINAE)
 // ─────────────────────────────────────
-//   void OnSelection(const wl::MimeSet& mimes);      // a selection arrived
-//   void OnSend(const char* mime, wl::FdHandle fd);  // write the offered data
-//   void OnCancelled();                              // the offer was dropped
+//   void OnSelection(const wl::MimeSet& mimes)        - a selection arrived
+//   void OnPrimarySelection(const wl::MimeSet& mimes) - primary (data-control)
+//   void OnSend(const char* mime, wl::FdHandle fd)    - write the offered data
+//   void OnCancelled()                                - the offer was dropped
 //
 // ── Lifecycle
 // ─────────────────────────────────────────────────────────────────
@@ -105,6 +106,35 @@ struct HasDataCancelled<A,
                         std::void_t<decltype(std::declval<A&>().OnCancelled())>>
     : std::true_type {};
 
+// True when App wants the primary selection: OnPrimarySelection(const
+// MimeSet&).
+template <typename A, typename = void>
+struct HasDataPrimary : std::false_type {};
+template <typename A>
+struct HasDataPrimary<
+    A,
+    std::void_t<decltype(std::declval<A&>().OnPrimarySelection(
+        std::declval<const MimeSet&>()))>> : std::true_type {};
+
+// Device-handler base carrying the DataDevice back-pointer.  For protocol
+// families whose device has a primary selection (data-control), it also
+// overrides primary_selection to route it to the owner.  The core
+// wl_data_device base has no such virtual, so the primary override lives only
+// in the HasPrimary specialization — placing it unconditionally would fail to
+// compile against the core base.
+template <typename Owner, typename Base, bool HasPrimary>
+struct DeviceHandlerBase : Base {
+  Owner* owner_ = nullptr;
+};
+template <typename Owner, typename Base>
+struct DeviceHandlerBase<Owner, Base, true> : Base {
+  Owner* owner_ = nullptr;
+  void OnPrimarySelection(wl_proxy* id) override {
+    if (owner_ != nullptr)
+      owner_->AdoptPrimary(id);
+  }
+};
+
 }  // namespace detail
 
 // Protocol-traits bundle for the core wl_data_device family.  DataDevice is
@@ -129,6 +159,8 @@ struct CoreDataProtocol {
   // (so it must be sent explicitly, version-gated, before the proxy is freed).
   static constexpr bool set_selection_takes_serial = true;
   static constexpr bool device_release_is_explicit = true;
+  // The core device has no primary selection (that is a separate protocol).
+  static constexpr bool has_primary = false;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -199,22 +231,23 @@ class DataDevice {
   /// current selection, @p mime is null, or the pipe/flush fails.  The caller
   /// reads until EOF.
   [[nodiscard]] wl::FdHandle Receive(const char* mime) noexcept {
-    if (offer_.IsNull() || mime == nullptr)
-      return wl::FdHandle{-1};
-    std::array<int, 2> fds{-1, -1};
-    if (pipe2(fds.data(), O_CLOEXEC) != 0)
-      return wl::FdHandle{-1};
-    offer_.Get()->Receive(mime, fds[1]);
-    close(fds[1]);  // the compositor holds its own copy via fd passing
-    // Flush so the receive request reaches the compositor before we block on
-    // the read end.
-    if (display_ != nullptr)
-      wl_display_flush(display_);
-    return wl::FdHandle{fds[0]};
+    return ReceiveFrom(offer_, mime);
   }
 
-  /// True when a selection offer is currently held.
+  /// The primary-selection counterpart of Receive (data-control families).
+  /// Returns an invalid FdHandle for a protocol without a primary selection,
+  /// where one is never held.
+  [[nodiscard]] wl::FdHandle ReceivePrimary(const char* mime) noexcept {
+    return ReceiveFrom(primary_offer_, mime);
+  }
+
+  /// True when a regular-selection offer is currently held.
   [[nodiscard]] bool HasSelection() const noexcept { return !offer_.IsNull(); }
+
+  /// True when a primary-selection offer is currently held.
+  [[nodiscard]] bool HasPrimarySelection() const noexcept {
+    return !primary_offer_.IsNull();
+  }
 
   /// Take ownership of the clipboard: create a data source offering @p mimes
   /// and set it as the selection using @p serial from a real input event (e.g.
@@ -223,34 +256,44 @@ class DataDevice {
   /// is superseded.  No-op if the device has not been started.
   void Offer(const MimeSet& mimes,
              [[maybe_unused]] std::uint32_t serial) noexcept {
-    if (manager_.IsNull() || device_.IsNull())
+    wl_proxy* src = CreateSource(mimes);
+    if (src == nullptr)
       return;
-    source_.Reset();  // drop any previous offer we still own
-    using M = typename P::ManagerTraits;
-    wl_proxy* raw =
-        wl::construct<typename P::SourceTraits, M::Op::CreateDataSource>(
-            *manager_.Get());
-    if (!wl::SetupHandler(source_, raw))
-      return;
-    source_.Get()->owner_ = this;
-    for (const std::string& mime : mimes)
-      source_.Get()->Offer(mime.c_str());
     if constexpr (P::set_selection_takes_serial)
-      device_.Get()->SetSelection(source_.Get()->GetProxy(), serial);
+      device_.Get()->SetSelection(src, serial);
     else
-      device_.Get()->SetSelection(source_.Get()->GetProxy());
+      device_.Get()->SetSelection(src);
+  }
+
+  /// Take ownership of the primary selection: like Offer, but sets the primary
+  /// selection (no serial is involved).  A no-op for protocol families without
+  /// a primary selection.  The App serves the data via OnSend, same as Offer.
+  void OfferPrimary(const MimeSet& mimes) noexcept {
+    if constexpr (P::has_primary) {
+      wl_proxy* src = CreateSource(mimes);
+      if (src != nullptr)
+        device_.Get()->SetPrimarySelection(src);
+    }
   }
 
   /// Send the versioned release and destroy the proxies.  Idempotent; call from
   /// App::~App before member destructors run.
   void Release() noexcept {
-    source_.Reset();  // wl_data_source.destroy (destructor) via WlPtr
-    offer_.Reset();   // wl_data_offer.destroy (destructor) via WlPtr
+    source_.Reset();         // wl_data_source.destroy (destructor) via WlPtr
+    offer_.Reset();          // regular selection offer
+    primary_offer_.Reset();  // primary selection offer (data-control)
+    pending_.Reset();        // the not-yet-committed offer, if any
     ReleaseDevice();
     manager_.Reset();  // no destructor request — just frees the proxy
   }
 
  private:
+  // The primary-selection mixin (namespace-level, so not an implicit friend
+  // like the nested handlers) routes primary_selection into the private
+  // AdoptPrimary.
+  template <typename O, typename B, bool H>
+  friend struct detail::DeviceHandlerBase;
+
   // ── Nested handlers
   // ──────────────────────────────────────────────────────────
   struct ManagerHandler : P::template ManagerBase<ManagerHandler> {};
@@ -261,17 +304,20 @@ class DataDevice {
     // source_actions / action are DnD-only; the generated no-ops are fine.
   };
 
-  struct DeviceHandler : P::template DeviceBase<DeviceHandler> {
-    DataDevice* owner_ = nullptr;
+  struct DeviceHandler : detail::DeviceHandlerBase<
+                             DataDevice,
+                             typename P::template DeviceBase<DeviceHandler>,
+                             P::has_primary> {
     void OnDataOffer(wl_proxy* id) override {
-      if (owner_ != nullptr)
-        owner_->IntroduceOffer(id);
+      if (this->owner_ != nullptr)
+        this->owner_->IntroduceOffer(id);
     }
     void OnSelection(wl_proxy* id) override {
-      if (owner_ != nullptr)
-        owner_->AdoptSelection(id);
+      if (this->owner_ != nullptr)
+        this->owner_->AdoptSelection(id);
     }
-    // enter / leave / motion / drop are DnD-only; no-ops are fine.
+    // primary_selection is routed to AdoptPrimary by DeviceHandlerBase for
+    // data-control families.  enter / leave / motion / drop are DnD-only.
   };
 
   struct SourceHandler : P::template SourceBase<SourceHandler> {
@@ -287,30 +333,52 @@ class DataDevice {
     // target / dnd_drop_performed / dnd_finished / action are DnD-only.
   };
 
-  // A new offer is being introduced; adopt it in place so its handler (and the
-  // proxy's listener) accumulate the MIME types.  A single slot is correct for
-  // the clipboard: each data_offer is immediately followed by its offer events
-  // and the selection that references it.  (Promoting between two WlPtr slots
-  // is impossible here — WlPtr::Swap moves only the proxy handle, not the
-  // handler object that holds the accumulated MimeSet and owns the listener
-  // binding.)
+  // A new offer is being introduced.  Adopt it into the pending slot so its
+  // handler (and the proxy's listener) accumulate the MIME types.  A
+  // data-control device announces both the regular and the primary selection on
+  // one device, so an offer cannot be committed until the following selection /
+  // primary_selection event says which channel it belongs to — hence a pending
+  // slot rather than a committed one.  Each data_offer is immediately followed
+  // by its offer events and its (primary_)selection, so a single pending slot
+  // suffices.
   void IntroduceOffer(wl_proxy* id) noexcept {
-    offer_.Reset();
-    (void)wl::SetupHandler(offer_, id);
+    pending_.Reset();
+    (void)wl::SetupHandler(pending_, id);
   }
 
-  // The selection now refers to @p id (the offer just introduced), or null to
-  // clear it.  Deliver the offer's MIME set to the app.
+  // The regular selection now refers to @p id (the pending offer), or null to
+  // clear it.
   void AdoptSelection(wl_proxy* id) noexcept {
+    CommitOffer(id, offer_, /*primary=*/false);
+  }
+
+  // The primary selection now refers to @p id, or null to clear it
+  // (data-control families only — routed here by DeviceHandlerBase).
+  void AdoptPrimary(wl_proxy* id) noexcept {
+    CommitOffer(id, primary_offer_, /*primary=*/true);
+  }
+
+  // Deliver the pending offer's MIME set to the app and move its proxy into the
+  // committed @p slot (or clear @p slot when @p id is null).  The MimeSet is
+  // delivered before the move because WlPtr::Swap transfers only the proxy, not
+  // the handler that holds the accumulated types.
+  void CommitOffer(wl_proxy* id,
+                   wl::WlPtr<OfferHandler>& slot,
+                   bool primary) noexcept {
     if (id == nullptr) {
-      offer_.Reset();
+      slot.Reset();
       const MimeSet empty;
       if (app_ != nullptr)
-        CallSelection(empty);
+        primary ? CallPrimary(empty) : CallSelection(empty);
       return;
     }
-    if (!offer_.IsNull() && offer_.Get()->GetProxy() == id && app_ != nullptr)
-      CallSelection(offer_.Get()->mimes);
+    if (pending_.IsNull() || pending_.Get()->GetProxy() != id)
+      return;  // referenced an offer we did not introduce
+    if (app_ != nullptr)
+      primary ? CallPrimary(pending_.Get()->mimes)
+              : CallSelection(pending_.Get()->mimes);
+    slot.Reset();
+    slot.Swap(pending_);  // move the offer's proxy into the committed slot
   }
 
   // The compositor wants the offered data for @p mime written to @p fd (on
@@ -359,13 +427,58 @@ class DataDevice {
       app_->OnSelection(m);
   }
 
+  // Deliver the primary selection to the App when it wants it (if constexpr so
+  // a MimeSet is never routed through `...`, which would abort at runtime).
+  void CallPrimary(const MimeSet& m) noexcept {
+    if constexpr (detail::HasDataPrimary<App>::value)
+      app_->OnPrimarySelection(m);
+  }
+
+  // Open a pipe, ask the compositor to write @p slot's @p mime data into it,
+  // and return the read end.  Shared by Receive (regular) and ReceivePrimary.
+  wl::FdHandle ReceiveFrom(wl::WlPtr<OfferHandler>& slot,
+                           const char* mime) noexcept {
+    if (slot.IsNull() || mime == nullptr)
+      return wl::FdHandle{-1};
+    std::array<int, 2> fds{-1, -1};
+    if (pipe2(fds.data(), O_CLOEXEC) != 0)
+      return wl::FdHandle{-1};
+    slot.Get()->Receive(mime, fds[1]);
+    close(fds[1]);  // the compositor holds its own copy via fd passing
+    // Flush so the receive request reaches the compositor before we block on
+    // the read end.
+    if (display_ != nullptr)
+      wl_display_flush(display_);
+    return wl::FdHandle{fds[0]};
+  }
+
+  // Create a data source offering @p mimes and return its proxy, or null on
+  // failure.  Drops any previously owned source.  Shared by Offer/OfferPrimary.
+  wl_proxy* CreateSource(const MimeSet& mimes) noexcept {
+    if (manager_.IsNull() || device_.IsNull())
+      return nullptr;
+    source_.Reset();  // drop any previous offer we still own
+    using M = typename P::ManagerTraits;
+    wl_proxy* raw =
+        wl::construct<typename P::SourceTraits, M::Op::CreateDataSource>(
+            *manager_.Get());
+    if (!wl::SetupHandler(source_, raw))
+      return nullptr;
+    source_.Get()->owner_ = this;
+    for (const std::string& mime : mimes)
+      source_.Get()->Offer(mime.c_str());
+    return source_.Get()->GetProxy();
+  }
+
   // ── Members
   // ──────────────────────────────────────────────────────────────────
   wl::WlPtr<ManagerHandler> manager_;
   wl::WlPtr<DeviceHandler> device_;
-  wl::WlPtr<OfferHandler> offer_;    // the current selection's offer (paste)
-  wl::WlPtr<SourceHandler> source_;  // the App's offered selection (copy)
-  wl_display* display_ = nullptr;    // for flushing the receive request
+  wl::WlPtr<OfferHandler> pending_;  // introduced, not yet classified
+  wl::WlPtr<OfferHandler> offer_;    // committed regular selection (paste)
+  wl::WlPtr<OfferHandler> primary_offer_;  // committed primary selection
+  wl::WlPtr<SourceHandler> source_;        // the App's offered selection (copy)
+  wl_display* display_ = nullptr;          // for flushing the receive request
   std::uint32_t name_ = 0;
   std::uint32_t ver_adv_ = 0;
   std::uint32_t ver_ = 0;
