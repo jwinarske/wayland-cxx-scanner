@@ -27,8 +27,8 @@ logic is duplicated.
 ## Usage
 
 ```
-ext-data-control --paste [--mime TYPE] [--list]
-ext-data-control --copy  [--mime TYPE] [--] [TEXT ...]
+ext-data-control --paste [--primary] [--mime TYPE] [--list]
+ext-data-control --copy  [--primary] [--mime TYPE] [--] [TEXT ...]
 ```
 
 | Invocation | Effect |
@@ -39,6 +39,19 @@ ext-data-control --copy  [--mime TYPE] [--] [TEXT ...]
 | `--copy TEXT ...` | take the selection; data is the TEXT args joined with a space |
 | `--copy` (no TEXT) | take the selection; data is read from stdin |
 | `--copy --mime T` | offer exactly type `T` (e.g. a binary flavor) instead of the text set |
+| `--primary` | act on the **primary** (middle-click) selection instead of the clipboard |
+
+ext-data-control carries the primary selection on the same device as the
+regular one, so `--primary` composes with everything above — `--paste
+--primary`, `--copy --primary "text"`, `--paste --primary --list`. The two
+selections are independent:
+
+```sh
+printf REG | ext-data-control --copy &            # regular clipboard
+printf PRI | ext-data-control --copy --primary &  # primary selection
+ext-data-control --paste            # -> REG
+ext-data-control --paste --primary  # -> PRI
+```
 
 With no `--mime`, paste picks the first available of
 `text/plain;charset=utf-8`, `text/plain`, `UTF8_STRING`, `STRING`, `TEXT`, and

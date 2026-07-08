@@ -48,6 +48,9 @@ struct ExtDataControlProtocol {
   using SourceBase = ext_data_control_v1::client::CExtDataControlSourceV1<D>;
   static constexpr bool set_selection_takes_serial = false;
   static constexpr bool device_release_is_explicit = false;
+  // ext-data-control carries a primary selection alongside the regular one, so
+  // wl::DataDevice exposes OfferPrimary / ReceivePrimary / OnPrimarySelection.
+  static constexpr bool has_primary = true;
 };
 
 }  // namespace wl
