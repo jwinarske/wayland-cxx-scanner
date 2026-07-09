@@ -102,6 +102,11 @@ class FramePacer {
   [[nodiscard]] double refresh_hz() const noexcept {
     return refresh_ns_ != 0 ? 1.0e9 / static_cast<double>(refresh_ns_) : 0.0;
   }
+  // Measured refresh interval in nanoseconds, or 0 when no refresh has been
+  // reported.  Lets the render loop retune its production timer to the display.
+  [[nodiscard]] std::uint32_t refresh_ns() const noexcept {
+    return refresh_ns_;
+  }
 
  private:
   PacerConfig cfg_;

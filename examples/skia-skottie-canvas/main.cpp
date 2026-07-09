@@ -369,6 +369,9 @@ class App {
  private:
   static constexpr int kDefaultWidth = 480;
   static constexpr int kDefaultHeight = 320;
+  // Fallback production cadence used until wp_presentation reports the
+  // display's real refresh (see AdaptPacingToRefresh).
+  static constexpr long kDefaultFrameNs = 1'000'000'000L / 60;
 
   bool ConnectDisplay();
   bool ScanGlobals();
@@ -409,6 +412,13 @@ class App {
   // committed a frame.  The heart of idle-commit suppression.
   bool Produce(bool arm_callback) noexcept;
   void OnTimerTick() noexcept;
+  // Arm the animation-clock timerfd to fire every `interval_ns` and record the
+  // armed period.  Returns false if timerfd_settime fails.
+  bool ArmTimer(long interval_ns) noexcept;
+  // Retune the production timer to the compositor's measured refresh once
+  // wp_presentation reports it, so pacing tracks the real display instead of
+  // the hardcoded 60 Hz fallback.  Called from OnPresented().
+  void AdaptPacingToRefresh() noexcept;
   // Wake the render loop after input (pause/scrub/hud) so a held or paused
   // frame repaints immediately rather than waiting for the timer.
   void Wake() noexcept;
@@ -487,6 +497,7 @@ class App {
   bool loop_ = true;
   bool fixed_dt_ = false;
   int timer_fd_ = -1;
+  long timer_interval_ns_ = 0;  // period the timerfd is currently armed to
   std::uint64_t commit_count_ = 0;
   std::uint64_t last_report_commits_ = 0;
   double last_report_ms_ = 0.0;
@@ -1110,6 +1121,38 @@ void App::OnPresented(const wl::PresentFeedback& fb) noexcept {
   // Real commit→turn-to-light latency and the compositor's measured refresh.
   pacer_.RecordPresentMs(fb.latency_ms);
   pacer_.NoteRefreshNs(fb.refresh_ns);
+  // Track the display: retune the production timer when the reported refresh
+  // differs from the cadence we are currently armed to (e.g. a high-refresh or
+  // 30 Hz panel, or a mode switch mid-run).
+  AdaptPacingToRefresh();
+}
+
+// Re-tunes the fallback animation-clock timer to the compositor's measured
+// refresh so the poll/production cadence follows the real display instead of a
+// hardcoded 60 Hz.  A no-op under --fixed-dt (which wants a deterministic
+// clock) and while the refresh stays within ~5% of the armed period, so it
+// costs a timerfd syscall only on an actual mode change rather than on every
+// frame.
+void App::AdaptPacingToRefresh() noexcept {
+  if (fixed_dt_ || timer_fd_ < 0)
+    return;
+  const std::uint32_t refresh_ns = pacer_.refresh_ns();
+  if (refresh_ns == 0)
+    return;
+  // Clamp to a plausible 10–1000 Hz so a garbage feedback event cannot wedge
+  // production near-stopped or spin it at absurd rates.
+  constexpr long kFastestNs = 1'000'000'000L / 1000;  // 1000 Hz ceiling
+  constexpr long kSlowestNs = 1'000'000'000L / 10;    // 10 Hz floor
+  const long want =
+      std::clamp(static_cast<long>(refresh_ns), kFastestNs, kSlowestNs);
+  const long delta = want > timer_interval_ns_ ? want - timer_interval_ns_
+                                               : timer_interval_ns_ - want;
+  if (delta * 20 <= timer_interval_ns_)  // < ~5% change: not worth a syscall
+    return;
+  if (ArmTimer(want))
+    std::printf(
+        "skia-skottie-canvas: pacing to %.2f Hz (presentation feedback)\n",
+        1.0e9 / static_cast<double>(want));
 }
 
 // Renders a bounded number of frames back-to-back, driving each with a display
@@ -1179,26 +1222,33 @@ void App::PrintPresentSummary() const noexcept {
       pacer_.PresentPercentile(95), pacer_.refresh_hz());
 }
 
+bool App::ArmTimer(long interval_ns) noexcept {
+  const itimerspec spec{{0, interval_ns}, {0, interval_ns}};
+  if (::timerfd_settime(timer_fd_, 0, &spec, nullptr) < 0) {
+    std::fprintf(stderr, "skia-skottie-canvas: timerfd_settime failed\n");
+    return false;
+  }
+  timer_interval_ns_ = interval_ns;
+  return true;
+}
+
 bool App::MainLoop() {
   if (pacer_.self_paced())
     return RunSelfPaced();
 
-  // Animation-clock timer: fires at ~60 Hz.  It paces production and,
-  // crucially, keeps polling after production goes idle (a hold) so the loop
-  // wakes when the animation moves again — without it, suppressing commits
-  // would also suppress the frame callbacks that would otherwise resume the
-  // loop.
+  // Animation-clock timer: starts at 60 Hz and retunes to the display's real
+  // refresh once wp_presentation reports it (see AdaptPacingToRefresh).  It
+  // paces production and, crucially, keeps polling after production goes idle
+  // (a hold) so the loop wakes when the animation moves again — without it,
+  // suppressing commits would also suppress the frame callbacks that would
+  // otherwise resume the loop.
   timer_fd_ = ::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
   if (timer_fd_ < 0) {
     std::fprintf(stderr, "skia-skottie-canvas: timerfd_create failed\n");
     return false;
   }
-  constexpr long kFrameNs = 1'000'000'000L / 60;
-  const itimerspec spec{{0, kFrameNs}, {0, kFrameNs}};
-  if (::timerfd_settime(timer_fd_, 0, &spec, nullptr) < 0) {
-    std::fprintf(stderr, "skia-skottie-canvas: timerfd_settime failed\n");
+  if (!ArmTimer(kDefaultFrameNs))
     return false;
-  }
 
   std::printf(
       "skia-skottie-canvas: playing (%.1fs @ %.0f fps).  SPACE/click = pause, "
