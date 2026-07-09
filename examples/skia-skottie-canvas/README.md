@@ -28,6 +28,13 @@ skia-skottie-canvas: 50 commits/s  playhead=2.00s
 skia-skottie-canvas:  0 commits/s  playhead=3.00s  [paused]
 ```
 
+The polling `timerfd` starts at 60 Hz but **retunes to the display's real
+refresh** as soon as `wp_presentation` feedback reports it (see
+`AdaptPacingToRefresh`): on a 144 Hz or 30 Hz panel the production cadence
+follows the compositor instead of a hardcoded rate, re-arming only on an actual
+mode change (a >5% shift) rather than every frame. `--fixed-dt` opts out, keeping
+the deterministic 60 Hz clock.
+
 The performance overlay (`F1` / `--hud`) surfaces the same two numbers on the
 canvas — a `commit N/s` rate and a `damage N%` coverage, each a rolling
 one-second average. They count **only frames the animation actually produced**,
