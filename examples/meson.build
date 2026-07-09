@@ -12,6 +12,9 @@ subdir('subsurfaces')
 subdir('presentation-shm')
 # agl-compositor uses subdir_done() internally if wayland-scanner/xkbcommon absent.
 subdir('agl-presentation-shm')
+# agl-presentation-egl uses subdir_done() internally if EGL/GLES/wayland-egl/
+# wayland-protocols/scanner/xkbcommon deps are absent.
+subdir('agl-presentation-egl')
 # ivi-shell uses subdir_done() internally if wayland-scanner/xkbcommon absent.
 subdir('ivi-presentation-shm')
 # simple-shell-egl uses subdir_done() internally if EGL/GLES/wayland-egl/
