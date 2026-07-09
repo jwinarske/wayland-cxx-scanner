@@ -23,14 +23,22 @@
 // no glBlitFramebuffer, so the offscreen result is presented by texturing a
 // screen-filling quad rather than blitting.
 //
+// Each committed frame also arms wp_presentation feedback (via
+// wl::PresentationManager), so the compositor's real commit-to-light latency
+// and refresh interval are measured.  To keep the log quiet the results are
+// aggregated and printed once every kReportEveryFrames presentations rather
+// than per frame.  wp_presentation is optional: if the compositor does not
+// advertise it, the manager is a no-op and rendering is unaffected.
+//
 // IMPORTANT: set_background must come AFTER the first wl_surface.commit().
 // Calling set_background before commit crashes agl-compositor because the
 // compositor inspects the committed surface state (role) when processing
 // set_background, and an uncommitted surface has no role assigned yet.
 //
 // Protocol dependencies:
-//   xdg-shell.xml  (wayland-protocols, stable)
-//   agl-shell.xml  (bundled in protocols/)
+//   xdg-shell.xml         (wayland-protocols, stable)
+//   presentation-time.xml (wayland-protocols, stable)
+//   agl-shell.xml         (bundled in protocols/)
 
 // ── EGL/GLES headers (must precede any Wayland headers to avoid wl_display
 //    redefinition issues on some EGL implementations) ─────────────────────────
@@ -40,9 +48,10 @@ extern "C" {
 }
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
-#include "agl_shell_client.hpp"  // namespace agl_shell::client
-#include "wayland_client.hpp"    // namespace wayland::client
-#include "xdg_shell_client.hpp"  // namespace xdg_shell::client
+#include "agl_shell_client.hpp"          // namespace agl_shell::client
+#include "presentation_time_client.hpp"  // namespace presentation_time::client
+#include "wayland_client.hpp"            // namespace wayland::client
+#include "xdg_shell_client.hpp"          // namespace xdg_shell::client
 
 // ── System Wayland / Linux C headers ─────────────────────────────────────────
 extern "C" {
@@ -60,6 +69,8 @@ extern "C" {
 #include <wl/agl_shell.hpp>  // wl_interface tables + wl::AglShellHandler<App>
 #include <wl/client_helpers.hpp>
 #include <wl/display.hpp>
+#include <wl/present_feedback.hpp>  // wl::PresentFeedback
+#include <wl/presentation.hpp>      // wl::PresentationManager<App>
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
 #include <wl/seat.hpp>
@@ -269,6 +280,12 @@ class App {
   void OnAglBoundFail() noexcept;
   static void OnAglAppState(const char* app_id, uint32_t state);
 
+  // ── wp_presentation hooks (invoked by wl::PresentationManager) ────────────
+  /// A committed frame turned to light; aggregated and reported periodically.
+  void OnPresented(const wl::PresentFeedback& fb) noexcept;
+  /// A committed frame was never shown (mode switch, occlusion, …).
+  void OnDiscarded(uint32_t frame) noexcept;
+
  private:
   // Declaration order = reverse destruction order.  egl_ is declared after
   // surface_ so the EGL window/context is torn down before the wl_surface.
@@ -328,6 +345,9 @@ class App {
   wl::WlPtr<wl::AglShellHandler<App>> agl_shell_;
   wl::WlPtr<WlOutputHandler> output_;
 
+  // wp_presentation feedback manager (optional; no-op if not advertised).
+  wl::PresentationManager<App> presentation_;
+
   // Seat/keyboard (optional; ESC to quit).
   wl::SeatManager<App> seat_;
 
@@ -338,6 +358,16 @@ class App {
   int width_ = 1920;
   int height_ = 1080;
   float angle_ = 0.0f;
+  uint32_t commit_frame_ =
+      0;  // frame index armed with each presentation request
+
+  // Presentation-feedback aggregation — summarized once per window rather than
+  // logged per frame.
+  static constexpr uint32_t kReportEveryFrames = 120;  // ~2 s at 60 Hz
+  uint32_t presented_count_ = 0;
+  uint32_t discarded_count_ = 0;
+  double latency_sum_ms_ = 0.0;   // summed over the current report window
+  uint32_t last_refresh_ns_ = 0;  // most recent plausible refresh interval
 
   // State flags.
   bool running_ = true;
@@ -379,6 +409,9 @@ void WlCallbackHandler::OnDone(const uint32_t time_ms) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 App::~App() {
+  // Destroy feedback proxies before the surface/registry members they
+  // reference.
+  presentation_.Release();
   seat_.Release();
 }
 
@@ -421,6 +454,42 @@ void App::OnAglBoundFail() noexcept {
 void App::OnAglAppState(const char* app_id, const uint32_t state) {
   std::printf("agl-presentation-egl: app_state app_id=%s state=%u\n", app_id,
               state);
+}
+
+void App::OnPresented(const wl::PresentFeedback& fb) noexcept {
+  // Aggregate rather than log per frame: sum this window's commit→light latency
+  // and remember the latest plausible refresh, emitting one summary line every
+  // kReportEveryFrames presentations.
+  ++presented_count_;
+  latency_sum_ms_ += fb.latency_ms;
+  if (fb.refresh_ns != 0u)
+    last_refresh_ns_ = fb.refresh_ns;
+
+  if (presented_count_ % kReportEveryFrames != 0u)
+    return;
+
+  const double mean_ms =
+      latency_sum_ms_ / static_cast<double>(kReportEveryFrames);
+  const double refresh_ms = static_cast<double>(last_refresh_ns_) / 1.0e6;
+  const double hz = last_refresh_ns_ != 0u
+                        ? 1.0e9 / static_cast<double>(last_refresh_ns_)
+                        : 0.0;
+  if (discarded_count_ != 0u)
+    std::printf(
+        "agl-presentation-egl: %u presented (%u discarded), mean commit→light "
+        "%.2f ms, refresh %.2f ms (%.1f Hz)\n",
+        presented_count_, discarded_count_, mean_ms, refresh_ms, hz);
+  else
+    std::printf(
+        "agl-presentation-egl: %u presented, mean commit→light %.2f ms, "
+        "refresh %.2f ms (%.1f Hz)\n",
+        presented_count_, mean_ms, refresh_ms, hz);
+  latency_sum_ms_ = 0.0;  // start a fresh averaging window
+}
+
+void App::OnDiscarded(uint32_t /*frame*/) noexcept {
+  // Counted and folded into the next periodic summary; not logged on its own.
+  ++discarded_count_;
 }
 
 int App::Run() {
@@ -468,6 +537,7 @@ bool App::ScanGlobals() {
     using namespace wayland::client;
     using namespace xdg_shell::client;
     using namespace agl_shell::client;
+    using namespace presentation_time::client;
 
     if (iface == wl_compositor_traits::interface_name) {
       compositor_name_ = name;
@@ -481,6 +551,8 @@ bool App::ScanGlobals() {
     } else if (iface == agl_shell_traits::interface_name) {
       agl_shell_name_ = name;
       agl_shell_ver_ = ver;
+    } else if (iface == wp_presentation_traits::interface_name) {
+      presentation_.Record(name, ver);
     } else if (iface == wl_seat_traits::interface_name) {
       seat_.Record(name, ver);
     }
@@ -558,6 +630,13 @@ bool App::BindGlobals() {
     return false;
   }
   agl_shell_.Get()->app_ = this;  // needed to dispatch bound_ok/fail
+
+  // wp_presentation (optional; Bind() is a no-op if it was never advertised).
+  // Installed before the roundtrip so its clock_id event arrives with the rest.
+  if (!presentation_.Bind(registry_, this)) {
+    std::fprintf(stderr, "agl-presentation-egl: wp_presentation bind failed\n");
+    return false;
+  }
 
   // wl_seat (optional; provides keyboard for ESC-to-quit).
   if (!seat_.Bind(registry_, this)) {
@@ -927,6 +1006,10 @@ void App::RenderFrame() noexcept {
   glDisableVertexAttribArray(kAttrPos);
   glDisableVertexAttribArray(kAttrExtra);
 
+  // Request presentation feedback for the frame about to be committed, then
+  // commit it: eglSwapBuffers performs the wl_surface.commit, so Arm() must
+  // precede it so the feedback binds to that commit.
+  presentation_.Arm(surface_.Get()->GetProxy(), commit_frame_++);
   eglSwapBuffers(egl_.display, egl_.surface);
   angle_ += 0.02f;
 }

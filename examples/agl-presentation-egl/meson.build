@@ -6,10 +6,12 @@
 # Demonstrates the agl_shell background-client handshake (as agl-presentation-shm
 # does) but renders with EGL / OpenGL ES 2: an animated scene is drawn into an
 # offscreen framebuffer object, then composited to the window by texturing a
-# full-screen quad.
+# full-screen quad.  Each committed frame requests wp_presentation feedback so
+# the real commit-to-light latency and refresh interval can be reported.
 #
 # The bundled protocols/agl-shell.xml provides the AGL protocol definition;
-# xdg-shell.xml comes from the system wayland-protocols package.
+# xdg-shell.xml and presentation-time.xml come from the system
+# wayland-protocols package.
 
 # ── Dep checks — silently skip if any required dep is absent ─────────────────
 
@@ -30,6 +32,7 @@ endif
 
 wayland_xml   = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
 xdg_shell_xml = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+presentation_time_xml = wp_dep.get_variable('pkgdatadir') / 'stable/presentation-time/presentation-time.xml'
 agl_shell_xml = meson.project_source_root() / 'protocols' / 'agl-shell.xml'
 
 # ── Generate C++ client headers ───────────────────────────────────────────────
@@ -55,6 +58,17 @@ agl_shell_client_hdr = custom_target(
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
 )
 
+# presentation-time is not in libwayland, so generate with
+# --emit-interface-tables to define its own wl_interface tables and wl_iface();
+# wl::PresentationManager consumes the resulting header.
+presentation_time_client_hdr = custom_target(
+    'agl-presentation-egl-presentation-time-client-header',
+    input:   presentation_time_xml,
+    output:  'presentation_time_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
+)
+
 # ── Include paths ─────────────────────────────────────────────────────────────
 
 framework_inc = include_directories('../../include')
@@ -69,6 +83,7 @@ executable(
         wayland_client_hdr,
         xdg_shell_client_hdr,
         agl_shell_client_hdr,
+        presentation_time_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
     dependencies: [
