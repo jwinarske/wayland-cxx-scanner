@@ -28,15 +28,23 @@ a `vkCmdCopyImage` blits it into a linear, `DRM_FORMAT_MOD_LINEAR`
 dma-buf-exported image — the guaranteed baseline. Set `SKIA_VULKAN_DMABUF_LINEAR`
 to force this path where the compositor advertises tiled modifiers.
 
-Both paths are double-buffered and synchronized with a CPU fence before
-`wl_surface.commit`. All Vulkan is written with
+**Explicit sync.** When the compositor offers `wp_linux_drm_syncobj_v1` and the
+device has timeline + external-semaphore-fd, the direct path uses **explicit
+GPU sync** instead of a CPU fence: Skia signals a binary semaphore on flush, a
+queue submit bridges it to a `drm_syncobj` timeline acquire point the compositor
+waits on before sampling, and the compositor signals a release point the client
+polls before reusing a slot. So the CPU never blocks on the render. Set
+`SKIA_VULKAN_DMABUF_NO_EXPLICIT_SYNC` to fall back to the CPU-fence + implicit
+`wl_buffer.release` path. The copy fallback stays CPU-fence synchronized.
+
+All Vulkan is written with
 [Vulkan-Hpp](https://github.com/KhronosGroup/Vulkan-Hpp) (`vk::`), dropping to
-raw C handles only at Skia's `VulkanBackendContext` / `GrVkImageInfo` boundary.
-Explicit sync (`wp_linux_drm_syncobj_v1`) and buffer-age partial repaint are
-follow-ups.
+raw C handles only at Skia's `VulkanBackendContext` / `GrVkImageInfo` boundary
+and the `drm_syncobj` bridge. Buffer-age partial repaint is a follow-up.
 
 The startup line reports which path engaged, e.g. `… → modifier-tiled dma-buf
-direct (modifier 0x0200000000…)` or `… → linear dma-buf present (copy fallback)`.
+direct (modifier 0x0200000000…, explicit sync)` or `… → linear dma-buf present
+(copy fallback, CPU fence)`.
 
 ## Controls
 
@@ -65,6 +73,9 @@ direct (modifier 0x0200000000…)` or `… → linear dma-buf present (copy fall
   the example uses the linear fallback.
 - A Wayland compositor advertising `xdg-shell` and `zwp_linux_dmabuf_v1` (v4+ for
   the direct path's modifier feedback; v3 falls back to linear).
+  `wp_linux_drm_syncobj_v1` (+ device `VK_KHR_timeline_semaphore`,
+  `VK_KHR_external_semaphore_fd`, `VK_EXT_physical_device_drm`) additionally
+  enables explicit sync; without them the direct path uses a CPU fence.
 - The producer and the compositor must share a compatible GPU: a
   software-rendered (lavapipe) buffer cannot be imported by a hardware
   compositor, and vice versa.

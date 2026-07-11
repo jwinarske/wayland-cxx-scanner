@@ -56,6 +56,25 @@ presentation_time_client_hdr = custom_target(
               '@INPUT@', '@OUTPUT@'],
 )
 
+# ── Optional: explicit sync (wp_linux_drm_syncobj, staging) ────────────────────
+# Only when the host's wayland-protocols ships it; otherwise the CPU-fence path
+# is the only sync path (HAVE_DRM_SYNCOBJ unset).
+_fs = import('fs')
+drm_syncobj_xml = wp_dep.get_variable('pkgdatadir') / 'staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml'
+extra_sources  = []
+extra_cpp_args = ['-Wno-unused-parameter']
+if _fs.exists(drm_syncobj_xml)
+    drm_syncobj_client_hdr = custom_target(
+        'skia-vulkan-dmabuf-drm-syncobj-client-header',
+        input:   drm_syncobj_xml,
+        output:  'drm_syncobj_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+    extra_sources  += [drm_syncobj_client_hdr]
+    extra_cpp_args += ['-DHAVE_DRM_SYNCOBJ=1']
+endif
+
 # ── Include paths ─────────────────────────────────────────────────────────────
 
 framework_inc = include_directories('../../include')
@@ -71,7 +90,7 @@ executable(
         xdg_shell_client_hdr,
         linux_dmabuf_client_hdr,
         presentation_time_client_hdr,
-    ],
+    ] + extra_sources,
     include_directories: [framework_inc, generated_inc],
     dependencies: [
         wayland_client_dep,
@@ -80,5 +99,5 @@ executable(
         xkbcommon_dep,
         skia_demo_common_dep,
     ],
-    cpp_args: ['-Wno-unused-parameter'],
+    cpp_args: extra_cpp_args,
 )

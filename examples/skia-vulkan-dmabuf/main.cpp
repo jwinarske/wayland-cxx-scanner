@@ -37,6 +37,9 @@
 #include "presentation_time_client.hpp"  // presentation_time::client
 #include "wayland_client.hpp"
 #include "xdg_shell_client.hpp"
+#if defined(HAVE_DRM_SYNCOBJ)
+#include "drm_syncobj_client.hpp"  // linux_drm_syncobj_v1::client
+#endif
 
 // ── System C headers
 // ──────────────────────────────────────────────────────────
@@ -46,6 +49,12 @@ extern "C" {
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client-protocol.h>
+#if defined(HAVE_DRM_SYNCOBJ)
+#include <fcntl.h>          // open (render node)
+#include <sys/stat.h>       // stat, S_ISCHR
+#include <sys/sysmacros.h>  // major, minor
+#include <xf86drm.h>        // drmSyncobjCreate/HandleToFD/TimelineWait
+#endif
 }
 
 // ── Framework headers
@@ -80,6 +89,10 @@ extern "C" {
 #include "include/gpu/MutableTextureState.h"
 #include "include/gpu/ganesh/GrBackendSurface.h"
 #include "include/gpu/ganesh/GrDirectContext.h"
+#if defined(HAVE_DRM_SYNCOBJ)
+#include "include/gpu/ganesh/GrBackendSemaphore.h"
+#include "include/gpu/ganesh/vk/GrVkBackendSemaphore.h"
+#endif
 #include "include/gpu/ganesh/GrTypes.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/gpu/ganesh/vk/GrVkBackendSurface.h"
@@ -105,6 +118,9 @@ extern "C" {
 #include <string>
 #include <string_view>
 #include <vector>
+#if defined(HAVE_DRM_SYNCOBJ)
+#include <filesystem>  // resolve the Vulkan device's DRM render node
+#endif
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() definitions — core Wayland interfaces
@@ -176,6 +192,19 @@ class LinuxBufferParamsHandler
     : public linux_dmabuf_unstable_v1::client::CZwpLinuxBufferParamsV1<
           LinuxBufferParamsHandler> {};
 
+#if defined(HAVE_DRM_SYNCOBJ)
+// The wp_linux_drm_syncobj objects carry no events — bare handlers.
+class SyncobjManagerHandler
+    : public linux_drm_syncobj_v1::client::CWpLinuxDrmSyncobjManagerV1<
+          SyncobjManagerHandler> {};
+class SyncobjSurfaceHandler
+    : public linux_drm_syncobj_v1::client::CWpLinuxDrmSyncobjSurfaceV1<
+          SyncobjSurfaceHandler> {};
+class SyncobjTimelineHandler
+    : public linux_drm_syncobj_v1::client::CWpLinuxDrmSyncobjTimelineV1<
+          SyncobjTimelineHandler> {};
+#endif
+
 // ══════════════════════════════════════════════════════════════════════════════
 // App
 // ══════════════════════════════════════════════════════════════════════════════
@@ -225,6 +254,21 @@ class App {
   bool AllocateSlotMemory(Slot& s) noexcept;  // memory + dma-buf fd + wl_buffer
   bool CreateModifierSlot(Slot& s) noexcept;  // modifier-tiled + Skia surface
   bool CreateLinearSlot(Slot& s) noexcept;    // linear + copy cmd/fence
+#if defined(HAVE_DRM_SYNCOBJ)
+  // Bring up the drm_syncobj ↔ Vulkan-timeline bridge and the syncobj surface;
+  // sets use_explicit_sync_ on success.  Called after
+  // InitVulkan/CreateSurfaces.
+  void SetupExplicitSync() noexcept;
+  void DestroyExplicitSync() noexcept;
+  // Queue-submit that waits the slot's flush semaphore (Skia's render) and
+  // signals the acquire timeline at a fresh point; records the slot's release
+  // point.  Returns the acquire point, or 0 on failure.
+  uint64_t SignalAcquire(Slot& s) noexcept;
+  // True if this slot's compositor release point has been signaled (or the slot
+  // was never committed).  Non-blocking poll — the explicit-sync analogue of
+  // wl_buffer.release.
+  [[nodiscard]] bool SlotReleased(const Slot& s) const noexcept;
+#endif
   void DestroyRenderResources();
   bool CopyToSlot(
       int slot) noexcept;  // Skia image → slot's linear dma-buf image
@@ -287,6 +331,8 @@ class App {
     vk::UniqueCommandBuffer copy_cmd;  // fallback path only
     vk::UniqueFence fence;             // fallback path only
     sk_sp<SkSurface> surface;          // direct path only (wraps `image`)
+    vk::UniqueSemaphore flush_sem;     // explicit-sync: Skia signals on flush
+    uint64_t release_point = 0;        // explicit-sync: this slot's release pt
     wl::WlPtr<WlBufferHandler> buffer;
 
     ~Slot() noexcept {
@@ -320,6 +366,26 @@ class App {
   uint32_t chosen_plane_count_ = 1;   // memory planes of chosen_modifier_
   wl::FeedbackSnapshot fb_snapshot_;  // latest dmabuf feedback snapshot
 
+  // Explicit sync (wp_linux_drm_syncobj): the compositor waits on our acquire
+  // point (GPU-signaled) before sampling and signals the release point when
+  // done, so the CPU never blocks on the render.  Gated on protocol + Vulkan
+  // support; otherwise the CPU-fence + wl_buffer.release path runs.
+  bool use_explicit_sync_ = false;
+#if defined(HAVE_DRM_SYNCOBJ)
+  bool syncobj_vk_ok_ = false;  // device has timeline + external-semaphore-fd
+  std::uint32_t syncobj_mgr_name_ = 0, syncobj_mgr_ver_ = 0;
+  wl::WlPtr<SyncobjManagerHandler> syncobj_mgr_;
+  wl::WlPtr<SyncobjSurfaceHandler> syncobj_surface_;
+  wl::WlPtr<SyncobjTimelineHandler> acquire_tl_;  // wp timeline (acquire)
+  wl::WlPtr<SyncobjTimelineHandler> release_tl_;  // wp timeline (release)
+  int drm_fd_ = -1;                  // render node, for drmSyncobj* ioctls
+  uint32_t acquire_syncobj_ = 0;     // drm handle (Vulkan signals it)
+  uint32_t release_syncobj_ = 0;     // drm handle (compositor signals it)
+  vk::UniqueSemaphore acquire_sem_;  // Vulkan timeline ↔ acquire_syncobj_
+  uint64_t acquire_point_ = 0;       // monotonic acquire timeline value
+  uint64_t release_point_ = 0;       // monotonic release timeline value
+#endif
+
   std::uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   std::uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
   std::uint32_t linux_dmabuf_name_ = 0, linux_dmabuf_ver_ = 0;
@@ -349,6 +415,9 @@ App::~App() {
   if (vk_.device)
     (void)vk_.device->waitIdle();
   DestroyRenderResources();
+#if defined(HAVE_DRM_SYNCOBJ)
+  DestroyExplicitSync();
+#endif
   gr_context_.reset();
   presentation_.Release();
   seat_.Release();
@@ -365,6 +434,9 @@ int App::Run() {
     return EXIT_FAILURE;
   if (!InitVulkan())
     return EXIT_FAILURE;
+#if defined(HAVE_DRM_SYNCOBJ)
+  SetupExplicitSync();
+#endif
   if (!CreateRenderResources())
     return EXIT_FAILURE;
   return MainLoop() ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -403,6 +475,13 @@ bool App::ScanGlobals() {
       linux_dmabuf_name_ = name;
       linux_dmabuf_ver_ = ver;
       dmabuf_feedback_.Record(name, ver);
+#if defined(HAVE_DRM_SYNCOBJ)
+    } else if (iface ==
+               linux_drm_syncobj_v1::client::
+                   wp_linux_drm_syncobj_manager_v1_traits::interface_name) {
+      syncobj_mgr_name_ = name;
+      syncobj_mgr_ver_ = ver;
+#endif
     }
   });
   if (!wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs)) {
@@ -451,6 +530,17 @@ bool App::BindGlobals() {
     std::fprintf(stderr, "skia-vulkan-dmabuf: wp_presentation bind failed\n");
     return false;
   }
+#if defined(HAVE_DRM_SYNCOBJ)
+  // wp_linux_drm_syncobj is optional; explicit sync stays off if absent.  Its
+  // objects have no events, so bind via Attach (no listener/_SetProxy).
+  if (syncobj_mgr_name_ != 0) {
+    using mgr_traits =
+        linux_drm_syncobj_v1::client::wp_linux_drm_syncobj_manager_v1_traits;
+    if (wl_proxy* raw = registry_.Bind<mgr_traits>(
+            syncobj_mgr_name_, std::min(syncobj_mgr_ver_, mgr_traits::version)))
+      syncobj_mgr_.Attach(raw);
+  }
+#endif
   if (!wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs)) {
     std::fprintf(stderr, "skia-vulkan-dmabuf: timed out waiting for formats\n");
     return false;
@@ -584,19 +674,37 @@ bool App::InitVulkan() {
     vk_.device_exts.push_back(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
     vk_.device_exts.push_back(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
   }
+#if defined(HAVE_DRM_SYNCOBJ)
+  // Explicit sync bridges a Vulkan timeline semaphore to a drm_syncobj; needs
+  // timeline + external-semaphore-fd, and physical-device-drm to find the node.
+  syncobj_vk_ok_ = has_ext(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME) &&
+                   has_ext(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME) &&
+                   has_ext(VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME);
+  if (syncobj_vk_ok_) {
+    vk_.device_exts.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    vk_.device_exts.push_back(VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
+    vk_.device_exts.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+    vk_.device_exts.push_back(VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME);
+  }
+#endif
 
   // ── Logical device ─────────────────────────────────────────────────────────
   constexpr float queue_prio = 1.0f;
   const vk::DeviceQueueCreateInfo queue_ci{
       {}, vk_.queue_family, 1, &queue_prio};
-  const vk::DeviceCreateInfo dev_ci{
-      {},
-      1,
-      &queue_ci,
-      0,
-      nullptr,
-      static_cast<uint32_t>(vk_.device_exts.size()),
-      vk_.device_exts.data()};
+  vk::DeviceCreateInfo dev_ci{{},
+                              1,
+                              &queue_ci,
+                              0,
+                              nullptr,
+                              static_cast<uint32_t>(vk_.device_exts.size()),
+                              vk_.device_exts.data()};
+#if defined(HAVE_DRM_SYNCOBJ)
+  // Timeline semaphores are a feature, not just an extension — enable it.
+  vk::PhysicalDeviceTimelineSemaphoreFeatures timeline_feature{VK_TRUE};
+  if (syncobj_vk_ok_)
+    dev_ci.setPNext(&timeline_feature);
+#endif
   auto dev_rv = vk_.phys_dev.createDeviceUnique(dev_ci);
   if (!VkOk(dev_rv.result, "vkCreateDevice"))
     return false;
@@ -660,6 +768,7 @@ void App::DestroyRenderResources() {
   for (Slot& s : slots_) {
     s.buffer.Reset();
     s.surface.reset();  // borrows s.image; drop before the image
+    s.flush_sem.reset();
     s.fence.reset();
     s.copy_cmd.reset();
     s.image.reset();
@@ -672,6 +781,7 @@ void App::DestroyRenderResources() {
     s.stride = 0;
     s.plane_count = 1;
     s.planes = {};
+    s.release_point = 0;
   }
 }
 
@@ -882,6 +992,15 @@ bool App::CreateModifierSlot(Slot& s) noexcept {
     std::fprintf(stderr, "skia-vulkan-dmabuf: WrapBackendTexture failed\n");
     return false;
   }
+#if defined(HAVE_DRM_SYNCOBJ)
+  // Binary semaphore Skia signals on flush; the acquire-point submit waits it.
+  if (use_explicit_sync_) {
+    auto rv = vk_.device->createSemaphoreUnique({});
+    if (!VkOk(rv.result, "vkCreateSemaphore (flush)"))
+      return false;
+    s.flush_sem = std::move(rv.value);
+  }
+#endif
   return true;
 }
 
@@ -933,6 +1052,185 @@ bool App::CreateLinearSlot(Slot& s) noexcept {
   return true;
 }
 
+#if defined(HAVE_DRM_SYNCOBJ)
+namespace {
+// Resolve a DRM major:minor to its /dev/dri node path (empty if none).
+std::string DrmNodePath(unsigned major_n, unsigned minor_n) {
+  std::error_code ec;
+  for (const std::filesystem::directory_entry& e :
+       std::filesystem::directory_iterator("/dev/dri", ec)) {
+    struct stat st{};
+    if (::stat(e.path().c_str(), &st) == 0 && S_ISCHR(st.st_mode) &&
+        major(st.st_rdev) == major_n && minor(st.st_rdev) == minor_n)
+      return e.path().string();
+  }
+  return {};
+}
+}  // namespace
+
+// Bring up the drm_syncobj ↔ Vulkan-timeline bridge and the syncobj surface.
+// Any failure leaves use_explicit_sync_ false (the CPU-fence path runs).
+void App::SetupExplicitSync() noexcept {
+  using namespace linux_drm_syncobj_v1::client;
+  using mgr = wp_linux_drm_syncobj_manager_v1_traits;
+
+  if (std::getenv("SKIA_VULKAN_DMABUF_NO_EXPLICIT_SYNC") != nullptr)
+    return;
+  if (syncobj_mgr_.IsNull() || !syncobj_vk_ok_)
+    return;
+
+  // Open the Vulkan device's DRM render node for the syncobj ioctls.
+  vk::PhysicalDeviceDrmPropertiesEXT drm{};
+  vk::PhysicalDeviceProperties2 p2{};
+  p2.pNext = &drm;
+  vk_.phys_dev.getProperties2(&p2);
+  const std::string node =
+      drm.hasRender ? DrmNodePath(static_cast<unsigned>(drm.renderMajor),
+                                  static_cast<unsigned>(drm.renderMinor))
+                    : std::string{};
+  if (node.empty())
+    return;
+  drm_fd_ = ::open(node.c_str(), O_RDWR | O_CLOEXEC);
+  if (drm_fd_ < 0)
+    return;
+
+  if (drmSyncobjCreate(drm_fd_, 0, &acquire_syncobj_) != 0 ||
+      drmSyncobjCreate(drm_fd_, 0, &release_syncobj_) != 0) {
+    DestroyExplicitSync();
+    return;
+  }
+
+  // Import both syncobjs into the compositor as timelines.  Keep the fds until
+  // after a flush so libwayland can send them, then close.
+  int afd = -1;
+  int rfd = -1;
+  if (drmSyncobjHandleToFD(drm_fd_, acquire_syncobj_, &afd) != 0 ||
+      drmSyncobjHandleToFD(drm_fd_, release_syncobj_, &rfd) != 0) {
+    if (afd >= 0)
+      ::close(afd);
+    DestroyExplicitSync();
+    return;
+  }
+  // Timelines have no events → Attach, not SetupHandler.
+  wl_proxy* araw =
+      wl::construct<wp_linux_drm_syncobj_timeline_v1_traits,
+                    mgr::Op::ImportTimeline>(*syncobj_mgr_.Get(), afd);
+  wl_proxy* rraw =
+      wl::construct<wp_linux_drm_syncobj_timeline_v1_traits,
+                    mgr::Op::ImportTimeline>(*syncobj_mgr_.Get(), rfd);
+  if (araw != nullptr)
+    acquire_tl_.Attach(araw);
+  if (rraw != nullptr)
+    release_tl_.Attach(rraw);
+  wl_display_flush(display_.Get());
+  ::close(afd);
+  ::close(rfd);
+  if (araw == nullptr || rraw == nullptr) {
+    DestroyExplicitSync();
+    return;
+  }
+
+  // Import the acquire syncobj into Vulkan as a timeline semaphore so a queue
+  // submit can signal it (the compositor waits on the same syncobj point).
+  vk::SemaphoreTypeCreateInfo tci{vk::SemaphoreType::eTimeline, 0};
+  vk::SemaphoreCreateInfo sci{};
+  sci.setPNext(&tci);
+  auto sem_rv = vk_.device->createSemaphoreUnique(sci);
+  if (!VkOk(sem_rv.result, "vkCreateSemaphore (timeline)")) {
+    DestroyExplicitSync();
+    return;
+  }
+  acquire_sem_ = std::move(sem_rv.value);
+
+  auto import_sem_fd = reinterpret_cast<PFN_vkImportSemaphoreFdKHR>(
+      vkGetDeviceProcAddr(*vk_.device, "vkImportSemaphoreFdKHR"));
+  int vk_afd = -1;
+  if (import_sem_fd == nullptr ||
+      drmSyncobjHandleToFD(drm_fd_, acquire_syncobj_, &vk_afd) != 0) {
+    DestroyExplicitSync();
+    return;
+  }
+  const VkImportSemaphoreFdInfoKHR imp{
+      VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR,
+      nullptr,
+      *acquire_sem_,
+      0,  // permanent import: Vulkan takes ownership of vk_afd
+      VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
+      vk_afd};
+  if (import_sem_fd(*vk_.device, &imp) != VK_SUCCESS) {
+    ::close(vk_afd);
+    DestroyExplicitSync();
+    return;
+  }
+
+  // Bind the syncobj surface so we can set acquire/release points per commit.
+  wl_proxy* sraw = wl::construct<wp_linux_drm_syncobj_surface_v1_traits,
+                                 mgr::Op::GetSurface>(
+      *syncobj_mgr_.Get(), surface_.Get()->GetProxy());
+  if (sraw == nullptr) {
+    DestroyExplicitSync();
+    return;
+  }
+  syncobj_surface_.Attach(sraw);
+  use_explicit_sync_ = true;
+}
+
+void App::DestroyExplicitSync() noexcept {
+  use_explicit_sync_ = false;
+  if (vk_.device)
+    (void)vk_.device->waitIdle();
+  acquire_sem_.reset();
+  syncobj_surface_.Reset();
+  acquire_tl_.Reset();
+  release_tl_.Reset();
+  if (drm_fd_ >= 0) {
+    if (acquire_syncobj_ != 0)
+      drmSyncobjDestroy(drm_fd_, acquire_syncobj_);
+    if (release_syncobj_ != 0)
+      drmSyncobjDestroy(drm_fd_, release_syncobj_);
+    ::close(drm_fd_);
+    drm_fd_ = -1;
+  }
+  acquire_syncobj_ = 0;
+  release_syncobj_ = 0;
+}
+
+uint64_t App::SignalAcquire(Slot& s) noexcept {
+  const uint64_t acq = ++acquire_point_;
+  s.release_point = ++release_point_;
+  const vk::PipelineStageFlags wait_stage =
+      vk::PipelineStageFlagBits::eAllCommands;
+  uint64_t wait_val = 0;  // ignored for the binary flush semaphore
+  vk::TimelineSemaphoreSubmitInfo tl{};
+  tl.waitSemaphoreValueCount = 1;
+  tl.pWaitSemaphoreValues = &wait_val;
+  tl.signalSemaphoreValueCount = 1;
+  tl.pSignalSemaphoreValues = &acq;
+  vk::SubmitInfo si{};
+  si.setWaitSemaphores(*s.flush_sem);
+  si.setWaitDstStageMask(wait_stage);
+  si.setSignalSemaphores(*acquire_sem_);
+  si.setPNext(&tl);
+  if (!VkOk(vk_.queue.submit(si), "vkQueueSubmit (acquire)"))
+    return 0;
+  return acq;
+}
+
+// Non-blocking poll of this slot's compositor release point — the explicit-sync
+// analogue of wl_buffer.release.  True when the compositor is done reading (or
+// the slot has never been committed).
+bool App::SlotReleased(const Slot& s) const noexcept {
+  if (s.release_point == 0)
+    return true;
+  uint32_t handle = release_syncobj_;
+  uint64_t point = s.release_point;
+  const int r =
+      drmSyncobjTimelineWait(drm_fd_, &handle, &point, 1, /*timeout_nsec=*/0,
+                             DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, nullptr);
+  return r == 0;
+}
+#endif  // HAVE_DRM_SYNCOBJ
+
 bool App::CreateRenderResources() {
   DestroyRenderResources();
 
@@ -941,6 +1239,9 @@ bool App::CreateRenderResources() {
   use_modifier_ = modifier_ext_ &&
                   std::getenv("SKIA_VULKAN_DMABUF_LINEAR") == nullptr &&
                   ChooseModifier();
+  // Explicit sync applies only to the direct path; the copy fallback stays
+  // CPU-fence synchronized.
+  use_explicit_sync_ = use_explicit_sync_ && use_modifier_;
 
   // Direct path renders into each slot's own persistent surface; the fallback
   // renders into one shared optimal surface and copies it into a linear slot.
@@ -962,17 +1263,18 @@ bool App::CreateRenderResources() {
   }
 
   back_ = 0;
+  const char* sync = use_explicit_sync_ ? "explicit sync" : "CPU fence";
   if (use_modifier_)
     std::printf(
         "skia-vulkan-dmabuf: %dx%d, %d slots, stride=%u, Ganesh Vulkan → "
-        "modifier-tiled dma-buf direct (modifier 0x%016llx)\n",
+        "modifier-tiled dma-buf direct (modifier 0x%016llx, %s)\n",
         width_, height_, kNumSlots, slots_.front().stride,
-        static_cast<unsigned long long>(chosen_modifier_));
+        static_cast<unsigned long long>(chosen_modifier_), sync);
   else
     std::printf(
         "skia-vulkan-dmabuf: %dx%d, %d slots, stride=%u, Ganesh Vulkan → "
-        "linear dma-buf present (copy fallback)\n",
-        width_, height_, kNumSlots, slots_.front().stride);
+        "linear dma-buf present (copy fallback, %s)\n",
+        width_, height_, kNumSlots, slots_.front().stride, sync);
   return true;
 }
 
@@ -1055,8 +1357,15 @@ void App::RenderFrame() noexcept {
   }
 
   Slot& s = slots_.at(static_cast<std::size_t>(back_));
+  // Compositor still reading this slot? Drop the frame.  Explicit sync polls
+  // the release point; otherwise the wl_buffer.release flag.
+#if defined(HAVE_DRM_SYNCOBJ)
+  if (use_explicit_sync_ ? !SlotReleased(s) : !s.buffer.Get()->released_)
+    return;
+#else
   if (!s.buffer.Get()->released_)
-    return;  // compositor still holds this slot; drop the frame
+    return;
+#endif
 
   scene_.frame = pacer_.frame();
   fps_.Tick(NowMs());
@@ -1072,15 +1381,40 @@ void App::RenderFrame() noexcept {
   if (!screenshot_.empty() && !screenshot_saved_)
     screenshot_saved_ = SaveScreenshot(target);
 
+  uint64_t acquire_pt = 0;  // explicit-sync acquire point for this commit
+  (void)acquire_pt;
   if (use_modifier_) {
-    // Leave the slot image in a compositor-readable layout, then wait for the
-    // GPU so the dma-buf holds a complete frame before commit (implicit sync;
-    // the CPU wait is what explicit sync would later remove).
+    // Leave the slot image in a compositor-readable layout.
     skgpu::MutableTextureState to_present =
         skgpu::MutableTextureStates::MakeVulkan(VK_IMAGE_LAYOUT_GENERAL,
                                                 vk_.queue_family);
+#if defined(HAVE_DRM_SYNCOBJ)
+    if (use_explicit_sync_) {
+      // Skia signals a binary semaphore on flush (no CPU wait); a queue submit
+      // waits it and signals the acquire timeline point the compositor waits
+      // on.
+      GrBackendSemaphore backend_sem =
+          GrBackendSemaphores::MakeVk(*s.flush_sem);
+      GrFlushInfo fi;
+      fi.fNumSemaphores = 1;
+      fi.fSignalSemaphores = &backend_sem;
+      gr_context_->flush(target, fi, &to_present);
+      gr_context_->submit(GrSyncCpu::kNo);
+      acquire_pt = SignalAcquire(s);
+      if (acquire_pt == 0) {
+        running_ = false;
+        return;
+      }
+    } else {
+      // No explicit sync: wait for the GPU so the dma-buf holds a complete
+      // frame before commit (implicit dma-buf sync).
+      gr_context_->flush(target, GrFlushInfo{}, &to_present);
+      gr_context_->submit(GrSyncCpu::kYes);
+    }
+#else
     gr_context_->flush(target, GrFlushInfo{}, &to_present);
     gr_context_->submit(GrSyncCpu::kYes);
+#endif
   } else {
     // Finish rendering and hand the Skia image over as a transfer source.
     skgpu::MutableTextureState transfer_src =
@@ -1098,6 +1432,20 @@ void App::RenderFrame() noexcept {
   s.buffer.Get()->released_ = false;
   surface_.Get()->Attach(s.buffer.Get()->GetProxy(), 0, 0);
   surface_.Get()->Damage(0, 0, width_, height_);
+#if defined(HAVE_DRM_SYNCOBJ)
+  if (use_explicit_sync_) {
+    // Points are per-commit and must be set between attach and commit.
+    const auto hi = [](uint64_t v) { return static_cast<uint32_t>(v >> 32u); };
+    const auto lo = [](uint64_t v) {
+      return static_cast<uint32_t>(v & 0xffffffffu);
+    };
+    syncobj_surface_.Get()->SetAcquirePoint(acquire_tl_.Get()->GetProxy(),
+                                            hi(acquire_pt), lo(acquire_pt));
+    syncobj_surface_.Get()->SetReleasePoint(release_tl_.Get()->GetProxy(),
+                                            hi(s.release_point),
+                                            lo(s.release_point));
+  }
+#endif
   surface_.Get()->Commit();
 
   back_ = (back_ + 1) % kNumSlots;
