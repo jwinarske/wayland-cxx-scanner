@@ -37,14 +37,18 @@ polls before reusing a slot. So the CPU never blocks on the render. Set
 `SKIA_VULKAN_DMABUF_NO_EXPLICIT_SYNC` to fall back to the CPU-fence + implicit
 `wl_buffer.release` path. The copy fallback stays CPU-fence synchronized.
 
-**Damage.** The scene is rendered in full each frame, but the compositor is told
-only the region that actually changed (`wl_surface.damage` from the
-`demo::ViewTree` dirty rects — the animated spinner every frame, the button and
-HUD on change), instead of the whole surface. Because every slot holds a full
-render, its non-damaged area matches the on-screen content, so damage-as-hint is
-correct with the rotating slots. The first frame and each resize damage
-everything. Clipping the *render* to the damage as well (buffer-age partial
-repaint over the persistent slots) is a follow-up.
+**Damage + partial repaint.** The compositor is told only the region that
+actually changed (`wl_surface.damage` from the `demo::ViewTree` dirty rects — the
+animated spinner every frame, the button and HUD on change). On the direct path
+the *render* is clipped to that region too: because a slot was last drawn
+`kNumSlots` frames ago, re-rendering it needs only the damage accumulated since —
+its own per-slot accumulator plus this frame's — and Ganesh preserves the rest of
+the persistent slot (load, not clear). So only ~the spinner's bounding box is
+re-rasterized each frame instead of the whole 480×320. The first use of each slot
+and every resize repaint in full; `SKIA_VULKAN_DMABUF_NO_PARTIAL` forces full
+repaint. The compositor damage stays the *actually changed* rects, which is
+smaller than the buffer-age redraw region and correct because those are the only
+pixels that differ from the previous frame. The copy fallback renders in full.
 
 All Vulkan is written with
 [Vulkan-Hpp](https://github.com/KhronosGroup/Vulkan-Hpp) (`vk::`), dropping to

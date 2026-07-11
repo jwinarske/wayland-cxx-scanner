@@ -272,8 +272,11 @@ class App {
   void DestroyRenderResources();
   bool CopyToSlot(
       int slot) noexcept;  // Skia image → slot's linear dma-buf image
-  // Damage the surface with the scene's changed rects (or the whole surface on
-  // the first frame / after a resize).  Call between attach and commit.
+  // Collect this frame's changed rects into damage_ (view + HUD).  Called
+  // before render so the region is available for both the clip and the damage.
+  void CollectDamage() noexcept;
+  // Issue damage_ (or the whole surface on the first frame / resize) between
+  // attach and commit.
   void SubmitDamage() noexcept;
   bool MainLoop();
   bool RunSelfPaced();
@@ -402,13 +405,19 @@ class App {
   demo::FpsMeter fps_;
   demo::ViewTree view_tree_;
 
-  // Honest damage: the compositor is told only the changed region.  The scene
-  // is still rendered in full each frame, so any slot's non-damaged area
-  // matches the on-screen content (damage-as-hint, correct with the rotating
-  // slots).
-  std::vector<SkIRect> damage_;  // per-frame surface-space damage rects
+  // Honest damage: the compositor is told only the changed region (all paths).
+  std::vector<SkIRect> damage_;  // this frame's surface-space damage rects
   int hud_damage_frames_ = 0;    // repaint the HUD region across all slots
   bool full_damage_ = true;      // damage the whole surface on the next commit
+
+  // Buffer-age partial repaint (direct path only): a slot was last rendered
+  // kNumSlots frames ago, so re-rendering it needs only the damage accumulated
+  // since — slot_accum_[i] is that region (bbox).  The rest is preserved (the
+  // spike confirmed Ganesh loads, not clears, a wrapped modifier surface).
+  bool use_partial_ = false;  // clip the render to the damage
+  std::array<SkIRect, kNumSlots>
+      slot_accum_{};                          // damage since slot's last draw
+  std::array<bool, kNumSlots> slot_valid_{};  // slot rendered at least once
 };
 
 void WlCallbackHandler::OnDone(std::uint32_t time_ms) {
@@ -1253,6 +1262,12 @@ bool App::CreateRenderResources() {
   // Explicit sync applies only to the direct path; the copy fallback stays
   // CPU-fence synchronized.
   use_explicit_sync_ = use_explicit_sync_ && use_modifier_;
+  // Buffer-age partial repaint needs the persistent per-slot surfaces of the
+  // direct path.  SKIA_VULKAN_DMABUF_NO_PARTIAL forces full repaint for A/B.
+  use_partial_ =
+      use_modifier_ && std::getenv("SKIA_VULKAN_DMABUF_NO_PARTIAL") == nullptr;
+  slot_valid_.fill(false);  // fresh slots hold no content yet
+  slot_accum_.fill(SkIRect::MakeEmpty());
 
   // Direct path renders into each slot's own persistent surface; the fallback
   // renders into one shared optimal surface and copies it into a linear slot.
@@ -1275,12 +1290,13 @@ bool App::CreateRenderResources() {
 
   back_ = 0;
   const char* sync = use_explicit_sync_ ? "explicit sync" : "CPU fence";
+  const char* repaint = use_partial_ ? "partial repaint" : "full repaint";
   if (use_modifier_)
     std::printf(
         "skia-vulkan-dmabuf: %dx%d, %d slots, stride=%u, Ganesh Vulkan → "
-        "modifier-tiled dma-buf direct (modifier 0x%016llx, %s)\n",
+        "modifier-tiled dma-buf direct (modifier 0x%016llx, %s, %s)\n",
         width_, height_, kNumSlots, slots_.front().stride,
-        static_cast<unsigned long long>(chosen_modifier_), sync);
+        static_cast<unsigned long long>(chosen_modifier_), sync, repaint);
   else
     std::printf(
         "skia-vulkan-dmabuf: %dx%d, %d slots, stride=%u, Ganesh Vulkan → "
@@ -1358,16 +1374,7 @@ bool App::CopyToSlot(int slot) noexcept {
   return true;
 }
 
-// Damage the surface with the scene's changed rects, or the whole surface on
-// the first frame / after a resize (when every slot is freshly allocated).  The
-// scene coordinate space equals the surface space here (no fractional scale).
-void App::SubmitDamage() noexcept {
-  auto* surface = surface_.Get();
-  if (full_damage_) {
-    surface->Damage(0, 0, width_, height_);
-    full_damage_ = false;
-    return;
-  }
+void App::CollectDamage() noexcept {
   damage_.clear();
   view_tree_.CollectDamage(damage_);
   // The HUD updates every frame while visible; keep its region damaged for a
@@ -1377,6 +1384,20 @@ void App::SubmitDamage() noexcept {
   } else if (hud_damage_frames_ > 0) {
     damage_.push_back(hud_.Bounds());
     --hud_damage_frames_;
+  }
+}
+
+// Damage the surface with the frame's changed rects, or the whole surface on
+// the first frame / after a resize.  The scene coordinate space equals the
+// surface space here (no fractional scale).  On the direct path the render was
+// clipped to a larger (buffer-age) region, but only these rects actually
+// changed since the previous frame, so this is the correct compositor damage.
+void App::SubmitDamage() noexcept {
+  auto* surface = surface_.Get();
+  if (full_damage_) {
+    surface->Damage(0, 0, width_, height_);
+    full_damage_ = false;
+    return;
   }
   for (const SkIRect& r : damage_)
     surface->Damage(r.x(), r.y(), r.width(), r.height());
@@ -1407,13 +1428,42 @@ void App::RenderFrame() noexcept {
   fps_.Tick(NowMs());
   view_tree_.Layout(width_, height_);
   view_tree_.MarkDirty(demo::View::kSpinner);  // the arc animates every frame
+  CollectDamage();                             // this frame's changed rects
 
   // Direct path renders into the slot's own surface; fallback into the shared
   // one that CopyToSlot then blits into the linear slot image.
   SkSurface* target = use_modifier_ ? s.surface.get() : skia_surface_.get();
   SkCanvas* canvas = target->getCanvas();
+
+  // Buffer-age partial repaint (direct path): re-render only the region that
+  // changed since this slot was last drawn — its own accumulated damage plus
+  // this frame's — trusting Ganesh to preserve the rest of the persistent slot.
+  const bool clip = use_partial_;
+  const auto bi = static_cast<std::size_t>(back_);
+  if (clip) {
+    SkIRect redraw;
+    if (!slot_valid_.at(bi)) {
+      redraw = SkIRect::MakeWH(width_, height_);  // first use: full
+    } else {
+      redraw = slot_accum_.at(bi);
+      for (const SkIRect& r : damage_)
+        redraw.join(r);
+    }
+    canvas->save();
+    canvas->clipIRect(redraw);
+  }
   demo::DemoScene::Render(canvas, scene_, view_tree_);
   hud_.Render(canvas, pacer_, fps_.fps());
+  if (clip) {
+    canvas->restore();
+    // This slot is now current; every other slot accrues this frame's damage.
+    for (std::size_t j = 0; j < static_cast<std::size_t>(kNumSlots); ++j)
+      if (j != bi)
+        for (const SkIRect& r : damage_)
+          slot_accum_.at(j).join(r);
+    slot_accum_.at(bi).setEmpty();
+    slot_valid_.at(bi) = true;
+  }
 
   if (!screenshot_.empty() && !screenshot_saved_)
     screenshot_saved_ = SaveScreenshot(target);
