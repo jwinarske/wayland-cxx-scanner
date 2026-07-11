@@ -2,7 +2,7 @@
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
 // linux-dmabuf — header-only wl_interface tables and wl_iface() inline
-// implementations for the linux-dmabuf-unstable-v1 protocol (version 3).
+// implementations for the linux-dmabuf-unstable-v1 protocol (version 5).
 //
 // ── Include order
 // ───────────────────────────────────────────────────────────── This header
@@ -14,18 +14,37 @@
 // ── Provided utilities
 // ────────────────────────────────────────────────────────
 //
-// Interface tables (namespace wl::dmabuf, version 3):
-//   Inline wl_interface objects for zwp_linux_dmabuf_v1 (v3) and
-//   zwp_linux_buffer_params_v1 (v3) plus the supporting wl_message arrays.
-//   These replace the ~60-line boilerplate block that every linux-dmabuf
-//   example previously reproduced verbatim.
+// Interface tables (namespace wl::dmabuf, version 5):
+//   Inline wl_interface objects for zwp_linux_dmabuf_v1 (v5),
+//   zwp_linux_buffer_params_v1 (v5) and zwp_linux_dmabuf_feedback_v1 (v5)
+//   plus the supporting wl_message arrays.  These replace the boilerplate
+//   block that every linux-dmabuf example previously reproduced verbatim.
 //
 // wl_iface() implementations (namespace linux_dmabuf_unstable_v1::client):
 //   Inline out-of-line definitions of the pure-virtual wl_iface() methods
-//   declared in zwp_linux_dmabuf_v1_traits and
-//   zwp_linux_buffer_params_v1_traits (linux_dmabuf_client.hpp).
+//   declared in zwp_linux_dmabuf_v1_traits, zwp_linux_buffer_params_v1_traits
+//   and zwp_linux_dmabuf_feedback_v1_traits (linux_dmabuf_client.hpp).
 //   Including this header replaces the manual definitions that every example
 //   would otherwise duplicate in its .cpp file.
+//
+// ── Versions and binding
+// ──────────────────────────────────────────────────────
+//   The tables describe version 5, but the bind version is chosen by the
+//   caller, not by the table: binding at any version 1–5 is fully supported
+//   and unchanged for existing consumers.  The v4 feedback machinery
+//   (get_default_feedback / get_surface_feedback →
+//   zwp_linux_dmabuf_feedback_v1) is now covered; the v3 format/modifier events
+//   remain and are deprecated at v4+ (compositors must not send them once
+//   feedback is in use).
+//
+// ── Namespace
+// ──────────────────────────────────────────────────────────────────
+//   Generated headers derive the namespace from the XML: the unstable
+//   linux-dmabuf-unstable-v1.xml yields linux_dmabuf_unstable_v1::client (used
+//   by every in-tree consumer today), while the stable linux-dmabuf-v1.xml
+//   would yield linux_dmabuf_v1::client.  The wl_iface() impls below target the
+//   unstable namespace to match the generated headers; stable-XML support is a
+//   documented follow-up (see docs/dmabuf.md R6).
 #pragma once
 
 extern "C" {
@@ -35,7 +54,7 @@ extern "C" {
 #include <iterator>  // std::data
 
 // ══════════════════════════════════════════════════════════════════════════════
-// linux-dmabuf wl_interface definitions (version 3)
+// linux-dmabuf wl_interface definitions (version 5)
 //
 // There are no pre-built system symbols for linux-dmabuf interfaces (unlike
 // core Wayland).  We reproduce the exact same tables that the C
@@ -43,14 +62,19 @@ extern "C" {
 // libwayland can type-check and dispatch correctly.
 //
 // Covered interfaces and versions:
-//   zwp_linux_dmabuf_v1 — requests: destroy(v1), create_params(v1)
-//                               — events:   format(v1), modifier(v3)
+//   zwp_linux_dmabuf_v1 — requests: destroy(v1), create_params(v1),
+//                                   get_default_feedback(v4),
+//                                   get_surface_feedback(v4)
+//                       — events:   format(v1), modifier(v3, deprecated at v4)
 //   zwp_linux_buffer_params_v1 — requests: destroy(v1), add(v1),
 //                                           create(v1), create_immed(v2)
 //                               — events:   created(v1), failed(v1)
-//
-// The v4+ interfaces (zwp_linux_dmabuf_feedback_v1 and related requests)
-// are deliberately excluded; bind at version 3 to stay within this subset.
+//   zwp_linux_dmabuf_feedback_v1 — requests: destroy(v1)
+//                                — events:   done, format_table, main_device,
+//                                            tranche_done,
+//                                            tranche_target_device,
+//                                            tranche_formats, tranche_flags
+//                                            (v1)
 //
 // All variables are `inline` so each definition is a single instance across
 // all translation units that include this header (ODR-safe, C++17 §9.2.6).
@@ -60,14 +84,20 @@ namespace wl::dmabuf {
 
 // ── Forward declarations
 // ────────────────────────────────────────────────────── Needed so the types[]
-// array can reference both interface objects before either definition appears.
+// array can reference the interface objects before their definitions appear.
 
 extern const wl_interface dmabuf_iface;
 extern const wl_interface params_iface;
+extern const wl_interface feedback_iface;
 
 // ── Shared pointer array
 // ────────────────────────────────────────────────────── Mirrors
-// linux_dmabuf_unstable_v1_types[] from the C wayland-scanner output.
+// linux_dmabuf_unstable_v1_types[] from the C wayland-scanner output: one
+// const wl_interface* per message argument, with each wl_message pointing at
+// the run for its own arguments.  The leading null block (6 wide, the length of
+// the longest all-scalar message, add "huuuuu") is shared by every message
+// whose arguments are all scalar/fd — libwayland only dereferences these slots
+// for new_id ('n') and object ('o') arguments.
 //
 // • avoid-non-const-global-variables: element type must be a non-const pointer
 //   (const wl_interface*) because wl_message::types is const wl_interface**;
@@ -80,13 +110,22 @@ extern const wl_interface params_iface;
 //             cppcoreguidelines-avoid-non-const-global-variables,
 //             cppcoreguidelines-interfaces-global-init)
 inline const wl_interface* types[] = {
-    nullptr,               // [0]  scalar / no-type slots
-    nullptr,               // [1]
-    nullptr,               // [2]
-    nullptr,               // [3]
-    &params_iface,         // [4]  create_params → new_id
-    &wl_buffer_interface,  // [5]  create_immed → new_id wl_buffer;
-                           //      created event → new_id wl_buffer
+    nullptr,                // [0]  scalar / fd / no-type slots (6-wide: the
+    nullptr,                // [1]  longest all-scalar message is add "huuuuu")
+    nullptr,                // [2]
+    nullptr,                // [3]
+    nullptr,                // [4]
+    nullptr,                // [5]
+    &params_iface,          // [6]  create_params        → new_id params
+    &feedback_iface,        // [7]  get_default_feedback  → new_id feedback
+    &feedback_iface,        // [8]  get_surface_feedback  → new_id feedback
+    &wl_surface_interface,  // [9]  get_surface_feedback  → object wl_surface
+    &wl_buffer_interface,   // [10] create_immed          → new_id wl_buffer
+    nullptr,                // [11] create_immed          → int  (i)
+    nullptr,                // [12] create_immed          → int  (i)
+    nullptr,                // [13] create_immed          → uint (u)
+    nullptr,                // [14] create_immed          → uint (u)
+    &wl_buffer_interface,   // [15] created (event)       → new_id wl_buffer
 };
 
 // kScalars points at the null-filled head of types[]; used by messages
@@ -98,35 +137,55 @@ inline constexpr const wl_interface** kScalars = &types[0];
 
 // clang-format off
 inline constexpr wl_message dmabuf_requests[] = {
-    {"destroy",       "",  nullptr   },  // opcode 0, v1, destructor
-    {"create_params", "n", &types[4] },  // opcode 1, v1
+    {"destroy",              "",    nullptr    },  // opcode 0, v1, destructor
+    {"create_params",        "n",   &types[6]  },  // opcode 1, v1
+    {"get_default_feedback", "4n",  &types[7]  },  // opcode 2, v4
+    {"get_surface_feedback", "4no", &types[8]  },  // opcode 3, v4
 };
 inline constexpr wl_message dmabuf_events[] = {
     {"format",   "u",    kScalars},  // opcode 0, v1
-    {"modifier", "3uuu", kScalars},  // opcode 1, v3
+    {"modifier", "3uuu", kScalars},  // opcode 1, v3 (deprecated at v4)
 };
 
 // ── zwp_linux_buffer_params_v1 message tables ─────────────────────────────────
 
 inline constexpr wl_message params_requests[] = {
-    {"destroy",      "",       nullptr   },  // opcode 0, v1, destructor
-    {"add",          "huuuuu", kScalars  },  // opcode 1, v1 (fd+5×uint)
-    {"create",       "iiuu",   kScalars  },  // opcode 2, v1
-    {"create_immed", "2niiuu", &types[5] },  // opcode 3, v2
+    {"destroy",      "",       nullptr    },  // opcode 0, v1, destructor
+    {"add",          "huuuuu", kScalars   },  // opcode 1, v1 (fd+5×uint)
+    {"create",       "iiuu",   kScalars   },  // opcode 2, v1
+    {"create_immed", "2niiuu", &types[10] },  // opcode 3, v2
 };
 inline constexpr wl_message params_events[] = {
-    {"created", "n", &types[5]},  // opcode 0, v1
-    {"failed",  "",  nullptr  },  // opcode 1, v1
+    {"created", "n", &types[15]},  // opcode 0, v1
+    {"failed",  "",  nullptr   },  // opcode 1, v1
+};
+
+// ── zwp_linux_dmabuf_feedback_v1 message tables (v4) ──────────────────────────
+
+inline constexpr wl_message feedback_requests[] = {
+    {"destroy", "", nullptr},  // opcode 0, v1, destructor
+};
+inline constexpr wl_message feedback_events[] = {
+    {"done",                  "",   nullptr },  // opcode 0
+    {"format_table",          "hu", kScalars},  // opcode 1 (fd + size)
+    {"main_device",           "a",  kScalars},  // opcode 2 (dev_t array)
+    {"tranche_done",          "",   nullptr },  // opcode 3
+    {"tranche_target_device", "a",  kScalars},  // opcode 4 (dev_t array)
+    {"tranche_formats",       "a",  kScalars},  // opcode 5 (u16 index array)
+    {"tranche_flags",         "u",  kScalars},  // opcode 6 (bitfield)
 };
 
 // ── Interface object definitions ──────────────────────────────────────────────
 
 inline const wl_interface dmabuf_iface = {
-    "zwp_linux_dmabuf_v1", 3,
-    2, std::data(dmabuf_requests), 2, std::data(dmabuf_events)};
+    "zwp_linux_dmabuf_v1", 5,
+    4, std::data(dmabuf_requests), 2, std::data(dmabuf_events)};
 inline const wl_interface params_iface = {
-    "zwp_linux_buffer_params_v1", 3,
+    "zwp_linux_buffer_params_v1", 5,
     4, std::data(params_requests), 2, std::data(params_events)};
+inline const wl_interface feedback_iface = {
+    "zwp_linux_dmabuf_feedback_v1", 5,
+    1, std::data(feedback_requests), 7, std::data(feedback_events)};
 // clang-format on
 
 // NOLINTEND(cppcoreguidelines-avoid-c-arrays,
@@ -151,6 +210,10 @@ inline const wl_interface& zwp_linux_dmabuf_v1_traits::wl_iface() noexcept {
 inline const wl_interface&
 zwp_linux_buffer_params_v1_traits::wl_iface() noexcept {
   return wl::dmabuf::params_iface;
+}
+inline const wl_interface&
+zwp_linux_dmabuf_feedback_v1_traits::wl_iface() noexcept {
+  return wl::dmabuf::feedback_iface;
 }
 
 }  // namespace linux_dmabuf_unstable_v1::client
