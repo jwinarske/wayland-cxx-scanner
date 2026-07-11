@@ -46,14 +46,15 @@
 extern "C" {
 #include <drm_fourcc.h>  // DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR
 #include <linux/input-event-codes.h>
+#include <sys/sysmacros.h>  // makedev, major, minor (multi-GPU device match)
+#include <sys/types.h>      // dev_t
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client-protocol.h>
 #if defined(HAVE_DRM_SYNCOBJ)
-#include <fcntl.h>          // open (render node)
-#include <sys/stat.h>       // stat, S_ISCHR
-#include <sys/sysmacros.h>  // major, minor
-#include <xf86drm.h>        // drmSyncobjCreate/HandleToFD/TimelineWait
+#include <fcntl.h>     // open (render node)
+#include <sys/stat.h>  // stat, S_ISCHR
+#include <xf86drm.h>   // drmSyncobjCreate/HandleToFD/TimelineWait
 #endif
 }
 
@@ -163,6 +164,35 @@ constexpr SkColorType kSkColorType = kBGRA_8888_SkColorType;
   std::fprintf(stderr, "skia-vulkan-dmabuf: %s failed (VkResult=%d)\n", what,
                static_cast<int>(result));
   return false;
+}
+
+// True if @p pd's DRM render or primary node dev_t equals @p want.  Answers
+// only when the device advertises VK_EXT_physical_device_drm (queried before
+// device creation, which is allowed for physical-device properties).
+[[nodiscard]] bool DeviceMatchesDrm(vk::PhysicalDevice pd, dev_t want) {
+  if (want == 0)
+    return false;
+  auto exts = pd.enumerateDeviceExtensionProperties();
+  if (exts.result != vk::Result::eSuccess)
+    return false;
+  const bool has =
+      std::any_of(exts.value.begin(), exts.value.end(),
+                  [](const vk::ExtensionProperties& e) {
+                    return std::string_view{e.extensionName.data()} ==
+                           VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME;
+                  });
+  if (!has)
+    return false;
+  vk::PhysicalDeviceDrmPropertiesEXT drm{};
+  vk::PhysicalDeviceProperties2 p2{};
+  p2.pNext = &drm;
+  pd.getProperties2(&p2);
+  return (drm.hasRender != 0u &&
+          makedev(static_cast<unsigned>(drm.renderMajor),
+                  static_cast<unsigned>(drm.renderMinor)) == want) ||
+         (drm.hasPrimary != 0u &&
+          makedev(static_cast<unsigned>(drm.primaryMajor),
+                  static_cast<unsigned>(drm.primaryMinor)) == want);
 }
 
 class App;
@@ -653,16 +683,31 @@ bool App::InitVulkan() {
     return false;
   }
   vk_.phys_dev = phys_rv.value.front();
+  // Prefer the GPU the compositor composites on (dmabuf feedback main_device):
+  // on a multi-GPU host this allocates on the right device and avoids a silent
+  // compositor-side cross-device copy.  Falls back to a discrete/integrated
+  // GPU.
+  bool matched_device = false;
   for (const vk::PhysicalDevice& pd : phys_rv.value) {
-    const vk::PhysicalDeviceType t = pd.getProperties().deviceType;
-    if (t == vk::PhysicalDeviceType::eDiscreteGpu ||
-        t == vk::PhysicalDeviceType::eIntegratedGpu) {
+    if (DeviceMatchesDrm(pd, fb_snapshot_.main_device)) {
       vk_.phys_dev = pd;
+      matched_device = true;
       break;
     }
   }
-  std::printf("skia-vulkan-dmabuf: GPU: %s\n",
-              vk_.phys_dev.getProperties().deviceName.data());
+  if (!matched_device) {
+    for (const vk::PhysicalDevice& pd : phys_rv.value) {
+      const vk::PhysicalDeviceType t = pd.getProperties().deviceType;
+      if (t == vk::PhysicalDeviceType::eDiscreteGpu ||
+          t == vk::PhysicalDeviceType::eIntegratedGpu) {
+        vk_.phys_dev = pd;
+        break;
+      }
+    }
+  }
+  std::printf("skia-vulkan-dmabuf: GPU: %s%s\n",
+              vk_.phys_dev.getProperties().deviceName.data(),
+              matched_device ? " (matched compositor main_device)" : "");
 
   // ── Graphics queue family ──────────────────────────────────────────────────
   const auto qfps = vk_.phys_dev.getQueueFamilyProperties();
