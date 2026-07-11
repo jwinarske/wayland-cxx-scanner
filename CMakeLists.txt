@@ -2,12 +2,14 @@
 # Copyright (c) 2026 wayland-cxx-scanner contributors
 #
 # CMake build for wayland-cxx-scanner. Maintained in parallel with the Meson
-# build (the source of truth) — see docs/cmake_plan.md.
+# build, which remains the source of truth for the header list and IME choices.
 #
-# Implemented so far: P0 (conventions) + P1 (core build + scanner exe).
-# Pending: P2 (header-only framework + IME option), P3 (wayland_cxx_generate()
-# + cross-compile host-tool resolution), P4 (install/export), P5/P6 (tests/
-# examples). Those slot in where marked below.
+# Covers the full surface: the scanner executable and its static lib, the
+# header-only wayland-cxx INTERFACE framework (carrying the IME-backend define),
+# the public wayland_cxx_generate() code-gen function
+# (cmake/WaylandCxxScanner.cmake), native/cross host-tool resolution, install +
+# package export, and the tests and examples.  Consumable via add_subdirectory
+# (submodule) or find_package.
 
 # Floor matches the consuming project's declared minimum so this submodule never
 # raises the consumer's required CMake version. Everything used here (include_guard,
