@@ -37,10 +37,19 @@ polls before reusing a slot. So the CPU never blocks on the render. Set
 `SKIA_VULKAN_DMABUF_NO_EXPLICIT_SYNC` to fall back to the CPU-fence + implicit
 `wl_buffer.release` path. The copy fallback stays CPU-fence synchronized.
 
+**Damage.** The scene is rendered in full each frame, but the compositor is told
+only the region that actually changed (`wl_surface.damage` from the
+`demo::ViewTree` dirty rects — the animated spinner every frame, the button and
+HUD on change), instead of the whole surface. Because every slot holds a full
+render, its non-damaged area matches the on-screen content, so damage-as-hint is
+correct with the rotating slots. The first frame and each resize damage
+everything. Clipping the *render* to the damage as well (buffer-age partial
+repaint over the persistent slots) is a follow-up.
+
 All Vulkan is written with
 [Vulkan-Hpp](https://github.com/KhronosGroup/Vulkan-Hpp) (`vk::`), dropping to
 raw C handles only at Skia's `VulkanBackendContext` / `GrVkImageInfo` boundary
-and the `drm_syncobj` bridge. Buffer-age partial repaint is a follow-up.
+and the `drm_syncobj` bridge.
 
 The startup line reports which path engaged, e.g. `… → modifier-tiled dma-buf
 direct (modifier 0x0200000000…, explicit sync)` or `… → linear dma-buf present
