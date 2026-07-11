@@ -94,7 +94,11 @@ direct (modifier 0x0200000000…, explicit sync)` or `… → linear dma-buf pre
   enables explicit sync; without them the direct path uses a CPU fence.
 - The producer and the compositor must share a compatible GPU: a
   software-rendered (lavapipe) buffer cannot be imported by a hardware
-  compositor, and vice versa.
+  compositor, and vice versa. On a multi-GPU host the example picks the
+  `VkPhysicalDevice` whose DRM node matches the compositor's feedback
+  `main_device` (via `VK_EXT_physical_device_drm`), so it allocates on the GPU
+  the compositor composites on; it falls back to a discrete/integrated GPU when
+  nothing matches.
 
 Build requirements: `vulkan`, `libdrm`, `wayland-protocols`, `wayland-scanner`,
 `xkbcommon`, and a Skia build with Vulkan enabled (see
