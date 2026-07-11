@@ -13,7 +13,9 @@
 //   zxdg_output_manager_v1  (requires wayland-protocols)
 //                        → logical position and size per output
 //   zwp_linux_dmabuf_v1  (requires wayland-protocols)
-//                        → DRM pixel-format and modifier table
+//                        → DRM format/modifier feedback: main device and
+//                          per-tranche format/modifier pairs (v4+), or the
+//                          legacy format/modifier lists (v1-v3)
 //
 // Reference:
 //   https://gitlab.freedesktop.org/wayland/wayland-utils/-/blob/main/wayland-info/wayland-info.c
@@ -44,6 +46,17 @@ extern "C" {
 #include <wl/proxy_impl.hpp>  // wl::construct<>
 #include <wl/registry.hpp>    // wl::CRegistry
 #include <wl/wl_ptr.hpp>      // wl::WlPtr<>
+#if defined(HAVE_LINUX_DMABUF)
+#include <wl/dmabuf_feedback.hpp>  // wl::DmabufFeedback<App>
+#include <wl/linux_dmabuf.hpp>     // wl::dmabuf tables + wl_iface() impls
+
+#include <filesystem>  // directory_iterator — DRM node lookup
+
+extern "C" {
+#include <sys/stat.h>       // stat, S_ISCHR — DRM node lookup
+#include <sys/sysmacros.h>  // major, minor
+}
+#endif
 
 // ── Standard library
 // ──────────────────────────────────────────────────────────
@@ -160,62 +173,9 @@ const wl_interface& zxdg_output_v1_traits::wl_iface() noexcept {
 
 #endif  // HAVE_XDG_OUTPUT
 
-// ══════════════════════════════════════════════════════════════════════════════
-// wl_interface definitions — linux-dmabuf-unstable-v1
-//
-// We expose version 3 of zwp_linux_dmabuf_v1 (format + modifier events).
-// create_params references zwp_linux_buffer_params_v1; a minimal stub is
-// provided because only its name is used by wl_registry_bind / wl_proxy.
-// ══════════════════════════════════════════════════════════════════════════════
-
-#if defined(HAVE_LINUX_DMABUF)
-
-extern const wl_interface zwp_linux_dmabuf_v1_iface_def;
-extern const wl_interface zwp_linux_buffer_params_v1_iface_def;
-
-// NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,
-//             cppcoreguidelines-avoid-non-const-global-variables,
-//             cppcoreguidelines-interfaces-global-init)
-static const wl_interface* linux_dmabuf_types[] = {
-    nullptr,                                // [0]  scalar slot
-    &zwp_linux_buffer_params_v1_iface_def,  // [1]  create_params → new_id
-};
-// NOLINTEND(cppcoreguidelines-avoid-c-arrays,
-//           cppcoreguidelines-avoid-non-const-global-variables,
-//           cppcoreguidelines-interfaces-global-init)
-
-// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
-static constexpr const wl_interface** kDmabufScalars = &linux_dmabuf_types[0];
-
-static constexpr wl_message zwp_linux_dmabuf_v1_requests[] = {
-    {"destroy", "", nullptr},                        // opcode 0 (destructor)
-    {"create_params", "n", &linux_dmabuf_types[1]},  // opcode 1
-};
-static constexpr wl_message zwp_linux_dmabuf_v1_events[] = {
-    {"format", "u", kDmabufScalars},       // opcode 0 (v1)
-    {"modifier", "3uuu", kDmabufScalars},  // opcode 1 (v3)
-};
-
-// Minimal stub — only the interface name is used for proxy creation.
-// clang-format off
-const wl_interface zwp_linux_buffer_params_v1_iface_def = {
-    "zwp_linux_buffer_params_v1", 5,
-    0, nullptr, 0, nullptr};
-const wl_interface zwp_linux_dmabuf_v1_iface_def = {
-    "zwp_linux_dmabuf_v1", 3,
-    2, std::data(zwp_linux_dmabuf_v1_requests),
-    2, std::data(zwp_linux_dmabuf_v1_events)};
-// clang-format on
-
-namespace linux_dmabuf_unstable_v1::client {
-
-const wl_interface& zwp_linux_dmabuf_v1_traits::wl_iface() noexcept {
-  return zwp_linux_dmabuf_v1_iface_def;
-}
-
-}  // namespace linux_dmabuf_unstable_v1::client
-
-#endif  // HAVE_LINUX_DMABUF
+// The linux-dmabuf wl_interface tables and wl_iface() implementations now come
+// from <wl/linux_dmabuf.hpp> (version 5, including the feedback interface),
+// replacing the file-local version-3 stub that used to live here.
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Data types
@@ -342,26 +302,9 @@ class WlXdgOutputInfo
 
 #if defined(HAVE_LINUX_DMABUF)
 
-class WlLinuxDmabufInfo
-    : public linux_dmabuf_unstable_v1::client::CZwpLinuxDmabufV1<
-          WlLinuxDmabufInfo> {
- public:
-  struct Modifier {
-    uint32_t format;
-    uint64_t modifier;
-  };
-  std::vector<uint32_t> formats;
-  std::vector<Modifier> modifiers;
-
-  void OnFormat(const uint32_t format) override { formats.push_back(format); }
-  void OnModifier(const uint32_t format,
-                  const uint32_t modifier_hi,
-                  const uint32_t modifier_lo) override {
-    const uint64_t mod =
-        (static_cast<uint64_t>(modifier_hi) << 32) | modifier_lo;
-    modifiers.push_back({format, mod});
-  }
-};
+// wl::DmabufFeedback drives the whole dmabuf interaction; the snapshot is read
+// back through Current(), so the App type needs no hooks.
+struct DmabufProbe {};
 
 #endif  // HAVE_LINUX_DMABUF
 
@@ -548,14 +491,84 @@ static void print_output(const WlOutputInfo& out
 }
 
 #if defined(HAVE_LINUX_DMABUF)
-static void print_dmabuf(const WlLinuxDmabufInfo& dmabuf) {
-  std::printf("\tformats (fourcc):\n");
-  for (const uint32_t fmt : dmabuf.formats)
-    std::printf("\t\t0x%08" PRIx32 "\n", fmt);
-  if (!dmabuf.modifiers.empty()) {
-    std::printf("\tformat + modifier pairs:\n");
-    for (const auto& [format, modifier] : dmabuf.modifiers)
-      std::printf("\t\t0x%08" PRIx32 " / 0x%016" PRIx64 "\n", format, modifier);
+// Empty fallback for a snapshot that carries no tranche (referenced by const&).
+static const std::vector<wl::FormatModifier> kNoFormats;
+
+// Decode a DRM fourcc into its four printable characters (e.g. 0x34325241 →
+// "AR24"); non-printable bytes render as '.'.
+static std::string fourcc_ascii(const uint32_t fmt) {
+  std::string s(4, '.');
+  for (int i = 0; i < 4; ++i) {
+    const auto c = static_cast<char>((fmt >> (i * 8)) & 0xffu);
+    if (c >= 0x20 && c < 0x7f)
+      s[static_cast<std::size_t>(i)] = c;
+  }
+  return s;
+}
+
+// Resolve a DRM device number to its /dev/dri node path, or empty if none
+// matches.  Uses stat(2) over /dev/dri so no libdrm dependency is added.
+static std::string drm_device_path(const dev_t dev) {
+  if (dev == 0)
+    return {};
+  std::error_code ec;
+  for (const auto& entry :
+       std::filesystem::directory_iterator("/dev/dri", ec)) {
+    struct stat st{};
+    if (stat(entry.path().c_str(), &st) == 0 && S_ISCHR(st.st_mode) &&
+        st.st_rdev == dev)
+      return entry.path().string();
+  }
+  return {};
+}
+
+// Print a device number as "major:minor (/dev/dri/node)", omitting the node
+// suffix when it cannot be resolved.
+static void print_device(const dev_t dev) {
+  const std::string node = drm_device_path(dev);
+  std::printf("%u:%u", major(dev), minor(dev));
+  if (!node.empty())
+    std::printf(" (%s)", node.c_str());
+}
+
+static void print_dmabuf(const wl::FeedbackSnapshot& snap,
+                         const uint32_t version) {
+  // v1-v3: no feedback object; print the synthesized single tranche in the
+  // legacy two-section layout (format list, then format+modifier pairs).
+  if (version < 4) {
+    const std::vector<wl::FormatModifier>& fmts =
+        snap.tranches.empty() ? kNoFormats : snap.tranches.front().formats;
+    std::printf("\tformats (fourcc):\n");
+    for (const wl::FormatModifier& fm : fmts)
+      if (fm.modifier == wl::DmabufFeedback<DmabufProbe>::kModifierInvalid)
+        std::printf("\t\t0x%08" PRIx32 " (%s)\n", fm.format,
+                    fourcc_ascii(fm.format).c_str());
+    bool any_mod = false;
+    for (const wl::FormatModifier& fm : fmts)
+      any_mod |=
+          fm.modifier != wl::DmabufFeedback<DmabufProbe>::kModifierInvalid;
+    if (any_mod) {
+      std::printf("\tformat + modifier pairs:\n");
+      for (const wl::FormatModifier& fm : fmts)
+        if (fm.modifier != wl::DmabufFeedback<DmabufProbe>::kModifierInvalid)
+          std::printf("\t\t0x%08" PRIx32 " (%s) / 0x%016" PRIx64 "\n",
+                      fm.format, fourcc_ascii(fm.format).c_str(), fm.modifier);
+    }
+    return;
+  }
+
+  // v4+: main device plus one block per tranche.
+  std::printf("\tmain_device: ");
+  print_device(snap.main_device);
+  std::printf("\n");
+  for (std::size_t i = 0; i < snap.tranches.size(); ++i) {
+    const wl::FeedbackTranche& t = snap.tranches[i];
+    std::printf("\ttranche %zu: target_device ", i);
+    print_device(t.target_device);
+    std::printf(", flags: %s\n", t.Scanout() ? "scanout" : "-");
+    for (const wl::FormatModifier& fm : t.formats)
+      std::printf("\t\t0x%08" PRIx32 " (%s) / 0x%016" PRIx64 "\n", fm.format,
+                  fourcc_ascii(fm.format).c_str(), fm.modifier);
   }
 }
 #endif
@@ -595,7 +608,8 @@ int main() {
   std::vector<std::unique_ptr<WlXdgOutputInfo>> xdg_outputs;
 #endif
 #if defined(HAVE_LINUX_DMABUF)
-  std::unique_ptr<WlLinuxDmabufInfo> dmabuf;
+  DmabufProbe dmabuf_probe;
+  wl::DmabufFeedback<DmabufProbe> dmabuf;
 #endif
 
   // ── Registry listener ──────────────────────────────────────────────────────
@@ -649,13 +663,9 @@ int main() {
 #if defined(HAVE_LINUX_DMABUF)
     } else if (iface == linux_dmabuf_unstable_v1::client::
                             zwp_linux_dmabuf_v1_traits::interface_name) {
-      using dmabuf_tr =
-          linux_dmabuf_unstable_v1::client::zwp_linux_dmabuf_v1_traits;
-      // Bind at version 3 to receive both format (v1) and modifier (v3) events.
-      if (wl_proxy* raw = reg.Bind<dmabuf_tr>(name, std::min(ver, 3u))) {
-        dmabuf = std::make_unique<WlLinuxDmabufInfo>();
-        dmabuf->_SetProxy(raw);
-      }
+      // The helper binds min(advertised, 5); binding and starting feedback are
+      // deferred until after the roundtrip (see below).
+      dmabuf.Record(name, ver);
 #endif
     }
   });
@@ -663,6 +673,14 @@ int main() {
   // ── First roundtrip: collect globals and wl_output / wl_seat / wl_shm
   //    events (geometry, mode, scale, capabilities, formats).  ────────────────
   wl_display_roundtrip(display);
+
+#if defined(HAVE_LINUX_DMABUF)
+  // Bind zwp_linux_dmabuf_v1 (min of advertised and 5).  At v4+ request default
+  // feedback so its tranches arrive on the second roundtrip; at v1-v3 the
+  // compositor streams format/modifier events after the bind instead.
+  if (dmabuf.Bind(registry, &dmabuf_probe) && dmabuf.BoundVersion() >= 4)
+    (void)dmabuf.StartDefault(display);
+#endif
 
 #if defined(HAVE_XDG_OUTPUT)
   // Create one zxdg_output_v1 per wl_output if the manager was advertised.
@@ -684,8 +702,16 @@ int main() {
 #endif
 
   // ── Second roundtrip: collect xdg_output logical position/size and
-  //    linux_dmabuf format/modifier events. ───────────────────────────────────
+  //    linux_dmabuf feedback (v4+) or format/modifier events (v1-v3).
+  //    ──────────
   wl_display_roundtrip(display);
+
+#if defined(HAVE_LINUX_DMABUF)
+  // At v1-v3 there is no `done`; publish the snapshot synthesized from the
+  // streamed format/modifier events now that the roundtrip has drained them.
+  if (dmabuf.BoundVersion() >= 1 && dmabuf.BoundVersion() < 4)
+    dmabuf.CommitLegacy();
+#endif
 
   // ── Print all globals in registry order ────────────────────────────────────
   for (const auto& [name, interface, version] : globals) {
@@ -718,8 +744,9 @@ int main() {
       }
 
 #if defined(HAVE_LINUX_DMABUF)
-    } else if (interface == "zwp_linux_dmabuf_v1" && dmabuf) {
-      print_dmabuf(*dmabuf);
+    } else if (interface == "zwp_linux_dmabuf_v1" &&
+               dmabuf.BoundVersion() > 0) {
+      print_dmabuf(dmabuf.Current(), dmabuf.BoundVersion());
 #endif
     }
   }
@@ -735,8 +762,8 @@ int main() {
     xdg_mgr->Destroy();
 #endif
 #if defined(HAVE_LINUX_DMABUF)
-  if (dmabuf && !dmabuf->IsNull())
-    dmabuf->Destroy();
+  // Destroy the feedback and dmabuf proxies before the display is disconnected.
+  dmabuf.Release();
 #endif
   for (const auto& seat : seats)
     if (seat && !seat->IsNull())
