@@ -200,6 +200,18 @@ class DmabufFeedback {
     return true;
   }
 
+  // Create a zwp_linux_buffer_params_v1 (create_params) on the bound dmabuf,
+  // for building a dma-buf-backed wl_buffer.  Returns the new params proxy (the
+  // caller owns and drives add/create_immed), or null when the dmabuf is not
+  // bound.  The dmabuf owner is the natural place to mint a params object.
+  [[nodiscard]] wl_proxy* CreateParams() noexcept {
+    if (dmabuf_.IsNull())
+      return nullptr;
+    return wl::construct<
+        linux_dmabuf_unstable_v1::client::zwp_linux_buffer_params_v1_traits,
+        DmabufTraits::Op::CreateParams>(*dmabuf_.Get());
+  }
+
   // Request default feedback.  Requires a bound v4+ dmabuf; returns false
   // otherwise (use the legacy path — CommitLegacy — on older compositors).
   [[nodiscard]] bool StartDefault(wl_display* display) noexcept {
