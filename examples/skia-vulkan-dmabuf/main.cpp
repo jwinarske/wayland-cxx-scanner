@@ -272,6 +272,9 @@ class App {
   void DestroyRenderResources();
   bool CopyToSlot(
       int slot) noexcept;  // Skia image → slot's linear dma-buf image
+  // Damage the surface with the scene's changed rects (or the whole surface on
+  // the first frame / after a resize).  Call between attach and commit.
+  void SubmitDamage() noexcept;
   bool MainLoop();
   bool RunSelfPaced();
   void PrintBenchmark() const noexcept;
@@ -398,6 +401,14 @@ class App {
   demo::PerfHud hud_;
   demo::FpsMeter fps_;
   demo::ViewTree view_tree_;
+
+  // Honest damage: the compositor is told only the changed region.  The scene
+  // is still rendered in full each frame, so any slot's non-damaged area
+  // matches the on-screen content (damage-as-hint, correct with the rotating
+  // slots).
+  std::vector<SkIRect> damage_;  // per-frame surface-space damage rects
+  int hud_damage_frames_ = 0;    // repaint the HUD region across all slots
+  bool full_damage_ = true;      // damage the whole surface on the next commit
 };
 
 void WlCallbackHandler::OnDone(std::uint32_t time_ms) {
@@ -1347,9 +1358,34 @@ bool App::CopyToSlot(int slot) noexcept {
   return true;
 }
 
+// Damage the surface with the scene's changed rects, or the whole surface on
+// the first frame / after a resize (when every slot is freshly allocated).  The
+// scene coordinate space equals the surface space here (no fractional scale).
+void App::SubmitDamage() noexcept {
+  auto* surface = surface_.Get();
+  if (full_damage_) {
+    surface->Damage(0, 0, width_, height_);
+    full_damage_ = false;
+    return;
+  }
+  damage_.clear();
+  view_tree_.CollectDamage(damage_);
+  // The HUD updates every frame while visible; keep its region damaged for a
+  // few frames after a visibility change so every slot is refreshed.
+  if (hud_.visible()) {
+    damage_.push_back(hud_.Bounds());
+  } else if (hud_damage_frames_ > 0) {
+    damage_.push_back(hud_.Bounds());
+    --hud_damage_frames_;
+  }
+  for (const SkIRect& r : damage_)
+    surface->Damage(r.x(), r.y(), r.width(), r.height());
+}
+
 void App::RenderFrame() noexcept {
   if (needs_resize_) {
     needs_resize_ = false;
+    full_damage_ = true;  // fresh slots → damage everything next commit
     if (!CreateRenderResources()) {
       running_ = false;
       return;
@@ -1370,6 +1406,7 @@ void App::RenderFrame() noexcept {
   scene_.frame = pacer_.frame();
   fps_.Tick(NowMs());
   view_tree_.Layout(width_, height_);
+  view_tree_.MarkDirty(demo::View::kSpinner);  // the arc animates every frame
 
   // Direct path renders into the slot's own surface; fallback into the shared
   // one that CopyToSlot then blits into the linear slot image.
@@ -1431,7 +1468,7 @@ void App::RenderFrame() noexcept {
   presentation_.Arm(surface_.Get()->GetProxy(), pacer_.frame());
   s.buffer.Get()->released_ = false;
   surface_.Get()->Attach(s.buffer.Get()->GetProxy(), 0, 0);
-  surface_.Get()->Damage(0, 0, width_, height_);
+  SubmitDamage();
 #if defined(HAVE_DRM_SYNCOBJ)
   if (use_explicit_sync_) {
     // Points are per-commit and must be set between attach and commit.
@@ -1448,6 +1485,7 @@ void App::RenderFrame() noexcept {
 #endif
   surface_.Get()->Commit();
 
+  view_tree_.ClearDirty();
   back_ = (back_ + 1) % kNumSlots;
   pacer_.Advance();
 }
@@ -1569,26 +1607,33 @@ void App::OnToplevelConfigure(int32_t w, int32_t h) {
 void App::OnKey(const wl::KeyEvent& ev) {
   if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED)
     return;
-  if (ev.key == KEY_ESC)
+  if (ev.key == KEY_ESC) {
     running_ = false;
-  else if (ev.key == KEY_SPACE)
+  } else if (ev.key == KEY_SPACE) {
     scene_.button_active = !scene_.button_active;
-  else if (ev.key == KEY_F1)
+    view_tree_.MarkDirty(demo::View::kButton);
+  } else if (ev.key == KEY_F1) {
     hud_.toggle();
+    hud_damage_frames_ = kNumSlots;  // clear/paint the HUD in every slot
+  }
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
   if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED || ev.button != BTN_LEFT)
     return;
   if (view_tree_.HitTest(static_cast<SkScalar>(ev.x),
-                         static_cast<SkScalar>(ev.y)) == demo::View::kButton)
+                         static_cast<SkScalar>(ev.y)) == demo::View::kButton) {
     scene_.button_active = !scene_.button_active;
+    view_tree_.MarkDirty(demo::View::kButton);
+  }
 }
 
 void App::OnTouchDown(const wl::TouchPoint& p) noexcept {
   if (view_tree_.HitTest(static_cast<SkScalar>(p.x),
-                         static_cast<SkScalar>(p.y)) == demo::View::kButton)
+                         static_cast<SkScalar>(p.y)) == demo::View::kButton) {
     scene_.button_active = !scene_.button_active;
+    view_tree_.MarkDirty(demo::View::kButton);
+  }
 }
 
 }  // namespace
