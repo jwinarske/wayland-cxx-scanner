@@ -312,6 +312,41 @@ else
     warning('ext-data-control not found — skipping test_data_control_roundtrip')
 endif
 
+# ── DmabufFeedback live-dispatch test (zwp_linux_dmabuf_v1 feedback) ──────────
+# A hand-rolled compositor replays a captured feedback sequence (format_table
+# over a memfd, main_device, tranches, done) to wl::DmabufFeedback; the client
+# must decode the tranches and answer the modifier queries. Covers
+# re-advertisement, malformed input, and the v1-v3 legacy ladder. Generated from
+# the real linux-dmabuf-unstable-v1.xml with inline interface tables.
+_ldb_xml = _wp_dep.found() ? _wp_dep.get_variable('pkgdatadir') / 'unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml' : ''
+if wayland_client_dep.found() and wayland_server_dep.found() and _wl_scanner_dep.found() and _ldb_xml != '' and _fs.exists(_ldb_xml)
+    ldbf_client_hdr = custom_target(
+        'test-ldbf-client-header',
+        input:   _ldb_xml,
+        output:  'ldbf_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+
+    _test_dmabuf_feedback_exe = executable(
+        'test_dmabuf_feedback_roundtrip',
+        ['integration/test_dmabuf_feedback_roundtrip.cpp', ldbf_client_hdr],
+        include_directories: _inc,
+        dependencies: _deps + [gtest_main_dep],
+    )
+    test('dmabuf_feedback_roundtrip', _test_dmabuf_feedback_exe,
+        args: [
+            '--gtest_output=xml:results/test_dmabuf_feedback_roundtrip.xml',
+            '--gtest_color=yes',
+        ],
+        timeout: 60,
+        suite: 'integration',
+        env: ['SRCDIR=' + meson.project_source_root()],
+    )
+else
+    warning('linux-dmabuf xml not found — skipping test_dmabuf_feedback_roundtrip')
+endif
+
 # ── IME facade contract test (ime_backend=none) ──────────────────────────────
 # Includes backend.hpp, which only resolves cleanly without a selected backend.
 if ime_backend == 'none'
