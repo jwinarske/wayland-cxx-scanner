@@ -5,17 +5,22 @@
 // backend and presents it through zwp_linux_dmabuf_v1, so the pixels reach the
 // compositor as a dma-buf and never touch wl_shm.
 //
-// Skia (Ganesh) will only render into GPU-optimal images it owns, not into an
-// externally-allocated dma-buf image.  So the pipeline is: Skia draws the scene
-// into its own optimal SkSurface, then a vkCmdCopyImage copies that into a
-// linear, dma-buf-exported VkImage (VK_KHR_external_memory_fd), which is handed
-// to the compositor with DRM_FORMAT_MOD_LINEAR.  The copy is a GPU pass — there
-// is no CPU readback and no wl_shm fallback.
+// Direct path (preferred): wl::DmabufFeedback reports the compositor's
+// scanout-capable modifiers; the example picks one this GPU can render into and
+// sample (VK_EXT_image_drm_format_modifier), allocates a modifier-tiled,
+// dma-buf-exported VkImage per slot, and Skia renders straight into it — no
+// copy.  A modifier may span multiple memory planes (e.g. AMD DCC), each
+// described to zwp_linux_buffer_params.  Presenting a scanout modifier lets the
+// compositor promote the surface onto a hardware plane.
 //
-// This is the linear baseline: single top-level surface, double-buffered,
-// CPU-fence synchronized.  Rendering straight into a modifier-tiled exported
-// image (single allocation, no copy), an independent subsurface producer, and
-// explicit sync (wp_linux_drm_syncobj) are deliberate follow-ups.
+// Fallback path: when no renderable+sampleable modifier is on offer (or the
+// modifier extensions are absent), Skia renders into its own optimal surface
+// and a vkCmdCopyImage blits it into a linear, DRM_FORMAT_MOD_LINEAR exported
+// image — the guaranteed baseline.  Force it with SKIA_VULKAN_DMABUF_LINEAR.
+//
+// Both paths are double-buffered and CPU-fence synchronized; explicit sync
+// (wp_linux_drm_syncobj) and buffer-age partial repaint are deliberate
+// follow-ups.
 //
 // Controls:
 //   ESC / window close   quit
@@ -47,7 +52,8 @@ extern "C" {
 // ─────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
 #include <wl/display.hpp>
-#include <wl/linux_dmabuf.hpp>  // must follow linux_dmabuf_client.hpp
+#include <wl/dmabuf_feedback.hpp>  // wl::DmabufFeedback<App>
+#include <wl/linux_dmabuf.hpp>     // must follow linux_dmabuf_client.hpp
 #include <wl/presentation.hpp>
 #include <wl/registry.hpp>
 #include <wl/seat.hpp>
@@ -166,22 +172,6 @@ class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
   void OnRelease() override { released_ = true; }
 };
 
-// Confirms the compositor advertises our DRM format on zwp_linux_dmabuf_v1.
-class LinuxDmabufHandler
-    : public linux_dmabuf_unstable_v1::client::CZwpLinuxDmabufV1<
-          LinuxDmabufHandler> {
- public:
-  bool has_format = false;
-  void OnFormat(uint32_t format) override {
-    if (format == kDrmFormat)
-      has_format = true;
-  }
-  void OnModifier(uint32_t format, uint32_t, uint32_t) override {
-    if (format == kDrmFormat)
-      has_format = true;
-  }
-};
-
 class LinuxBufferParamsHandler
     : public linux_dmabuf_unstable_v1::client::CZwpLinuxBufferParamsV1<
           LinuxBufferParamsHandler> {};
@@ -208,14 +198,18 @@ class App {
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
   void OnTouchDown(const wl::TouchPoint& p) noexcept;
   void OnPresented(const wl::PresentFeedback& fb) noexcept;
+  // wl::DmabufFeedback hook: capture the latest snapshot for modifier
+  // selection.
+  void OnDmabufFeedback(const wl::FeedbackSnapshot& s) { fb_snapshot_ = s; }
 
  private:
   static constexpr int kDefaultWidth = 480;
   static constexpr int kDefaultHeight = 320;
   static constexpr int kMaxDim = 16384;
   static constexpr int kNumSlots = 2;
-  static constexpr uint32_t kDmaBufVersion = 3;
   static constexpr int kRoundtripTimeoutMs = 5000;
+
+  struct Slot;  // defined below; referenced by the slot helpers
 
   bool ConnectDisplay();
   bool ScanGlobals();
@@ -224,6 +218,13 @@ class App {
   bool InitVulkan();
   bool
   CreateRenderResources();  // Skia surface + export slots for width_/height_
+  // Pick a compositor-advertised modifier that Vulkan can render+sample, in
+  // tranche (scanout-first) order, into chosen_modifier_/chosen_plane_count_.
+  // Returns false ⇒ use the LINEAR fallback.
+  bool ChooseModifier();
+  bool AllocateSlotMemory(Slot& s) noexcept;  // memory + dma-buf fd + wl_buffer
+  bool CreateModifierSlot(Slot& s) noexcept;  // modifier-tiled + Skia surface
+  bool CreateLinearSlot(Slot& s) noexcept;    // linear + copy cmd/fence
   void DestroyRenderResources();
   bool CopyToSlot(
       int slot) noexcept;  // Skia image → slot's linear dma-buf image
@@ -233,7 +234,7 @@ class App {
   void PrintPresentSummary() const noexcept;
   void RequestFrameCallback() noexcept;
   void RenderFrame() noexcept;
-  bool SaveScreenshot() noexcept;
+  bool SaveScreenshot(SkSurface* surf) noexcept;
 
   [[nodiscard]] static double NowMs() noexcept {
     timespec ts{};
@@ -267,15 +268,25 @@ class App {
   sk_sp<GrDirectContext> gr_context_;
   sk_sp<SkSurface> skia_surface_;  // Skia-owned optimal render target
 
-  // Per-slot linear dma-buf image the Skia frame is copied into and presented.
+  // Per-slot dma-buf image presented to the compositor.  Direct path: `surface`
+  // wraps `image` (a modifier-tiled image Skia renders straight into). Fallback
+  // path: `image` is linear and the shared skia_surface_ is copied into it via
+  // copy_cmd/fence.
   struct Slot {
     vk::UniqueImage image;
     vk::UniqueDeviceMemory memory;
     vk::DeviceSize mem_size = 0;
-    uint32_t stride = 0;
+    uint32_t stride = 0;  // plane-0 stride, for logging
+    struct Plane {
+      uint32_t offset = 0;
+      uint32_t stride = 0;
+    };
+    std::array<Plane, 4> planes{};  // one dma-buf, per-plane offset/stride
+    uint32_t plane_count = 1;
     int dma_fd = -1;
-    vk::UniqueCommandBuffer copy_cmd;
-    vk::UniqueFence fence;
+    vk::UniqueCommandBuffer copy_cmd;  // fallback path only
+    vk::UniqueFence fence;             // fallback path only
+    sk_sp<SkSurface> surface;          // direct path only (wraps `image`)
     wl::WlPtr<WlBufferHandler> buffer;
 
     ~Slot() noexcept {
@@ -289,7 +300,7 @@ class App {
   std::array<Slot, kNumSlots> slots_;
   int back_ = 0;
 
-  wl::WlPtr<LinuxDmabufHandler> linux_dmabuf_;
+  wl::DmabufFeedback<App> dmabuf_feedback_;
   wl::WlPtr<wl::XdgWmBaseHandler> xdg_wm_base_;
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
@@ -302,6 +313,12 @@ class App {
   int width_ = kDefaultWidth;
   int height_ = kDefaultHeight;
   bool needs_resize_ = false;
+
+  bool modifier_ext_ = false;         // modifier extensions enabled on device
+  bool use_modifier_ = false;         // direct modifier-tiled path engaged
+  uint64_t chosen_modifier_ = 0;      // DRM modifier for the slot images
+  uint32_t chosen_plane_count_ = 1;   // memory planes of chosen_modifier_
+  wl::FeedbackSnapshot fb_snapshot_;  // latest dmabuf feedback snapshot
 
   std::uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   std::uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
@@ -385,6 +402,7 @@ bool App::ScanGlobals() {
     } else if (iface == dmabuf::interface_name) {
       linux_dmabuf_name_ = name;
       linux_dmabuf_ver_ = ver;
+      dmabuf_feedback_.Record(name, ver);
     }
   });
   if (!wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs)) {
@@ -418,14 +436,13 @@ bool App::BindGlobals() {
     std::fprintf(stderr, "skia-vulkan-dmabuf: xdg_wm_base bind failed\n");
     return false;
   }
-  const std::uint32_t dmabuf_ver = std::min(
-      {linux_dmabuf_ver_, zwp_linux_dmabuf_v1_traits::version, kDmaBufVersion});
-  if (!wl::BindHandler<zwp_linux_dmabuf_v1_traits>(
-          registry_, linux_dmabuf_, linux_dmabuf_name_, dmabuf_ver)) {
+  if (!dmabuf_feedback_.Bind(registry_, this)) {
     std::fprintf(stderr,
                  "skia-vulkan-dmabuf: zwp_linux_dmabuf_v1 bind failed\n");
     return false;
   }
+  if (dmabuf_feedback_.BoundVersion() >= 4)
+    (void)dmabuf_feedback_.StartDefault(display_.Get());
   if (!seat_.Bind(registry_, this)) {
     std::fprintf(stderr, "skia-vulkan-dmabuf: wl_seat bind failed\n");
     return false;
@@ -438,7 +455,9 @@ bool App::BindGlobals() {
     std::fprintf(stderr, "skia-vulkan-dmabuf: timed out waiting for formats\n");
     return false;
   }
-  if (!linux_dmabuf_.Get()->has_format) {
+  if (dmabuf_feedback_.BoundVersion() < 4)
+    dmabuf_feedback_.CommitLegacy();
+  if (fb_snapshot_.ModifiersFor(kDrmFormat).empty()) {
     std::fprintf(stderr,
                  "skia-vulkan-dmabuf: compositor does not advertise the "
                  "required DRM format\n");
@@ -484,6 +503,13 @@ bool App::CreateSurfaces() {
     std::fprintf(stderr,
                  "skia-vulkan-dmabuf: timed out waiting for configure\n");
     return false;
+  }
+  // Per-surface feedback: its tranches reflect this surface's actual
+  // plane-assignment potential (the scanout flag), unlike default feedback.
+  if (dmabuf_feedback_.BoundVersion() >= 4) {
+    (void)dmabuf_feedback_.StartSurface(display_.Get(),
+                                        surface_.Get()->GetProxy());
+    (void)wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs);
   }
   return true;
 }
@@ -549,6 +575,14 @@ bool App::InitVulkan() {
       return false;
     }
     vk_.device_exts.push_back(req);
+  }
+  // Modifier-tiled direct render (no copy) needs these; their absence forces
+  // the LINEAR+copy fallback.
+  modifier_ext_ = has_ext(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME) &&
+                  has_ext(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
+  if (modifier_ext_) {
+    vk_.device_exts.push_back(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
+    vk_.device_exts.push_back(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
   }
 
   // ── Logical device ─────────────────────────────────────────────────────────
@@ -625,6 +659,7 @@ void App::DestroyRenderResources() {
   skia_surface_.reset();
   for (Slot& s : slots_) {
     s.buffer.Reset();
+    s.surface.reset();  // borrows s.image; drop before the image
     s.fence.reset();
     s.copy_cmd.reset();
     s.image.reset();
@@ -635,47 +670,97 @@ void App::DestroyRenderResources() {
     }
     s.mem_size = 0;
     s.stride = 0;
+    s.plane_count = 1;
+    s.planes = {};
   }
 }
 
-bool App::CreateRenderResources() {
+// Picks a compositor-advertised modifier for kDrmFormat that this GPU can both
+// render into and sample, honoring tranche (scanout-first) preference order.
+// Returns false when none qualifies — the caller uses the LINEAR fallback.
+bool App::ChooseModifier() {
+  vk::DrmFormatModifierPropertiesListEXT list{};
+  vk::FormatProperties2 fp2{};
+  fp2.pNext = &list;
+  vk_.phys_dev.getFormatProperties2(kVkFormat, &fp2);
+  std::vector<vk::DrmFormatModifierPropertiesEXT> mods(
+      list.drmFormatModifierCount);
+  list.pDrmFormatModifierProperties = mods.data();
+  vk_.phys_dev.getFormatProperties2(kVkFormat, &fp2);
+
+  constexpr auto need = vk::FormatFeatureFlagBits::eColorAttachment |
+                        vk::FormatFeatureFlagBits::eSampledImage;
+  const auto find =
+      [&](uint64_t m) -> const vk::DrmFormatModifierPropertiesEXT* {
+    const auto it = std::find_if(
+        mods.begin(), mods.end(),
+        [&](const vk::DrmFormatModifierPropertiesEXT& p) {
+          return p.drmFormatModifier == m &&
+                 (p.drmFormatModifierTilingFeatures & need) == need;
+        });
+    return it == mods.end() ? nullptr : &*it;
+  };
+  const auto try_list = [&](const std::vector<uint64_t>& cand) {
+    for (uint64_t m : cand) {
+      if (m == DRM_FORMAT_MOD_INVALID)
+        continue;
+      if (const vk::DrmFormatModifierPropertiesEXT* p = find(m)) {
+        chosen_modifier_ = m;
+        chosen_plane_count_ = p->drmFormatModifierPlaneCount;
+        return true;
+      }
+    }
+    return false;
+  };
+  // Scanout tranches first (plane-promotable), then the rest, tranche order.
+  return try_list(fb_snapshot_.ScanoutModifiersFor(kDrmFormat)) ||
+         try_list(fb_snapshot_.ModifiersFor(kDrmFormat));
+}
+
+// Selects device-local memory, allocates a dedicated exportable block, binds
+// it, exports the dma-buf fd, and creates the presented wl_buffer
+// (create_params → create_immed) with the slot's tiling modifier.  Requires
+// s.image created and s.stride/s.offset filled by the caller.
+bool App::AllocateSlotMemory(Slot& s) noexcept {
   using namespace linux_dmabuf_unstable_v1::client;
   using namespace wayland::client;
 
-  DestroyRenderResources();
-
-  // Skia-owned optimal render target that the scene draws into.
-  skia_surface_ = SkSurfaces::RenderTarget(
-      gr_context_.get(), skgpu::Budgeted::kYes,
-      SkImageInfo::Make(width_, height_, kSkColorType, kPremul_SkAlphaType),
-      /*sampleCount=*/1, kTopLeft_GrSurfaceOrigin, nullptr);
-  if (skia_surface_ == nullptr) {
-    std::fprintf(stderr,
-                 "skia-vulkan-dmabuf: SkSurfaces::RenderTarget failed\n");
-    return false;
-  }
-
+  const vk::MemoryRequirements reqs =
+      vk_.device->getImageMemoryRequirements(*s.image);
+  s.mem_size = reqs.size;
   const vk::PhysicalDeviceMemoryProperties mem_props =
       vk_.phys_dev.getMemoryProperties();
-
-  // Exportable, linear-tiled copy target: the compositor imports it as
-  // DRM_FORMAT_MOD_LINEAR.  Linear is not a valid color attachment on most
-  // GPUs, but it is a valid transfer destination everywhere.
-  constexpr vk::ExternalMemoryImageCreateInfo ext_img{
+  uint32_t mem_type = UINT32_MAX;
+  for (uint32_t j = 0; j < mem_props.memoryTypeCount; ++j) {
+    if (!(reqs.memoryTypeBits & (1u << j)))
+      continue;
+    if (mem_props.memoryTypes.at(j).propertyFlags &
+        vk::MemoryPropertyFlagBits::eDeviceLocal) {
+      mem_type = j;
+      break;
+    }
+    if (mem_type == UINT32_MAX)
+      mem_type = j;
+  }
+  if (mem_type == UINT32_MAX) {
+    std::fprintf(stderr, "skia-vulkan-dmabuf: no suitable memory type\n");
+    return false;
+  }
+  vk::MemoryDedicatedAllocateInfo dedicated{*s.image};
+  vk::ExportMemoryAllocateInfo export_mem{
       vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
-  vk::ImageCreateInfo img_ci;
-  img_ci.imageType = vk::ImageType::e2D;
-  img_ci.format = kVkFormat;
-  img_ci.extent = vk::Extent3D{static_cast<uint32_t>(width_),
-                               static_cast<uint32_t>(height_), 1};
-  img_ci.mipLevels = 1;
-  img_ci.arrayLayers = 1;
-  img_ci.samples = vk::SampleCountFlagBits::e1;
-  img_ci.tiling = vk::ImageTiling::eLinear;
-  img_ci.usage = vk::ImageUsageFlagBits::eTransferDst;
-  img_ci.sharingMode = vk::SharingMode::eExclusive;
-  img_ci.initialLayout = vk::ImageLayout::eUndefined;
-  img_ci.setPNext(&ext_img);
+  export_mem.pNext = &dedicated;
+  vk::MemoryAllocateInfo mem_ai{reqs.size, mem_type};
+  mem_ai.setPNext(&export_mem);
+  {
+    auto rv = vk_.device->allocateMemoryUnique(mem_ai);
+    if (!VkOk(rv.result, "vkAllocateMemory"))
+      return false;
+    s.memory = std::move(rv.value);
+  }
+  if (!VkOk(vk_.device->bindImageMemory(*s.image, *s.memory, 0),
+            "vkBindImageMemory"))
+    return false;
 
   auto get_memory_fd_khr = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
       vkGetDeviceProcAddr(*vk_.device, "vkGetMemoryFdKHR"));
@@ -683,115 +768,211 @@ bool App::CreateRenderResources() {
     std::fprintf(stderr, "skia-vulkan-dmabuf: vkGetMemoryFdKHR unavailable\n");
     return false;
   }
+  const VkMemoryGetFdInfoKHR fd_info{
+      VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, *s.memory,
+      VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
+  int raw_fd = -1;
+  if (!VkOk(static_cast<vk::Result>(
+                get_memory_fd_khr(*vk_.device, &fd_info, &raw_fd)),
+            "vkGetMemoryFdKHR"))
+    return false;
+  s.dma_fd = raw_fd;
+
+  const uint64_t mod = use_modifier_
+                           ? chosen_modifier_
+                           : static_cast<uint64_t>(DRM_FORMAT_MOD_LINEAR);
+  wl::WlPtr<LinuxBufferParamsHandler> params;
+  if (wl_proxy* raw = dmabuf_feedback_.CreateParams()) {
+    params.Attach(raw);
+  } else {
+    std::fprintf(stderr, "skia-vulkan-dmabuf: create_params failed\n");
+    return false;
+  }
+  // One dma-buf, one add() per memory plane (all share the fd, distinct
+  // offsets); libwayland dups the fd for each.
+  for (uint32_t i = 0; i < s.plane_count; ++i)
+    params.Get()->Add(s.dma_fd, i, s.planes.at(i).offset, s.planes.at(i).stride,
+                      static_cast<uint32_t>(mod >> 32u),
+                      static_cast<uint32_t>(mod & 0xffffffffu));
+  if (wl_proxy* raw =
+          wl::construct<wl_buffer_traits,
+                        zwp_linux_buffer_params_v1_traits::Op::CreateImmed>(
+              *params.Get(), static_cast<int32_t>(width_),
+              static_cast<int32_t>(height_), kDrmFormat, 0u)) {
+    s.buffer.Get()->_SetProxy(raw);
+  } else {
+    std::fprintf(stderr, "skia-vulkan-dmabuf: create_immed failed\n");
+    return false;
+  }
+  s.buffer.Get()->released_ = true;
+  return true;
+}
+
+// Direct path: a modifier-tiled, color-attachment+sampled exported image Skia
+// renders straight into (no copy).
+bool App::CreateModifierSlot(Slot& s) noexcept {
+  const std::array<uint64_t, 1> mods{chosen_modifier_};
+  vk::ImageDrmFormatModifierListCreateInfoEXT mod_ci{};
+  mod_ci.setDrmFormatModifiers(mods);
+  vk::ExternalMemoryImageCreateInfo ext_img{
+      vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
+  ext_img.pNext = &mod_ci;
+  vk::ImageCreateInfo ci;
+  ci.imageType = vk::ImageType::e2D;
+  ci.format = kVkFormat;
+  ci.extent = vk::Extent3D{static_cast<uint32_t>(width_),
+                           static_cast<uint32_t>(height_), 1};
+  ci.mipLevels = 1;
+  ci.arrayLayers = 1;
+  ci.samples = vk::SampleCountFlagBits::e1;
+  ci.tiling = vk::ImageTiling::eDrmFormatModifierEXT;
+  ci.usage = vk::ImageUsageFlagBits::eColorAttachment |
+             vk::ImageUsageFlagBits::eSampled |
+             vk::ImageUsageFlagBits::eTransferSrc |
+             vk::ImageUsageFlagBits::eTransferDst;
+  ci.sharingMode = vk::SharingMode::eExclusive;
+  ci.initialLayout = vk::ImageLayout::eUndefined;
+  ci.setPNext(&ext_img);
+  {
+    auto rv = vk_.device->createImageUnique(ci);
+    if (!VkOk(rv.result, "vkCreateImage (modifier)"))
+      return false;
+    s.image = std::move(rv.value);
+  }
+  // A DRM modifier may span multiple memory planes (e.g. AMD DCC metadata);
+  // query each plane's offset/stride so the wl_buffer describes them all.
+  static constexpr std::array<vk::ImageAspectFlagBits, 4> kPlaneAspect = {
+      vk::ImageAspectFlagBits::eMemoryPlane0EXT,
+      vk::ImageAspectFlagBits::eMemoryPlane1EXT,
+      vk::ImageAspectFlagBits::eMemoryPlane2EXT,
+      vk::ImageAspectFlagBits::eMemoryPlane3EXT};
+  s.plane_count = std::min<uint32_t>(chosen_plane_count_, 4);
+  for (uint32_t i = 0; i < s.plane_count; ++i) {
+    const vk::SubresourceLayout l = vk_.device->getImageSubresourceLayout(
+        *s.image, {kPlaneAspect.at(i), 0, 0});
+    s.planes.at(i) = {static_cast<uint32_t>(l.offset),
+                      static_cast<uint32_t>(l.rowPitch)};
+  }
+  s.stride = s.planes[0].stride;
+  if (!AllocateSlotMemory(s))
+    return false;
+
+  skgpu::VulkanAlloc alloc;
+  alloc.fMemory = *s.memory;
+  alloc.fOffset = 0;
+  alloc.fSize = s.mem_size;
+  GrVkImageInfo info;
+  info.fImage = *s.image;
+  info.fAlloc = alloc;
+  info.fImageTiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+  info.fImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  info.fFormat = static_cast<VkFormat>(kVkFormat);
+  info.fImageUsageFlags =
+      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  info.fSampleCount = 1;
+  info.fLevelCount = 1;
+  info.fCurrentQueueFamily = vk_.queue_family;
+  info.fSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  GrBackendTexture bt = GrBackendTextures::MakeVk(width_, height_, info);
+  s.surface = SkSurfaces::WrapBackendTexture(
+      gr_context_.get(), bt, kTopLeft_GrSurfaceOrigin,
+      /*sampleCnt=*/1, kSkColorType, nullptr, nullptr);
+  if (s.surface == nullptr) {
+    std::fprintf(stderr, "skia-vulkan-dmabuf: WrapBackendTexture failed\n");
+    return false;
+  }
+  return true;
+}
+
+// Fallback path: a linear exported image (valid transfer destination
+// everywhere) that RenderFrame copies the shared Skia surface into.
+bool App::CreateLinearSlot(Slot& s) noexcept {
+  constexpr vk::ExternalMemoryImageCreateInfo ext_img{
+      vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
+  vk::ImageCreateInfo ci;
+  ci.imageType = vk::ImageType::e2D;
+  ci.format = kVkFormat;
+  ci.extent = vk::Extent3D{static_cast<uint32_t>(width_),
+                           static_cast<uint32_t>(height_), 1};
+  ci.mipLevels = 1;
+  ci.arrayLayers = 1;
+  ci.samples = vk::SampleCountFlagBits::e1;
+  ci.tiling = vk::ImageTiling::eLinear;
+  ci.usage = vk::ImageUsageFlagBits::eTransferDst;
+  ci.sharingMode = vk::SharingMode::eExclusive;
+  ci.initialLayout = vk::ImageLayout::eUndefined;
+  ci.setPNext(&ext_img);
+  {
+    auto rv = vk_.device->createImageUnique(ci);
+    if (!VkOk(rv.result, "vkCreateImage"))
+      return false;
+    s.image = std::move(rv.value);
+  }
+  const vk::SubresourceLayout layout = vk_.device->getImageSubresourceLayout(
+      *s.image, {vk::ImageAspectFlagBits::eColor, 0, 0});
+  s.plane_count = 1;
+  s.planes[0] = {0, static_cast<uint32_t>(layout.rowPitch)};
+  s.stride = s.planes[0].stride;
+  if (!AllocateSlotMemory(s))
+    return false;
+  {
+    const vk::CommandBufferAllocateInfo cb_ai{
+        *vk_.cmd_pool, vk::CommandBufferLevel::ePrimary, 1};
+    auto rv = vk_.device->allocateCommandBuffersUnique(cb_ai);
+    if (!VkOk(rv.result, "vkAllocateCommandBuffers"))
+      return false;
+    s.copy_cmd = std::move(rv.value.front());
+  }
+  {
+    auto rv = vk_.device->createFenceUnique({});
+    if (!VkOk(rv.result, "vkCreateFence"))
+      return false;
+    s.fence = std::move(rv.value);
+  }
+  return true;
+}
+
+bool App::CreateRenderResources() {
+  DestroyRenderResources();
+
+  // SKIA_VULKAN_DMABUF_LINEAR forces the LINEAR+copy fallback (for testing it
+  // where the compositor advertises tiled modifiers).
+  use_modifier_ = modifier_ext_ &&
+                  std::getenv("SKIA_VULKAN_DMABUF_LINEAR") == nullptr &&
+                  ChooseModifier();
+
+  // Direct path renders into each slot's own persistent surface; the fallback
+  // renders into one shared optimal surface and copies it into a linear slot.
+  if (!use_modifier_) {
+    skia_surface_ = SkSurfaces::RenderTarget(
+        gr_context_.get(), skgpu::Budgeted::kYes,
+        SkImageInfo::Make(width_, height_, kSkColorType, kPremul_SkAlphaType),
+        /*sampleCount=*/1, kTopLeft_GrSurfaceOrigin, nullptr);
+    if (skia_surface_ == nullptr) {
+      std::fprintf(stderr,
+                   "skia-vulkan-dmabuf: SkSurfaces::RenderTarget failed\n");
+      return false;
+    }
+  }
 
   for (Slot& s : slots_) {
-    {
-      auto rv = vk_.device->createImageUnique(img_ci);
-      if (!VkOk(rv.result, "vkCreateImage"))
-        return false;
-      s.image = std::move(rv.value);
-    }
-    const vk::MemoryRequirements reqs =
-        vk_.device->getImageMemoryRequirements(*s.image);
-    s.mem_size = reqs.size;
-    s.stride = static_cast<uint32_t>(
-        vk_.device
-            ->getImageSubresourceLayout(*s.image,
-                                        {vk::ImageAspectFlagBits::eColor, 0, 0})
-            .rowPitch);
-
-    uint32_t mem_type = UINT32_MAX;
-    for (uint32_t j = 0; j < mem_props.memoryTypeCount; ++j) {
-      if (!(reqs.memoryTypeBits & (1u << j)))
-        continue;
-      if (mem_props.memoryTypes.at(j).propertyFlags &
-          vk::MemoryPropertyFlagBits::eDeviceLocal) {
-        mem_type = j;
-        break;
-      }
-      if (mem_type == UINT32_MAX)
-        mem_type = j;
-    }
-    if (mem_type == UINT32_MAX) {
-      std::fprintf(stderr, "skia-vulkan-dmabuf: no suitable memory type\n");
+    if (!(use_modifier_ ? CreateModifierSlot(s) : CreateLinearSlot(s)))
       return false;
-    }
-    vk::MemoryDedicatedAllocateInfo dedicated{*s.image};
-    vk::ExportMemoryAllocateInfo export_mem{
-        vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT};
-    export_mem.pNext = &dedicated;
-    vk::MemoryAllocateInfo mem_ai{reqs.size, mem_type};
-    mem_ai.setPNext(&export_mem);
-    {
-      auto rv = vk_.device->allocateMemoryUnique(mem_ai);
-      if (!VkOk(rv.result, "vkAllocateMemory"))
-        return false;
-      s.memory = std::move(rv.value);
-    }
-    if (!VkOk(vk_.device->bindImageMemory(*s.image, *s.memory, 0),
-              "vkBindImageMemory"))
-      return false;
-
-    // Export as a dma-buf fd.
-    const VkMemoryGetFdInfoKHR fd_info{
-        VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR, nullptr, *s.memory,
-        VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT};
-    int raw_fd = -1;
-    if (!VkOk(static_cast<vk::Result>(
-                  get_memory_fd_khr(*vk_.device, &fd_info, &raw_fd)),
-              "vkGetMemoryFdKHR"))
-      return false;
-    s.dma_fd = raw_fd;
-
-    // Copy command buffer + fence.
-    {
-      const vk::CommandBufferAllocateInfo cb_ai{
-          *vk_.cmd_pool, vk::CommandBufferLevel::ePrimary, 1};
-      auto rv = vk_.device->allocateCommandBuffersUnique(cb_ai);
-      if (!VkOk(rv.result, "vkAllocateCommandBuffers"))
-        return false;
-      s.copy_cmd = std::move(rv.value.front());
-    }
-    {
-      auto rv = vk_.device->createFenceUnique({});
-      if (!VkOk(rv.result, "vkCreateFence"))
-        return false;
-      s.fence = std::move(rv.value);
-    }
-
-    // dma-buf-backed wl_buffer (create_immed, linear modifier).
-    wl::WlPtr<LinuxBufferParamsHandler> params;
-    if (wl_proxy* raw =
-            wl::construct<zwp_linux_buffer_params_v1_traits,
-                          zwp_linux_dmabuf_v1_traits::Op::CreateParams>(
-                *linux_dmabuf_.Get())) {
-      params.Attach(raw);
-    } else {
-      std::fprintf(stderr, "skia-vulkan-dmabuf: create_params failed\n");
-      return false;
-    }
-    params.Get()->Add(s.dma_fd, 0u, 0u, s.stride,
-                      static_cast<uint32_t>(
-                          static_cast<uint64_t>(DRM_FORMAT_MOD_LINEAR) >> 32u),
-                      static_cast<uint32_t>(DRM_FORMAT_MOD_LINEAR));
-    if (wl_proxy* raw =
-            wl::construct<wl_buffer_traits,
-                          zwp_linux_buffer_params_v1_traits::Op::CreateImmed>(
-                *params.Get(), static_cast<int32_t>(width_),
-                static_cast<int32_t>(height_), kDrmFormat, 0u)) {
-      s.buffer.Get()->_SetProxy(raw);
-    } else {
-      std::fprintf(stderr, "skia-vulkan-dmabuf: create_immed failed\n");
-      return false;
-    }
-    s.buffer.Get()->released_ = true;
   }
 
   back_ = 0;
-  std::printf(
-      "skia-vulkan-dmabuf: %dx%d, %d slots, stride=%u, Ganesh Vulkan → "
-      "linear dma-buf present\n",
-      width_, height_, kNumSlots, slots_.front().stride);
+  if (use_modifier_)
+    std::printf(
+        "skia-vulkan-dmabuf: %dx%d, %d slots, stride=%u, Ganesh Vulkan → "
+        "modifier-tiled dma-buf direct (modifier 0x%016llx)\n",
+        width_, height_, kNumSlots, slots_.front().stride,
+        static_cast<unsigned long long>(chosen_modifier_));
+  else
+    std::printf(
+        "skia-vulkan-dmabuf: %dx%d, %d slots, stride=%u, Ganesh Vulkan → "
+        "linear dma-buf present (copy fallback)\n",
+        width_, height_, kNumSlots, slots_.front().stride);
   return true;
 }
 
@@ -880,23 +1061,37 @@ void App::RenderFrame() noexcept {
   scene_.frame = pacer_.frame();
   fps_.Tick(NowMs());
   view_tree_.Layout(width_, height_);
-  SkCanvas* canvas = skia_surface_->getCanvas();
+
+  // Direct path renders into the slot's own surface; fallback into the shared
+  // one that CopyToSlot then blits into the linear slot image.
+  SkSurface* target = use_modifier_ ? s.surface.get() : skia_surface_.get();
+  SkCanvas* canvas = target->getCanvas();
   demo::DemoScene::Render(canvas, scene_, view_tree_);
   hud_.Render(canvas, pacer_, fps_.fps());
 
   if (!screenshot_.empty() && !screenshot_saved_)
-    screenshot_saved_ = SaveScreenshot();
+    screenshot_saved_ = SaveScreenshot(target);
 
-  // Finish rendering and hand the Skia image over as a transfer source.
-  skgpu::MutableTextureState transfer_src =
-      skgpu::MutableTextureStates::MakeVulkan(
-          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_.queue_family);
-  gr_context_->flush(skia_surface_.get(), GrFlushInfo{}, &transfer_src);
-  gr_context_->submit(GrSyncCpu::kYes);
-
-  if (!CopyToSlot(back_)) {
-    running_ = false;
-    return;
+  if (use_modifier_) {
+    // Leave the slot image in a compositor-readable layout, then wait for the
+    // GPU so the dma-buf holds a complete frame before commit (implicit sync;
+    // the CPU wait is what explicit sync would later remove).
+    skgpu::MutableTextureState to_present =
+        skgpu::MutableTextureStates::MakeVulkan(VK_IMAGE_LAYOUT_GENERAL,
+                                                vk_.queue_family);
+    gr_context_->flush(target, GrFlushInfo{}, &to_present);
+    gr_context_->submit(GrSyncCpu::kYes);
+  } else {
+    // Finish rendering and hand the Skia image over as a transfer source.
+    skgpu::MutableTextureState transfer_src =
+        skgpu::MutableTextureStates::MakeVulkan(
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_.queue_family);
+    gr_context_->flush(target, GrFlushInfo{}, &transfer_src);
+    gr_context_->submit(GrSyncCpu::kYes);
+    if (!CopyToSlot(back_)) {
+      running_ = false;
+      return;
+    }
   }
 
   presentation_.Arm(surface_.Get()->GetProxy(), pacer_.frame());
@@ -909,14 +1104,14 @@ void App::RenderFrame() noexcept {
   pacer_.Advance();
 }
 
-bool App::SaveScreenshot() noexcept {
+bool App::SaveScreenshot(SkSurface* surf) noexcept {
   SkBitmap bmp;
   if (!bmp.tryAllocPixels(SkImageInfo::Make(width_, height_, kSkColorType,
                                             kPremul_SkAlphaType))) {
     std::fprintf(stderr, "skia-vulkan-dmabuf: screenshot allocPixels failed\n");
     return false;
   }
-  if (!skia_surface_->readPixels(bmp, 0, 0)) {
+  if (!surf->readPixels(bmp, 0, 0)) {
     std::fprintf(stderr, "skia-vulkan-dmabuf: readPixels failed\n");
     return false;
   }

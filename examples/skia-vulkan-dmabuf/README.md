@@ -10,26 +10,33 @@ directly comparable.
 
 ## How it works
 
-Skia's Ganesh backend renders into GPU-optimal images it owns; it does **not**
-render into an externally-allocated dma-buf image. So the frame path is:
+The example asks the compositor — through `wl::DmabufFeedback`
+(`zwp_linux_dmabuf_v1` v4 feedback) — which DRM format modifiers it can scan
+out, and picks the presentation path accordingly.
 
-1. Skia draws the scene into its own optimal `SkSurface`
-   (`SkSurfaces::RenderTarget`).
-2. A `vkCmdCopyImage` copies that into a linear, dma-buf-exported `VkImage`
-   (`VK_KHR_external_memory_fd` + `VK_EXT_external_memory_dma_buf`).
-3. The exported fd becomes a `wl_buffer` via `zwp_linux_dmabuf_v1` with
-   `DRM_FORMAT_MOD_LINEAR`, which the compositor imports and scans out.
+**Direct path (preferred).** It selects a scanout-capable modifier that this GPU
+can both render into and sample (`VK_EXT_image_drm_format_modifier`), allocates a
+modifier-tiled, dma-buf-exported `VkImage` per slot, wraps it as a Skia
+`GrBackendTexture`, and Skia renders the scene **straight into it — no copy**. A
+modifier may span several memory planes (e.g. AMD DCC metadata); each plane's
+offset and stride is described to `zwp_linux_buffer_params`. Presenting a
+scanout modifier lets the compositor promote the surface onto a hardware plane.
 
-The copy is a GPU pass — there is no CPU readback and no `wl_shm` fallback. All
-Vulkan is written with [Vulkan-Hpp](https://github.com/KhronosGroup/Vulkan-Hpp)
-(`vk::`), dropping to raw C handles only at Skia's `VulkanBackendContext` /
-`GrVkImageInfo` boundary.
+**Fallback path.** When no renderable + sampleable modifier is on offer (or the
+modifier extensions are absent), Skia draws into its own optimal `SkSurface` and
+a `vkCmdCopyImage` blits it into a linear, `DRM_FORMAT_MOD_LINEAR`
+dma-buf-exported image — the guaranteed baseline. Set `SKIA_VULKAN_DMABUF_LINEAR`
+to force this path where the compositor advertises tiled modifiers.
 
-This is the **linear baseline**: a single top-level surface, double-buffered,
-synchronized with a CPU fence before `wl_surface.commit`. Rendering straight
-into a modifier-tiled exported image (single allocation, no copy), an
-independent subsurface producer, and explicit sync
-(`wp_linux_drm_syncobj_v1`) are follow-ups.
+Both paths are double-buffered and synchronized with a CPU fence before
+`wl_surface.commit`. All Vulkan is written with
+[Vulkan-Hpp](https://github.com/KhronosGroup/Vulkan-Hpp) (`vk::`), dropping to
+raw C handles only at Skia's `VulkanBackendContext` / `GrVkImageInfo` boundary.
+Explicit sync (`wp_linux_drm_syncobj_v1`) and buffer-age partial repaint are
+follow-ups.
+
+The startup line reports which path engaged, e.g. `… → modifier-tiled dma-buf
+direct (modifier 0x0200000000…)` or `… → linear dma-buf present (copy fallback)`.
 
 ## Controls
 
@@ -53,8 +60,11 @@ independent subsurface producer, and explicit sync
 ## Requirements
 
 - A Vulkan device with `VK_KHR_external_memory_fd` and
-  `VK_EXT_external_memory_dma_buf`.
-- A Wayland compositor advertising `xdg-shell` and `zwp_linux_dmabuf_v1`.
+  `VK_EXT_external_memory_dma_buf`. `VK_EXT_image_drm_format_modifier` (+
+  `VK_KHR_image_format_list`) additionally enables the direct path; without them
+  the example uses the linear fallback.
+- A Wayland compositor advertising `xdg-shell` and `zwp_linux_dmabuf_v1` (v4+ for
+  the direct path's modifier feedback; v3 falls back to linear).
 - The producer and the compositor must share a compatible GPU: a
   software-rendered (lavapipe) buffer cannot be imported by a hardware
   compositor, and vice versa.
