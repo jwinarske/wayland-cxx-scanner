@@ -229,7 +229,14 @@ class App {
   void OnPresented(const wl::PresentFeedback& fb) noexcept;
   // wl::DmabufFeedback hook: capture the latest snapshot for modifier
   // selection.
-  void OnDmabufFeedback(const wl::FeedbackSnapshot& s) { fb_snapshot_ = s; }
+  void OnDmabufFeedback(const wl::FeedbackSnapshot& s) {
+    fb_snapshot_ = s;
+    // A re-advertisement after the slots exist (e.g. the surface's plane
+    // assignment changed) may change the best modifier — re-evaluate at the
+    // next frame boundary rather than mid-dispatch.
+    if (resources_ready_)
+      needs_rebuild_ = true;
+  }
 
  private:
   static constexpr int kDefaultWidth = 480;
@@ -248,9 +255,10 @@ class App {
   bool
   CreateRenderResources();  // Skia surface + export slots for width_/height_
   // Pick a compositor-advertised modifier that Vulkan can render+sample, in
-  // tranche (scanout-first) order, into chosen_modifier_/chosen_plane_count_.
-  // Returns false ⇒ use the LINEAR fallback.
-  bool ChooseModifier();
+  // tranche (scanout-first) order.  Side-effect-free (so OnDmabufFeedback can
+  // compare); returns false ⇒ use the LINEAR fallback.
+  [[nodiscard]] bool ComputeModifier(uint64_t& out_mod,
+                                     uint32_t& out_planes) const;
   bool AllocateSlotMemory(Slot& s) noexcept;  // memory + dma-buf fd + wl_buffer
   bool CreateModifierSlot(Slot& s) noexcept;  // modifier-tiled + Skia surface
   bool CreateLinearSlot(Slot& s) noexcept;    // linear + copy cmd/fence
@@ -365,6 +373,8 @@ class App {
   int width_ = kDefaultWidth;
   int height_ = kDefaultHeight;
   bool needs_resize_ = false;
+  bool resources_ready_ = false;  // slots built (so a re-advertisement matters)
+  bool needs_rebuild_ = false;    // dmabuf feedback re-advertised → re-evaluate
 
   bool modifier_ext_ = false;         // modifier extensions enabled on device
   bool use_modifier_ = false;         // direct modifier-tiled path engaged
@@ -782,6 +792,7 @@ bool App::InitVulkan() {
 }
 
 void App::DestroyRenderResources() {
+  resources_ready_ = false;
   if (vk_.device)
     (void)vk_.device->waitIdle();
   skia_surface_.reset();
@@ -808,7 +819,7 @@ void App::DestroyRenderResources() {
 // Picks a compositor-advertised modifier for kDrmFormat that this GPU can both
 // render into and sample, honoring tranche (scanout-first) preference order.
 // Returns false when none qualifies — the caller uses the LINEAR fallback.
-bool App::ChooseModifier() {
+bool App::ComputeModifier(uint64_t& out_mod, uint32_t& out_planes) const {
   vk::DrmFormatModifierPropertiesListEXT list{};
   vk::FormatProperties2 fp2{};
   fp2.pNext = &list;
@@ -835,8 +846,8 @@ bool App::ChooseModifier() {
       if (m == DRM_FORMAT_MOD_INVALID)
         continue;
       if (const vk::DrmFormatModifierPropertiesEXT* p = find(m)) {
-        chosen_modifier_ = m;
-        chosen_plane_count_ = p->drmFormatModifierPlaneCount;
+        out_mod = m;
+        out_planes = p->drmFormatModifierPlaneCount;
         return true;
       }
     }
@@ -1258,7 +1269,7 @@ bool App::CreateRenderResources() {
   // where the compositor advertises tiled modifiers).
   use_modifier_ = modifier_ext_ &&
                   std::getenv("SKIA_VULKAN_DMABUF_LINEAR") == nullptr &&
-                  ChooseModifier();
+                  ComputeModifier(chosen_modifier_, chosen_plane_count_);
   // Explicit sync applies only to the direct path; the copy fallback stays
   // CPU-fence synchronized.
   use_explicit_sync_ = use_explicit_sync_ && use_modifier_;
@@ -1302,6 +1313,7 @@ bool App::CreateRenderResources() {
         "skia-vulkan-dmabuf: %dx%d, %d slots, stride=%u, Ganesh Vulkan → "
         "linear dma-buf present (copy fallback, %s)\n",
         width_, height_, kNumSlots, slots_.front().stride, sync);
+  resources_ready_ = true;
   return true;
 }
 
@@ -1410,6 +1422,28 @@ void App::RenderFrame() noexcept {
     if (!CreateRenderResources()) {
       running_ = false;
       return;
+    }
+  }
+  if (needs_rebuild_) {
+    needs_rebuild_ = false;
+    // The compositor re-advertised feedback.  Rebuild the slot ring only when
+    // it actually changes the direct-path modifier (e.g. the surface became
+    // plane-promotable) — a plain re-advertisement with the same modifier keeps
+    // the slots.  Downgrades to/from the fallback are left to the next resize.
+    uint64_t mod = 0;
+    uint32_t planes = 1;
+    if (use_modifier_ && ComputeModifier(mod, planes) &&
+        mod != chosen_modifier_) {
+      std::printf(
+          "skia-vulkan-dmabuf: dmabuf feedback re-advertised → rebuilding "
+          "slots "
+          "(modifier 0x%016llx)\n",
+          static_cast<unsigned long long>(mod));
+      full_damage_ = true;
+      if (!CreateRenderResources()) {
+        running_ = false;
+        return;
+      }
     }
   }
 

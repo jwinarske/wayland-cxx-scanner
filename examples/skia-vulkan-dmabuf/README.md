@@ -21,6 +21,9 @@ modifier-tiled, dma-buf-exported `VkImage` per slot, wraps it as a Skia
 modifier may span several memory planes (e.g. AMD DCC metadata); each plane's
 offset and stride is described to `zwp_linux_buffer_params`. Presenting a
 scanout modifier lets the compositor promote the surface onto a hardware plane.
+If the compositor **re-advertises** feedback (e.g. the surface's plane-assignment
+potential changed) with a different best modifier, the slot ring is rebuilt at
+the next frame boundary; a re-advertisement with the same modifier is ignored.
 
 **Fallback path.** When no renderable + sampleable modifier is on offer (or the
 modifier extensions are absent), Skia draws into its own optimal `SkSurface` and
