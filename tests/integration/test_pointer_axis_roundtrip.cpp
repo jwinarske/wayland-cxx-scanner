@@ -14,8 +14,9 @@
 //   • opcode mapping — six axis-family events sit at opcodes 4 and 6-9, and a
 //     misrouted one would silently deliver the wrong event;
 //   • argument order and width, including the wl_fixed_t → double conversion;
-//   • wl_pointer version negotiation through wl_proxy_get_version, which is
-//     what selects the normalization path when SeatManager has not set it.
+//   • every version-dependent path, since the handler takes the version from
+//     the proxy: only a real negotiation can choose one, so the value120-from-8
+//     preference and the pre-5 per-event flush are testable nowhere else.
 //
 // Event opcodes below are taken from wayland.xml, deliberately NOT from the
 // generated header: checking generated dispatch against generated constants
@@ -191,9 +192,9 @@ void RunScenario(uint32_t version, Sender send, ScrollApp& app) {
     ASSERT_NE(raw, nullptr);
     ASSERT_TRUE(wl::SetupHandler(ptr, raw));
     ptr.Get()->app_ = &app;
-    // version_ is deliberately left 0 so the handler has to read the negotiated
-    // version off the proxy.  SeatManager normally assigns it, which hides this
-    // path everywhere else.
+    // The handler reads the version straight off this proxy, which is the only
+    // reason a version-dependent path can be tested honestly at all: a handler
+    // without a proxy has to assume the newest.
     ASSERT_EQ(wl_proxy_get_version(raw), version);
 
     // First roundtrip carries get_pointer to the server and brings the axis

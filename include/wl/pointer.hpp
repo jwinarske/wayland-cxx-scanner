@@ -134,13 +134,6 @@ class PointerHandler : public wayland::client::CWlPointer<PointerHandler<App>> {
   /// Back-pointer set by SeatManager immediately after SetupHandler() returns.
   App* app_ = nullptr;
 
-  /// Negotiated wl_pointer version, set by SeatManager alongside app_.
-  ///
-  /// Zero means "ask the proxy", which is what a handler constructed outside
-  /// SeatManager does.  Set it directly to exercise a specific version's axis
-  /// normalization without a live compositor.
-  std::uint32_t version_ = 0;
-
   void OnEnter(std::uint32_t serial,
                wl_proxy* /*surface*/,
                wl_fixed_t sx,
@@ -261,12 +254,11 @@ class PointerHandler : public wayland::client::CWlPointer<PointerHandler<App>> {
     return axis < kAxisCount ? &axes_.at(axis) : nullptr;
   }
 
-  /// The negotiated wl_pointer version.  Falls back to the proxy, then to the
-  /// newest version the generated bindings know — an unbound handler is a test
-  /// or a bug, and assuming the newest keeps the value120 path the default.
+  /// The negotiated wl_pointer version, straight from the proxy — get_pointer
+  /// inherits it from the seat, so the proxy is the authority and there is
+  /// nothing to cache.  A handler with no proxy is a unit test or a bug;
+  /// assume the newest, which keeps value120 the default.
   [[nodiscard]] std::uint32_t Version() const noexcept {
-    if (version_ != 0u)
-      return version_;
     wl_proxy* const proxy = this->GetProxy();
     if (proxy != nullptr)
       return wl_proxy_get_version(proxy);

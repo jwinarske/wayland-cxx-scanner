@@ -244,9 +244,6 @@ class SeatManager {
                 wl::construct<wl_pointer_traits,
                               wl_seat_traits::Op::GetPointer>(*seat_.Get()))) {
           pointer_.Get()->app_ = app_;
-          // The pointer inherits the seat's negotiated version, which decides
-          // how the handler normalizes scroll (see wl/pointer.hpp).
-          pointer_.Get()->version_ = ver_;
         }
       } else if (!has_ptr && !pointer_.IsNull()) {
         ReleasePointer();

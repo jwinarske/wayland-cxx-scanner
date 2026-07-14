@@ -383,25 +383,28 @@ TEST(PointerHandler, WantsPointerDetectsHooks) {
 
 // ── PointerHandler axis (scroll) tests ───────────────────────────────────────
 //
-// Each test pins one row of the version/source normalization table in
-// wl/pointer.hpp.  version_ stands in for the negotiated seat version, which a
-// live SeatManager sets from the seat proxy.
+// These pin the normalization arithmetic of wl/pointer.hpp: which rung of the
+// ladder a given set of axis events picks, and how the accumulator behaves.
+//
+// A handler with no proxy assumes the newest wl_pointer version, so the two
+// version-gated branches — preferring axis_value120 from version 8, and
+// flushing per event before version 5 — are not reachable from here.  They are
+// covered against real negotiated proxies in
+// integration/test_pointer_axis_roundtrip.cpp, which is the only place a
+// version can be chosen honestly.
 
 namespace {
-// Builds a handler + app pair at a given negotiated wl_pointer version.
+// A handler wired to an App, with no proxy: version defaults to the newest.
 struct ScrollFixture {
   wl::PointerHandler<FakeScrollApp> ptr;
   FakeScrollApp app;
 
-  explicit ScrollFixture(uint32_t version) {
-    ptr.app_ = &app;
-    ptr.version_ = version;
-  }
+  ScrollFixture() { ptr.app_ = &app; }
 };
 }  // namespace
 
-TEST(PointerHandlerAxis, Value120PathOnSeat8) {
-  ScrollFixture f(8u);
+TEST(PointerHandlerAxis, Value120IsUsedVerbatim) {
+  ScrollFixture f;
 
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
   f.ptr.OnAxis(50u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
@@ -421,8 +424,8 @@ TEST(PointerHandlerAxis, Value120PathOnSeat8) {
   EXPECT_EQ(f.app.frames, 1);
 }
 
-TEST(PointerHandlerAxis, Value120WinsOverDiscreteOnSeat8) {
-  ScrollFixture f(8u);
+TEST(PointerHandlerAxis, Value120WinsOverDiscrete) {
+  ScrollFixture f;
 
   // A v8 compositor sends both for compatibility; a half-notch high-resolution
   // wheel reports value120 = 60 while axis_discrete rounds to 0.
@@ -436,8 +439,8 @@ TEST(PointerHandlerAxis, Value120WinsOverDiscreteOnSeat8) {
   EXPECT_EQ(f.app.axes[0].value120, 60) << "axis_discrete must be ignored";
 }
 
-TEST(PointerHandlerAxis, DiscretePathOnSeat5) {
-  ScrollFixture f(5u);
+TEST(PointerHandlerAxis, DiscreteIsTheFallbackWithoutValue120) {
+  ScrollFixture f;
 
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
   f.ptr.OnAxis(20u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(-10.0));
@@ -451,7 +454,7 @@ TEST(PointerHandlerAxis, DiscretePathOnSeat5) {
 }
 
 TEST(PointerHandlerAxis, ContinuousSourceSynthesizesValue120) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   // A finger swipe sends neither value120 nor discrete — 10 units per notch.
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_FINGER);
@@ -466,23 +469,13 @@ TEST(PointerHandlerAxis, ContinuousSourceSynthesizesValue120) {
             static_cast<uint32_t>(WL_POINTER_AXIS_SOURCE_FINGER));
 }
 
-TEST(PointerHandlerAxis, PreV5FlushesPerEventWithoutFrame) {
-  ScrollFixture f(4u);
-
-  // Version 4 has no frame, no source, no discrete: each axis stands alone.
-  f.ptr.OnAxis(10u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
-  ASSERT_EQ(f.app.axes.size(), 1u) << "pre-v5 must not wait for a frame";
-  EXPECT_EQ(f.app.axes[0].value120, 120);
-  EXPECT_EQ(f.app.axes[0].source, wl::kAxisSourceUnknown);
-  EXPECT_EQ(f.app.frames, 1) << "each pre-v5 event is its own implicit frame";
-
-  f.ptr.OnAxis(11u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
-  ASSERT_EQ(f.app.axes.size(), 2u);
-  EXPECT_EQ(f.app.axes[1].value120, 120) << "state must not carry over";
-}
+// The pre-version-5 per-event flush cannot be expressed here: without a proxy
+// the handler assumes the newest version, and a pre-v5 seat is precisely a
+// proxy at version 4.  See PointerAxisRoundtrip.PreV5SeatFlushesWithoutAFrame
+// in integration/test_pointer_axis_roundtrip.cpp.
 
 TEST(PointerHandlerAxis, MixedHorizontalAndVerticalInOneFrame) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
   f.ptr.OnAxis(60u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
@@ -502,7 +495,7 @@ TEST(PointerHandlerAxis, MixedHorizontalAndVerticalInOneFrame) {
 }
 
 TEST(PointerHandlerAxis, AccumulatesRepeatedEventsWithinAFrame) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
   f.ptr.OnAxis(70u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
@@ -518,7 +511,7 @@ TEST(PointerHandlerAxis, AccumulatesRepeatedEventsWithinAFrame) {
 }
 
 TEST(PointerHandlerAxis, StopDeliversZeroValueEvent) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_FINGER);
   f.ptr.OnAxisStop(80u, WL_POINTER_AXIS_VERTICAL_SCROLL);
@@ -532,7 +525,7 @@ TEST(PointerHandlerAxis, StopDeliversZeroValueEvent) {
 }
 
 TEST(PointerHandlerAxis, StopInTheSameFrameKeepsTheFinalDistance) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   // A finger lifting off can report its last movement and the stop together;
   // value120 and continuous must agree rather than contradict each other.
@@ -548,7 +541,7 @@ TEST(PointerHandlerAxis, StopInTheSameFrameKeepsTheFinalDistance) {
 }
 
 TEST(PointerHandlerAxis, HostileAccumulationSaturatesInsteadOfWrapping) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   // A compositor is free to pack any number of events into one frame; summing
   // them must not overflow into a scroll in the opposite direction.
@@ -564,7 +557,7 @@ TEST(PointerHandlerAxis, HostileAccumulationSaturatesInsteadOfWrapping) {
 }
 
 TEST(PointerHandlerAxis, HostileDiscreteSaturatesInsteadOfWrapping) {
-  ScrollFixture f(5u);
+  ScrollFixture f;
 
   // discrete * 120 overflows int32 for |discrete| > ~17.9M.
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
@@ -577,7 +570,7 @@ TEST(PointerHandlerAxis, HostileDiscreteSaturatesInsteadOfWrapping) {
 }
 
 TEST(PointerHandlerAxis, HostileContinuousDistanceSaturates) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   // wl_fixed_t maxes near 8.4e6 per event; enough of them in one frame would
   // push distance * 12 past int32 and make the narrowing conversion undefined.
@@ -591,7 +584,7 @@ TEST(PointerHandlerAxis, HostileContinuousDistanceSaturates) {
 }
 
 TEST(PointerHandlerAxis, FrameResetsAccumulator) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
   f.ptr.OnAxis(90u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
@@ -604,7 +597,7 @@ TEST(PointerHandlerAxis, FrameResetsAccumulator) {
 }
 
 TEST(PointerHandlerAxis, LeaveDropsPendingAccumulation) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
   f.ptr.OnAxis(100u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
@@ -617,7 +610,7 @@ TEST(PointerHandlerAxis, LeaveDropsPendingAccumulation) {
 }
 
 TEST(PointerHandlerAxis, OutOfRangeAxisIsIgnored) {
-  ScrollFixture f(8u);
+  ScrollFixture f;
 
   f.ptr.OnAxis(110u, 99u, Fixed(10.0));  // no such axis
   f.ptr.OnAxisValue120(99u, 120);
@@ -628,7 +621,6 @@ TEST(PointerHandlerAxis, OutOfRangeAxisIsIgnored) {
 
 TEST(PointerHandlerAxis, NullAppIsNoOp) {
   wl::PointerHandler<FakeScrollApp> ptr;  // app_ left null
-  ptr.version_ = 8u;
   ptr.OnAxis(0u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
   ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 120);
   ptr.OnFrame();  // no crash
@@ -639,7 +631,6 @@ TEST(PointerHandlerAxis, AppWithoutScrollHooksCompiles) {
   wl::PointerHandler<FakePointerApp> ptr;
   FakePointerApp app;
   ptr.app_ = &app;
-  ptr.version_ = 8u;
   ptr.OnAxis(0u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
   ptr.OnFrame();
   SUCCEED();
