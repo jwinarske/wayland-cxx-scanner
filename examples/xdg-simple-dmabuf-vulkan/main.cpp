@@ -237,8 +237,9 @@ uint32_t ParseDrmFormat(const char* name) noexcept {
 //
 // <wayland-client-protocol.h> exposes pre-built extern const wl_interface
 // symbols for every core Wayland interface.
-// wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
-// inline by <wl/seat.hpp> (already included above).
+// The wl_iface() definitions for every interface SeatManager binds (wl_seat,
+// wl_keyboard, wl_pointer, wl_touch) are provided inline by <wl/seat.hpp>
+// (already included above).
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wayland::client {
