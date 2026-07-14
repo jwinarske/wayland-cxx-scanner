@@ -23,6 +23,7 @@ subprojects/pugixml-*/
 subprojects/googletest-*/
 subprojects/gtest-*/
 subprojects/shadertoy-cxx/
+subprojects/imgui-*/
 subprojects/.wraplock
 
 # Editor / IDE artifacts

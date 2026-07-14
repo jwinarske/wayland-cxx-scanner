@@ -15,3 +15,8 @@ option('skia_examples', type: 'feature', value: 'disabled',
     description: 'Build the Skia-backed rendering examples (requires a Skia build; see scripts/build-skia.sh)')
 option('skia_prefix', type: 'string', value: '',
     description: 'Path to an out-of-tree Skia build prefix (headers reachable as include/core/..., static libs under lib/) used when Skia is not found via pkg-config')
+# Dear ImGui platform-backend example. Disabled by default for the same reason
+# as skia_examples: enabling it fetches and builds an out-of-tree dependency,
+# and examples=true alone must never do that.
+option('imgui_examples', type: 'feature', value: 'disabled',
+    description: 'Build the Dear ImGui platform-backend example (fetches Dear ImGui via subprojects/imgui.wrap unless a system imgui is found)')

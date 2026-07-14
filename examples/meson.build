@@ -42,6 +42,9 @@ subdir('sdl3-presentation-shm')
 # shadertoy uses subdir_done() internally if wayland-protocols/scanner/xkbcommon
 # or the shadertoy-cxx dependency are absent.
 subdir('shadertoy')
+# imgui is gated on the 'imgui_examples' feature (disabled by default, because
+# enabling it fetches Dear ImGui) and uses subdir_done() internally.
+subdir('imgui')
 
 # ── Skia-backed examples (opt-in) ─────────────────────────────────────────────
 #
