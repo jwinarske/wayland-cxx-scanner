@@ -55,21 +55,40 @@ function(wayland_cxx_generate)
         list(APPEND _flags "--emit-interface-tables")
     endif ()
 
-    add_custom_command(
-        OUTPUT  "${_out}"
-        COMMAND ${WAYLAND_CXX_SCANNER_EXECUTABLE}
-                --mode=${_g_MODE}
-                ${_flags}
-                "${_protocol}" "${_out}"
-        DEPENDS "${_protocol}" ${_scanner_dep}
-        COMMENT "Generating ${_g_OUTPUT} (${_g_MODE}) from ${_g_PROTOCOL}"
-        VERBATIM)
+    # Two targets can legitimately consume the same generated header — the seat
+    # and pointer-axis tests both include wayland_client.hpp — so emit the rule
+    # once and attach every caller to it.  Repeating add_custom_command for one
+    # OUTPUT is an error, and the generating target's name is global.  A second
+    # request for the same output that does not match the first is a mistake
+    # rather than a share, and says so instead of silently keeping one of them.
+    string(MAKE_C_IDENTIFIER "wlcxxgen_${_g_OUTPUT}" _gen_tgt)
+    set(_spec "${_out}|${_g_MODE}|${_flags}|${_protocol}")
+    get_property(_prev GLOBAL PROPERTY ${_gen_tgt}_spec)
+    if (_prev)
+        if (NOT "${_prev}" STREQUAL "${_spec}")
+            message(FATAL_ERROR
+                "wayland_cxx_generate: ${_g_OUTPUT} was already requested as\n"
+                "    ${_prev}\n"
+                "  and cannot also be generated as\n"
+                "    ${_spec}")
+        endif ()
+    else ()
+        set_property(GLOBAL PROPERTY ${_gen_tgt}_spec "${_spec}")
+        add_custom_command(
+            OUTPUT  "${_out}"
+            COMMAND ${WAYLAND_CXX_SCANNER_EXECUTABLE}
+                    --mode=${_g_MODE}
+                    ${_flags}
+                    "${_protocol}" "${_out}"
+            DEPENDS "${_protocol}" ${_scanner_dep}
+            COMMENT "Generating ${_g_OUTPUT} (${_g_MODE}) from ${_g_PROTOCOL}"
+            VERBATIM)
+        add_custom_target(${_gen_tgt} DEPENDS "${_out}")
+    endif ()
 
     if (_g_TARGET)
         # Attach the generated header to the consumer target: dep ordering +
         # the binary output dir on the include path.
-        string(MAKE_C_IDENTIFIER "wlcxxgen_${_g_OUTPUT}" _gen_tgt)
-        add_custom_target(${_gen_tgt} DEPENDS "${_out}")
         add_dependencies(${_g_TARGET} ${_gen_tgt})
         target_include_directories(${_g_TARGET} PRIVATE "${_out_dir}")
     endif ()
