@@ -24,6 +24,13 @@
 #include <cstring>  // strlen, memcpy
 #include <vector>
 
+namespace {
+// wl_fixed_t is 24.8 fixed point.
+wl_fixed_t Fixed(double v) {
+  return static_cast<wl_fixed_t>(v * 256.0);
+}
+}  // namespace
+
 // ── Minimal App stubs
 // ─────────────────────────────────────────────────────────
 
@@ -42,6 +49,24 @@ struct FakePointerApp {
     ++button_count;
   }
   void OnPointerLeave() { left = true; }
+};
+
+// App with only the scroll hooks — also proves an axis-only consumer still gets
+// a pointer bound (wl::detail::WantsPointer).
+struct FakeScrollApp {
+  std::vector<wl::PointerAxisEvent> axes;
+  int frames = 0;
+
+  void OnPointerAxis(const wl::PointerAxisEvent& ev) { axes.push_back(ev); }
+  void OnPointerFrame() { ++frames; }
+};
+
+// App that wants only the frame boundary — e.g. to coalesce one redraw per
+// pointer batch.  Must still get a pointer bound.
+struct FakeFrameOnlyApp {
+  int frames = 0;
+
+  void OnPointerFrame() { ++frames; }
 };
 
 // App with the full set of touch hooks.
@@ -347,19 +372,280 @@ TEST(PointerHandler, NullAppIsNoOp) {
 TEST(PointerHandler, WantsPointerDetectsHooks) {
   static_assert(wl::detail::WantsPointer<FakePointerApp>,
                 "App with pointer hooks should be detected");
+  static_assert(wl::detail::WantsPointer<FakeScrollApp>,
+                "App with only a scroll hook still needs a pointer");
+  static_assert(wl::detail::WantsPointer<FakeFrameOnlyApp>,
+                "App with only a frame hook still needs a pointer");
   static_assert(!wl::detail::WantsPointer<FakeSeatApp>,
                 "keyboard-only App must not request a pointer");
   SUCCEED();
 }
 
-// ── TouchHandler tests ───────────────────────────────────────────────────────
+// ── PointerHandler axis (scroll) tests ───────────────────────────────────────
+//
+// Each test pins one row of the version/source normalization table in
+// wl/pointer.hpp.  version_ stands in for the negotiated seat version, which a
+// live SeatManager sets from the seat proxy.
 
 namespace {
-// wl_fixed_t is 24.8 fixed point.
-wl_fixed_t Fixed(double v) {
-  return static_cast<wl_fixed_t>(v * 256.0);
-}
+// Builds a handler + app pair at a given negotiated wl_pointer version.
+struct ScrollFixture {
+  wl::PointerHandler<FakeScrollApp> ptr;
+  FakeScrollApp app;
+
+  explicit ScrollFixture(uint32_t version) {
+    ptr.app_ = &app;
+    ptr.version_ = version;
+  }
+};
 }  // namespace
+
+TEST(PointerHandlerAxis, Value120PathOnSeat8) {
+  ScrollFixture f(8u);
+
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  f.ptr.OnAxis(50u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  f.ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 120);
+  EXPECT_TRUE(f.app.axes.empty()) << "axis must not be delivered before frame";
+
+  f.ptr.OnFrame();
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_EQ(f.app.axes[0].axis,
+            static_cast<uint32_t>(WL_POINTER_AXIS_VERTICAL_SCROLL));
+  EXPECT_EQ(f.app.axes[0].value120, 120);
+  EXPECT_DOUBLE_EQ(f.app.axes[0].continuous, 10.0);
+  EXPECT_EQ(f.app.axes[0].source,
+            static_cast<uint32_t>(WL_POINTER_AXIS_SOURCE_WHEEL));
+  EXPECT_EQ(f.app.axes[0].time, 50u);
+  EXPECT_FALSE(f.app.axes[0].stop);
+  EXPECT_EQ(f.app.frames, 1);
+}
+
+TEST(PointerHandlerAxis, Value120WinsOverDiscreteOnSeat8) {
+  ScrollFixture f(8u);
+
+  // A v8 compositor sends both for compatibility; a half-notch high-resolution
+  // wheel reports value120 = 60 while axis_discrete rounds to 0.
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  f.ptr.OnAxis(1u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(5.0));
+  f.ptr.OnAxisDiscrete(WL_POINTER_AXIS_VERTICAL_SCROLL, 0);
+  f.ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 60);
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_EQ(f.app.axes[0].value120, 60) << "axis_discrete must be ignored";
+}
+
+TEST(PointerHandlerAxis, DiscretePathOnSeat5) {
+  ScrollFixture f(5u);
+
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  f.ptr.OnAxis(20u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(-10.0));
+  f.ptr.OnAxisDiscrete(WL_POINTER_AXIS_VERTICAL_SCROLL, -1);
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_EQ(f.app.axes[0].value120, -120) << "one notch up == -120";
+  EXPECT_DOUBLE_EQ(f.app.axes[0].continuous, -10.0);
+  EXPECT_EQ(f.app.frames, 1);
+}
+
+TEST(PointerHandlerAxis, ContinuousSourceSynthesizesValue120) {
+  ScrollFixture f(8u);
+
+  // A finger swipe sends neither value120 nor discrete — 10 units per notch.
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_FINGER);
+  f.ptr.OnAxis(30u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(5.0));
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_EQ(f.app.axes[0].value120, 60) << "half a notch";
+  EXPECT_DOUBLE_EQ(f.app.axes[0].continuous, 5.0)
+      << "raw distance must pass through for smooth scrolling";
+  EXPECT_EQ(f.app.axes[0].source,
+            static_cast<uint32_t>(WL_POINTER_AXIS_SOURCE_FINGER));
+}
+
+TEST(PointerHandlerAxis, PreV5FlushesPerEventWithoutFrame) {
+  ScrollFixture f(4u);
+
+  // Version 4 has no frame, no source, no discrete: each axis stands alone.
+  f.ptr.OnAxis(10u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  ASSERT_EQ(f.app.axes.size(), 1u) << "pre-v5 must not wait for a frame";
+  EXPECT_EQ(f.app.axes[0].value120, 120);
+  EXPECT_EQ(f.app.axes[0].source, wl::kAxisSourceUnknown);
+  EXPECT_EQ(f.app.frames, 1) << "each pre-v5 event is its own implicit frame";
+
+  f.ptr.OnAxis(11u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  ASSERT_EQ(f.app.axes.size(), 2u);
+  EXPECT_EQ(f.app.axes[1].value120, 120) << "state must not carry over";
+}
+
+TEST(PointerHandlerAxis, MixedHorizontalAndVerticalInOneFrame) {
+  ScrollFixture f(8u);
+
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  f.ptr.OnAxis(60u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  f.ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 120);
+  f.ptr.OnAxis(60u, WL_POINTER_AXIS_HORIZONTAL_SCROLL, Fixed(-10.0));
+  f.ptr.OnAxisValue120(WL_POINTER_AXIS_HORIZONTAL_SCROLL, -120);
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 2u) << "one event per scrolled axis";
+  EXPECT_EQ(f.app.axes[0].axis,
+            static_cast<uint32_t>(WL_POINTER_AXIS_VERTICAL_SCROLL));
+  EXPECT_EQ(f.app.axes[0].value120, 120);
+  EXPECT_EQ(f.app.axes[1].axis,
+            static_cast<uint32_t>(WL_POINTER_AXIS_HORIZONTAL_SCROLL));
+  EXPECT_EQ(f.app.axes[1].value120, -120);
+  EXPECT_EQ(f.app.frames, 1) << "one frame regardless of axis count";
+}
+
+TEST(PointerHandlerAxis, AccumulatesRepeatedEventsWithinAFrame) {
+  ScrollFixture f(8u);
+
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  f.ptr.OnAxis(70u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  f.ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 120);
+  f.ptr.OnAxis(71u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  f.ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 120);
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u) << "one event per axis per frame";
+  EXPECT_EQ(f.app.axes[0].value120, 240);
+  EXPECT_DOUBLE_EQ(f.app.axes[0].continuous, 20.0);
+  EXPECT_EQ(f.app.axes[0].time, 71u) << "latest timestamp wins";
+}
+
+TEST(PointerHandlerAxis, StopDeliversZeroValueEvent) {
+  ScrollFixture f(8u);
+
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_FINGER);
+  f.ptr.OnAxisStop(80u, WL_POINTER_AXIS_VERTICAL_SCROLL);
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_TRUE(f.app.axes[0].stop);
+  EXPECT_EQ(f.app.axes[0].value120, 0) << "a lone stop accumulated no distance";
+  EXPECT_DOUBLE_EQ(f.app.axes[0].continuous, 0.0);
+  EXPECT_EQ(f.app.axes[0].time, 80u);
+}
+
+TEST(PointerHandlerAxis, StopInTheSameFrameKeepsTheFinalDistance) {
+  ScrollFixture f(8u);
+
+  // A finger lifting off can report its last movement and the stop together;
+  // value120 and continuous must agree rather than contradict each other.
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_FINGER);
+  f.ptr.OnAxis(85u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(5.0));
+  f.ptr.OnAxisStop(85u, WL_POINTER_AXIS_VERTICAL_SCROLL);
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_TRUE(f.app.axes[0].stop);
+  EXPECT_EQ(f.app.axes[0].value120, 60) << "the last 5.0 must not be dropped";
+  EXPECT_DOUBLE_EQ(f.app.axes[0].continuous, 5.0);
+}
+
+TEST(PointerHandlerAxis, HostileAccumulationSaturatesInsteadOfWrapping) {
+  ScrollFixture f(8u);
+
+  // A compositor is free to pack any number of events into one frame; summing
+  // them must not overflow into a scroll in the opposite direction.
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  for (int i = 0; i < 3; ++i) {
+    f.ptr.OnAxis(120u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(1.0));
+    f.ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, INT32_MAX);
+  }
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_EQ(f.app.axes[0].value120, INT32_MAX) << "saturate, never wrap";
+}
+
+TEST(PointerHandlerAxis, HostileDiscreteSaturatesInsteadOfWrapping) {
+  ScrollFixture f(5u);
+
+  // discrete * 120 overflows int32 for |discrete| > ~17.9M.
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  f.ptr.OnAxis(130u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(1.0));
+  f.ptr.OnAxisDiscrete(WL_POINTER_AXIS_VERTICAL_SCROLL, 20000000);
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_EQ(f.app.axes[0].value120, INT32_MAX);
+}
+
+TEST(PointerHandlerAxis, HostileContinuousDistanceSaturates) {
+  ScrollFixture f(8u);
+
+  // wl_fixed_t maxes near 8.4e6 per event; enough of them in one frame would
+  // push distance * 12 past int32 and make the narrowing conversion undefined.
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_FINGER);
+  for (int i = 0; i < 40; ++i)
+    f.ptr.OnAxis(140u, WL_POINTER_AXIS_VERTICAL_SCROLL, INT32_MAX);
+  f.ptr.OnFrame();
+
+  ASSERT_EQ(f.app.axes.size(), 1u);
+  EXPECT_EQ(f.app.axes[0].value120, INT32_MAX);
+}
+
+TEST(PointerHandlerAxis, FrameResetsAccumulator) {
+  ScrollFixture f(8u);
+
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  f.ptr.OnAxis(90u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  f.ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 120);
+  f.ptr.OnFrame();
+  f.ptr.OnFrame();  // empty frame
+
+  EXPECT_EQ(f.app.axes.size(), 1u) << "a second frame must not re-deliver";
+  EXPECT_EQ(f.app.frames, 2);
+}
+
+TEST(PointerHandlerAxis, LeaveDropsPendingAccumulation) {
+  ScrollFixture f(8u);
+
+  f.ptr.OnAxisSource(WL_POINTER_AXIS_SOURCE_WHEEL);
+  f.ptr.OnAxis(100u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  f.ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 120);
+  f.ptr.OnLeave(5u, nullptr);
+  f.ptr.OnFrame();
+
+  EXPECT_TRUE(f.app.axes.empty())
+      << "scroll accumulated before leave must not land on the next surface";
+}
+
+TEST(PointerHandlerAxis, OutOfRangeAxisIsIgnored) {
+  ScrollFixture f(8u);
+
+  f.ptr.OnAxis(110u, 99u, Fixed(10.0));  // no such axis
+  f.ptr.OnAxisValue120(99u, 120);
+  f.ptr.OnFrame();
+
+  EXPECT_TRUE(f.app.axes.empty());
+}
+
+TEST(PointerHandlerAxis, NullAppIsNoOp) {
+  wl::PointerHandler<FakeScrollApp> ptr;  // app_ left null
+  ptr.version_ = 8u;
+  ptr.OnAxis(0u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  ptr.OnAxisValue120(WL_POINTER_AXIS_VERTICAL_SCROLL, 120);
+  ptr.OnFrame();  // no crash
+}
+
+TEST(PointerHandlerAxis, AppWithoutScrollHooksCompiles) {
+  // FakePointerApp defines no axis hook; the handler must swallow the events.
+  wl::PointerHandler<FakePointerApp> ptr;
+  FakePointerApp app;
+  ptr.app_ = &app;
+  ptr.version_ = 8u;
+  ptr.OnAxis(0u, WL_POINTER_AXIS_VERTICAL_SCROLL, Fixed(10.0));
+  ptr.OnFrame();
+  SUCCEED();
+}
+
+// ── TouchHandler tests ───────────────────────────────────────────────────────
 
 TEST(TouchHandler, TracksTenConcurrentContacts) {
   wl::TouchHandler<FakeTouchApp> t;
