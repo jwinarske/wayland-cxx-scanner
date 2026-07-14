@@ -442,8 +442,9 @@ else
     warning('wayland-client/server not found — skipping test_arg_collision')
 endif
 
-# ── seat/keyboard handler test ───────────────────────────────────────────────
-# Requires wayland-scanner (for wayland.xml) and xkbcommon.
+# ── Tests built on the generated core-Wayland client header ──────────────────
+# Both need wayland.xml from wayland-scanner; seat.hpp pulls in keyboard.hpp,
+# so both also need xkbcommon.
 _xkbcommon_dep = dependency('xkbcommon', required: false)
 
 if _wl_scanner_dep.found() and _xkbcommon_dep.found()
@@ -456,6 +457,7 @@ if _wl_scanner_dep.found() and _xkbcommon_dep.found()
         command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
     )
 
+    # seat/keyboard/pointer/touch handler unit test.
     _test_seat_exe = executable(
         'test_seat',
         ['unit/test_seat.cpp', wayland_client_hdr],
@@ -471,6 +473,30 @@ if _wl_scanner_dep.found() and _xkbcommon_dep.found()
         suite: 'unit',
         env: ['SRCDIR=' + meson.project_source_root()],
     )
+
+    # Live wl_pointer scroll dispatch over a socketpair — the only tier that
+    # drives the generated axis thunks through the real C listener ABI, and the
+    # only one where the wl_pointer version is really negotiated.  Needs the
+    # server library for the test compositor.
+    if wayland_client_dep.found() and wayland_server_dep.found()
+        _test_pointer_axis_exe = executable(
+            'test_pointer_axis_roundtrip',
+            ['integration/test_pointer_axis_roundtrip.cpp', wayland_client_hdr],
+            include_directories: _inc,
+            dependencies: _deps + [gtest_main_dep, _xkbcommon_dep],
+        )
+        test('pointer_axis_roundtrip', _test_pointer_axis_exe,
+            args: [
+                '--gtest_output=xml:results/test_pointer_axis_roundtrip.xml',
+                '--gtest_color=yes',
+            ],
+            timeout: 60,
+            suite: 'integration',
+            env: ['SRCDIR=' + meson.project_source_root()],
+        )
+    else
+        warning('wayland-client/server not found — skipping test_pointer_axis_roundtrip')
+    endif
 else
-    warning('wayland-scanner or xkbcommon not found — skipping test_seat')
+    warning('wayland-scanner or xkbcommon not found — skipping test_seat and test_pointer_axis_roundtrip')
 endif
