@@ -120,7 +120,9 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     target_link_libraries(agl_compositor PRIVATE PkgConfig::wayland_client PkgConfig::xkbcommon)
     wlcxx_gen(agl_compositor agl-presentation-shm wayland_client.hpp   ${WAYLAND_XML})
     wlcxx_gen(agl_compositor agl-presentation-shm xdg_shell_client.hpp ${XDG_SHELL_XML})
-    wlcxx_gen(agl_compositor agl-presentation-shm agl_shell_client.hpp ${AGL_SHELL_XML})
+    # agl_shell has no pre-built wl_interface symbol, so its header carries the
+    # tables (TABLES -> --emit-interface-tables).
+    wlcxx_gen(agl_compositor agl-presentation-shm agl_shell_client.hpp ${AGL_SHELL_XML} TABLES)
 endif ()
 
 # ── ivi-presentation-shm ─────────────────────────────────────────────────────

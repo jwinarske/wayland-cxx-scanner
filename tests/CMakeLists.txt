@@ -86,12 +86,15 @@ endforeach()
 
 # ── Protocol-handler / generated-header tests ────────────────────────────────
 
-# agl_shell — agl-shell.xml is bundled, so no external deps.
+# agl_shell — agl-shell.xml is bundled, so no external deps.  agl_shell is not
+# in wayland-protocols and has no pre-built wl_interface symbol, so the header
+# has to carry its own tables.
 wlcxx_add_test(agl_shell 15 unit/test_agl_shell.cpp)
 wayland_cxx_generate(
     PROTOCOL ${PROJECT_SOURCE_DIR}/protocols/agl-shell.xml
     MODE     client-header
     OUTPUT   agl_shell_client.hpp
+    EMIT_INTERFACE_TABLES
     TARGET   test_agl_shell)
 
 # xdg_shell — needs wayland-protocols (xdg-shell.xml).
