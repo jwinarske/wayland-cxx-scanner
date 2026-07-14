@@ -47,7 +47,8 @@ presentation_time_client_hdr = custom_target(
     'presentation-shm-presentation-time-client-header',
     input:   presentation_time_xml,
     output:  'presentation_time_client.hpp',
-    command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
 )
 
 # ── Include paths ─────────────────────────────────────────────────────────────

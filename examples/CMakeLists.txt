@@ -111,7 +111,7 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     target_link_libraries(presentation_shm PRIVATE PkgConfig::wayland_client PkgConfig::xkbcommon)
     wlcxx_gen(presentation_shm presentation-shm wayland_client.hpp          ${WAYLAND_XML})
     wlcxx_gen(presentation_shm presentation-shm xdg_shell_client.hpp        ${XDG_SHELL_XML})
-    wlcxx_gen(presentation_shm presentation-shm presentation_time_client.hpp ${PRESENTATION_TIME_XML})
+    wlcxx_gen(presentation_shm presentation-shm presentation_time_client.hpp ${PRESENTATION_TIME_XML} TABLES)
 endif ()
 
 # ── agl-presentation-shm ─────────────────────────────────────────────────────
@@ -239,7 +239,7 @@ endif ()
 if (TARGET PkgConfig::sdl3 AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR)
     wlcxx_example(sdl3_presentation_shm sdl3-presentation-shm/main.cpp)
     target_link_libraries(sdl3_presentation_shm PRIVATE PkgConfig::wayland_client PkgConfig::sdl3)
-    wlcxx_gen(sdl3_presentation_shm sdl3-presentation-shm presentation_time_client.hpp ${PRESENTATION_TIME_XML})
+    wlcxx_gen(sdl3_presentation_shm sdl3-presentation-shm presentation_time_client.hpp ${PRESENTATION_TIME_XML} TABLES)
 endif ()
 
 # ── shadertoy — EGL and/or Vulkan variants, both need shadertoy-cxx ──────────

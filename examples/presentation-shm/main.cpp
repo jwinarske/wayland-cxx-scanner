@@ -57,7 +57,6 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iterator>
 #include <list>
 #include <memory>
 #include <string_view>
@@ -96,59 +95,6 @@ const wl_interface& wl_buffer_traits::wl_iface() noexcept {
 }
 
 }  // namespace wayland::client
-
-// ══════════════════════════════════════════════════════════════════════════════
-// wp_presentation / wp_presentation_feedback wl_interface definitions
-// ══════════════════════════════════════════════════════════════════════════════
-
-extern const wl_interface wp_presentation_iface_def;
-extern const wl_interface wp_presentation_feedback_iface_def;
-
-// NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays,
-//             cppcoreguidelines-avoid-non-const-global-variables,
-//             cppcoreguidelines-interfaces-global-init)
-static const wl_interface* presentation_time_types[] = {
-    nullptr,                              // [0] scalar
-    &wl_surface_interface,                // [1] feedback → surface arg
-    &wp_presentation_feedback_iface_def,  // [2] feedback → callback new_id
-    &wl_output_interface,                 // [3] sync_output → output
-};
-// NOLINTEND(cppcoreguidelines-avoid-c-arrays,
-//           cppcoreguidelines-avoid-non-const-global-variables,
-//           cppcoreguidelines-interfaces-global-init)
-
-// NOLINTBEGIN(cppcoreguidelines-avoid-c-arrays)
-static constexpr wl_message wp_presentation_requests[] = {
-    {"destroy", "", nullptr},
-    {"feedback", "on", &presentation_time_types[1]},
-};
-static constexpr wl_message wp_presentation_events[] = {
-    {"clock_id", "u", &presentation_time_types[0]},
-};
-static constexpr wl_message wp_presentation_feedback_events[] = {
-    {"sync_output", "o", &presentation_time_types[3]},
-    {"presented", "uuuuuuu", &presentation_time_types[0]},
-    {"discarded", "", nullptr},
-};
-// NOLINTEND(cppcoreguidelines-avoid-c-arrays)
-
-// clang-format off
-const wl_interface wp_presentation_iface_def = {
-    "wp_presentation",          2,
-    2, std::data(wp_presentation_requests),          1, std::data(wp_presentation_events)};
-const wl_interface wp_presentation_feedback_iface_def = {
-    "wp_presentation_feedback", 2,
-    0, nullptr,                                      3, std::data(wp_presentation_feedback_events)};
-// clang-format on
-
-namespace presentation_time::client {
-const wl_interface& wp_presentation_traits::wl_iface() noexcept {
-  return wp_presentation_iface_def;
-}
-const wl_interface& wp_presentation_feedback_traits::wl_iface() noexcept {
-  return wp_presentation_feedback_iface_def;
-}
-}  // namespace presentation_time::client
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Shared-memory helper
