@@ -71,7 +71,9 @@ extern "C" {
 //
 // The wl_iface() definitions for every interface SeatManager binds (wl_seat,
 // wl_keyboard, wl_pointer, wl_touch) are provided inline by <wl/seat.hpp>.
-// agl_shell_traits::wl_iface() is provided inline by <wl/agl_shell.hpp>.
+// agl_shell_traits::wl_iface() and the agl_shell interface tables come from the
+// generated agl_shell_client.hpp, which is built with --emit-interface-tables
+// because agl_shell has no pre-built system symbol.
 // All xdg_shell_traits::wl_iface() implementations are provided inline by
 // <wl/xdg_shell.hpp>.
 // ══════════════════════════════════════════════════════════════════════════════

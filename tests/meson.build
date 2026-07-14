@@ -77,7 +77,8 @@ agl_shell_client_hdr = custom_target(
     'test-agl-shell-client-header',
     input:   meson.project_source_root() / 'protocols' / 'agl-shell.xml',
     output:  'agl_shell_client.hpp',
-    command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
 )
 
 _test_agl_shell_exe = executable(
