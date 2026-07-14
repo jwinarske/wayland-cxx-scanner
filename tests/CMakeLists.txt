@@ -68,6 +68,7 @@ foreach(spec
     "codegen_server|unit/test_codegen_server_cxx.cpp|30"
     "codegen_interface_tables|unit/test_codegen_interface_tables.cpp|30"
     "event_map|unit/test_event_map.cpp|15"
+    "present_feedback|unit/test_present_feedback.cpp|15"
     "scale_policy|unit/test_scale_policy.cpp|15"
     "proxy|unit/test_proxy.cpp|15"
     "resource_impl|unit/test_resource_impl.cpp|15"
@@ -176,4 +177,111 @@ if (WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
     target_link_libraries(test_seat PRIVATE PkgConfig::xkbcommon)
 else ()
     message(STATUS "wayland-scanner or xkbcommon not found — skipping test_seat")
+endif ()
+
+# ── Live-dispatch tier ───────────────────────────────────────────────────────
+# Each of these drives libwayland across a socketpair so the generated code is
+# invoked through the real C listener ABI.  It is the only tier that catches a
+# wrong-width or misrouted argument slot, and the defects it catches are silent
+# without a sanitizer, so it must exist in both builds rather than Meson alone.
+
+if (TARGET PkgConfig::wayland_client AND TARGET PkgConfig::wayland_server)
+    # event_new_id_roundtrip — new_id delivered through an event.
+    wlcxx_add_test(event_new_id_roundtrip 60
+        integration/test_event_new_id_roundtrip.cpp)
+    wayland_cxx_generate(
+        PROTOCOL ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal_new_id_event.xml
+        MODE     client-header
+        OUTPUT   thingy_client.hpp
+        EMIT_INTERFACE_TABLES
+        TARGET   test_event_new_id_roundtrip)
+
+    # server_event_new_id_roundtrip — the same, in the server direction.  Only
+    # the server header carries tables; the client bridges to them.
+    wlcxx_add_test(server_event_new_id_roundtrip 60
+        integration/test_server_event_new_id_roundtrip.cpp)
+    wayland_cxx_generate(
+        PROTOCOL ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal_new_id_event.xml
+        MODE     server-header
+        OUTPUT   srv_thingy_server.hpp
+        EMIT_INTERFACE_TABLES
+        TARGET   test_server_event_new_id_roundtrip)
+    wayland_cxx_generate(
+        PROTOCOL ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/minimal_new_id_event.xml
+        MODE     client-header
+        OUTPUT   srv_thingy_client.hpp
+        TARGET   test_server_event_new_id_roundtrip)
+else ()
+    message(STATUS
+        "wayland-client/server not found — skipping the new_id roundtrip tests")
+endif ()
+
+# data_device_roundtrip — core wl_data_device selection over the wire.
+if (WAYLAND_SCANNER_DIR
+    AND TARGET PkgConfig::wayland_client AND TARGET PkgConfig::wayland_server)
+    wlcxx_add_test(data_device_roundtrip 60
+        integration/test_data_device_roundtrip.cpp)
+    wayland_cxx_generate(
+        PROTOCOL ${WAYLAND_SCANNER_DIR}/wayland.xml
+        MODE     client-header
+        OUTPUT   dd_client.hpp
+        EMIT_INTERFACE_TABLES
+        TARGET   test_data_device_roundtrip)
+else ()
+    message(STATUS "deps missing — skipping test_data_device_roundtrip")
+endif ()
+
+# data_control_roundtrip — the same helper driven by ext-data-control, proving
+# it is protocol-agnostic.  Needs core wayland.xml for wl_seat as well.
+if (WAYLAND_SCANNER_DIR AND WAYLAND_PROTOCOLS_DIR
+    AND TARGET PkgConfig::wayland_client AND TARGET PkgConfig::wayland_server)
+    wlcxx_add_test(data_control_roundtrip 60
+        integration/test_data_control_roundtrip.cpp)
+    wayland_cxx_generate(
+        PROTOCOL ${WAYLAND_SCANNER_DIR}/wayland.xml
+        MODE     client-header
+        OUTPUT   dc_client.hpp
+        EMIT_INTERFACE_TABLES
+        TARGET   test_data_control_roundtrip)
+    wayland_cxx_generate(
+        PROTOCOL ${WAYLAND_PROTOCOLS_DIR}/staging/ext-data-control/ext-data-control-v1.xml
+        MODE     client-header
+        OUTPUT   dc_ext_client.hpp
+        EMIT_INTERFACE_TABLES
+        TARGET   test_data_control_roundtrip)
+else ()
+    message(STATUS "deps missing — skipping test_data_control_roundtrip")
+endif ()
+
+# dmabuf_feedback_roundtrip — the feedback helper against a real compositor's
+# event sequence.
+if (WAYLAND_PROTOCOLS_DIR
+    AND TARGET PkgConfig::wayland_client AND TARGET PkgConfig::wayland_server)
+    wlcxx_add_test(dmabuf_feedback_roundtrip 60
+        integration/test_dmabuf_feedback_roundtrip.cpp)
+    wayland_cxx_generate(
+        PROTOCOL ${WAYLAND_PROTOCOLS_DIR}/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml
+        MODE     client-header
+        OUTPUT   ldbf_client.hpp
+        EMIT_INTERFACE_TABLES
+        TARGET   test_dmabuf_feedback_roundtrip)
+else ()
+    message(STATUS "deps missing — skipping test_dmabuf_feedback_roundtrip")
+endif ()
+
+# pointer_axis_roundtrip — wl_pointer scroll through the generated thunks, at a
+# genuinely negotiated seat version.  seat.hpp pulls in keyboard.hpp, hence
+# xkbcommon.
+if (WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
+    AND TARGET PkgConfig::wayland_client AND TARGET PkgConfig::wayland_server)
+    wlcxx_add_test(pointer_axis_roundtrip 60
+        integration/test_pointer_axis_roundtrip.cpp)
+    wayland_cxx_generate(
+        PROTOCOL ${WAYLAND_SCANNER_DIR}/wayland.xml
+        MODE     client-header
+        OUTPUT   wayland_client.hpp
+        TARGET   test_pointer_axis_roundtrip)
+    target_link_libraries(test_pointer_axis_roundtrip PRIVATE PkgConfig::xkbcommon)
+else ()
+    message(STATUS "deps missing — skipping test_pointer_axis_roundtrip")
 endif ()
