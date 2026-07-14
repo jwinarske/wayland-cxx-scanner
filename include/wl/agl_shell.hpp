@@ -22,25 +22,35 @@
 // ────────────────────────────────────────────────────────
 //
 // Generic CRTP handler template (namespace wl):
-//   wl::AglShellHandler<App> — delegates all three events to App:
-//     bound_ok   → App::OnAglBoundOk()
-//     bound_fail → App::OnAglBoundFail()
-//     app_state  → App::OnAglAppState(const char* app_id, uint32_t state)
+//   wl::AglShellHandler<App> — delegates agl_shell's events to App:
+//     bound_ok      → App::OnAglBoundOk()
+//     bound_fail    → App::OnAglBoundFail()
+//     app_state     → App::OnAglAppState(const char* app_id, uint32_t state)
+//     app_on_output → App::OnAglAppOnOutput(const char* app_id,
+//                                           const char* output_name)
 //
-//   App must expose:
+//   App must expose, because binding is not resolved until one of the first two
+//   arrives and app_state is sent from version 3:
 //     void OnAglBoundOk();
 //     void OnAglBoundFail();
 //     void OnAglAppState(const char* app_id, uint32_t state);
+//
+//   Optionally, detected via SFINAE — app_on_output only exists from version 8,
+//   and a shell that does not track which output an app landed on has no use
+//   for it:
+//     void OnAglAppOnOutput(const char* app_id, const char* output_name);
 #pragma once
 
 #include <wl/wl_ptr.hpp>
 
 #include <cstdint>
+#include <type_traits>
+#include <utility>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Generic AGL shell CRTP handler template (namespace wl)
 //
-// Delegates all three agl_shell events to an application class.  Include the
+// Delegates the agl_shell events to an application class.  Include the
 // generated agl_shell_client.hpp before this header so that CAglShell<> is
 // visible.
 //
@@ -52,15 +62,18 @@
 //     void OnAglBoundOk()   { /* compositor accepted; proceed */ }
 //     void OnAglBoundFail() { /* another shell active; exit */ }
 //     void OnAglAppState(const char* app_id, uint32_t state) { /* log */ }
+//     // optional, version 8+:
+//     void OnAglAppOnOutput(const char* app_id, const char* output_name) {}
 //   };
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wl {
 
-/// AGL shell handler — delegates all events to App.
+/// AGL shell handler — delegates events to App.
 ///
 /// @tparam App  Application class providing OnAglBoundOk(), OnAglBoundFail(),
-///              and OnAglAppState(const char*, uint32_t).
+///              and OnAglAppState(const char*, uint32_t); optionally
+///              OnAglAppOnOutput(const char*, const char*).
 template <typename App>
 class AglShellHandler
     : public agl_shell::client::CAglShell<AglShellHandler<App>> {
@@ -81,6 +94,23 @@ class AglShellHandler
     if (app_)
       app_->OnAglAppState(app_id, state);
   }
+
+  void OnAppOnOutput(const char* app_id, const char* output_name) override {
+    if (app_)
+      CallAppOnOutput(app_id, output_name);
+  }
+
+ private:
+  // Optional, unlike the events above: app_on_output arrives only from version
+  // 8, so requiring it would break every App written against an older shell for
+  // an event their compositor may never send.
+  template <typename A = App>
+  auto CallAppOnOutput(const char* app_id, const char* output_name)
+      -> decltype(std::declval<A&>().OnAglAppOnOutput(app_id, output_name),
+                  void()) {
+    app_->OnAglAppOnOutput(app_id, output_name);
+  }
+  void CallAppOnOutput(...) noexcept {}
 };
 
 }  // namespace wl

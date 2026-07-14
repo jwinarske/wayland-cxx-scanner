@@ -33,6 +33,20 @@ struct FakeAglApp {
   }
 };
 
+// App that also takes the optional version-8 app_on_output hook.
+struct FakeAglAppOnOutput {
+  std::string last_app_id;
+  std::string last_output;
+
+  void OnAglBoundOk() {}
+  void OnAglBoundFail() {}
+  void OnAglAppState(const char*, uint32_t) {}
+  void OnAglAppOnOutput(const char* app_id, const char* output_name) {
+    last_app_id = app_id ? app_id : "";
+    last_output = output_name ? output_name : "";
+  }
+};
+
 // ── AglShellHandler tests
 // ─────────────────────────────────────────────────────
 
@@ -83,4 +97,32 @@ TEST(AglShellHandler, OnAppStateDelegatesToApp) {
   h.OnAppState("com.example.app", 2u);
   EXPECT_EQ(app.last_app_id, "com.example.app");
   EXPECT_EQ(app.last_state, 2u);
+}
+
+// ── app_on_output (version 8) ────────────────────────────────────────────────
+
+TEST(AglShellHandler, OnAppOnOutputDelegatesWhenTheAppTakesIt) {
+  wl::AglShellHandler<FakeAglAppOnOutput> h;
+  FakeAglAppOnOutput app;
+  h.app_ = &app;
+  h.OnAppOnOutput("com.example.app", "HDMI-A-1");
+  EXPECT_EQ(app.last_app_id, "com.example.app");
+  EXPECT_EQ(app.last_output, "HDMI-A-1");
+}
+
+TEST(AglShellHandler, OnAppOnOutputIsSwallowedWhenTheAppOmitsIt) {
+  // FakeAglApp predates version 8 and defines no OnAglAppOnOutput.  It must
+  // still compile and must not crash — a shell written against an older
+  // agl_shell cannot be forced to grow a hook to keep building.
+  wl::AglShellHandler<FakeAglApp> h;
+  FakeAglApp app;
+  h.app_ = &app;
+  h.OnAppOnOutput("com.example.app", "HDMI-A-1");
+  SUCCEED();
+}
+
+TEST(AglShellHandler, OnAppOnOutputWithNullAppIsNoOp) {
+  wl::AglShellHandler<FakeAglAppOnOutput> h;  // app_ left null
+  h.OnAppOnOutput("com.example.app", "HDMI-A-1");
+  SUCCEED();
 }
