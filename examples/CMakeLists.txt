@@ -125,6 +125,31 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     wlcxx_gen(agl_compositor agl-presentation-shm agl_shell_client.hpp ${AGL_SHELL_XML} TABLES)
 endif ()
 
+# ── agl-presentation-egl ─────────────────────────────────────────────────────
+# The EGL sibling of the above: agl_shell plus presentation-time feedback.
+if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
+    AND TARGET PkgConfig::egl AND TARGET PkgConfig::glesv2
+    AND TARGET PkgConfig::wayland_egl)
+    wlcxx_example(agl_presentation_egl agl-presentation-egl/main.cpp)
+    target_link_libraries(agl_presentation_egl PRIVATE PkgConfig::wayland_client
+        PkgConfig::egl PkgConfig::glesv2 PkgConfig::wayland_egl
+        PkgConfig::xkbcommon)
+    # The generated headers suppress unused virtual-method parameters with
+    # /* param */ comments, which some compiler versions still warn on under
+    # the outer -Werror.
+    target_compile_options(agl_presentation_egl PRIVATE -Wno-unused-parameter)
+    wlcxx_gen(agl_presentation_egl agl-presentation-egl wayland_client.hpp
+        ${WAYLAND_XML})
+    wlcxx_gen(agl_presentation_egl agl-presentation-egl xdg_shell_client.hpp
+        ${XDG_SHELL_XML})
+    # Neither agl_shell nor presentation-time has a pre-built wl_interface
+    # symbol, so both headers carry their own tables.
+    wlcxx_gen(agl_presentation_egl agl-presentation-egl agl_shell_client.hpp
+        ${AGL_SHELL_XML} TABLES)
+    wlcxx_gen(agl_presentation_egl agl-presentation-egl
+        presentation_time_client.hpp ${PRESENTATION_TIME_XML} TABLES)
+endif ()
+
 # ── ivi-presentation-shm ─────────────────────────────────────────────────────
 if (WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
     wlcxx_example(ivi_shell ivi-presentation-shm/main.cpp)
