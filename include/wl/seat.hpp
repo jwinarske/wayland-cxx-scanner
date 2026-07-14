@@ -20,9 +20,10 @@
 //
 // wl_iface() implementations (namespace wayland::client):
 //   Inline out-of-line definitions of the pure-virtual wl_iface() methods
-//   declared in wl_seat_traits and wl_keyboard_traits (wayland_client.hpp).
-//   Including this header replaces the manual definitions that every example
-//   previously duplicated in its .cpp file.
+//   declared in wl_seat_traits, wl_keyboard_traits, wl_pointer_traits, and
+//   wl_touch_traits (wayland_client.hpp).  Including this header replaces the
+//   manual definitions that every example previously duplicated in its .cpp
+//   file.
 //
 // wl::SeatManager<App>:
 //   Bundles wl_seat + wl::KeyboardHandler<App> proxy ownership,
@@ -64,12 +65,16 @@ extern "C" {
 #include <cstdint>
 
 // ══════════════════════════════════════════════════════════════════════════════
-// wl_iface() implementations — wl_seat and wl_keyboard
+// wl_iface() implementations — every interface SeatManager binds
 //
 // <wayland-client-protocol.h> provides pre-built extern const wl_interface
 // symbols for every core Wayland interface.  We supply the inline out-of-line
 // definitions that the generated traits structs expect.  Making them `inline`
 // guarantees a single definition across all TUs (ODR-safe, C++17 §9.2.6).
+//
+// SeatManager creates the pointer and touch proxies itself, on a capability
+// change the App never sees, so their tables belong here next to the keyboard's
+// rather than in each App that happens to define a pointer or touch hook.
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wayland::client {
@@ -79,6 +84,12 @@ inline const wl_interface& wl_seat_traits::wl_iface() noexcept {
 }
 inline const wl_interface& wl_keyboard_traits::wl_iface() noexcept {
   return wl_keyboard_interface;
+}
+inline const wl_interface& wl_pointer_traits::wl_iface() noexcept {
+  return wl_pointer_interface;
+}
+inline const wl_interface& wl_touch_traits::wl_iface() noexcept {
+  return wl_touch_interface;
 }
 
 }  // namespace wayland::client

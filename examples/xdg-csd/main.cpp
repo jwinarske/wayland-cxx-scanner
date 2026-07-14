@@ -86,8 +86,8 @@ extern "C" {
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
 //
-// wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
-// inline by <wl/seat.hpp>.
+// The wl_iface() definitions for every interface SeatManager binds (wl_seat,
+// wl_keyboard, wl_pointer, wl_touch) are provided inline by <wl/seat.hpp>.
 // All xdg_shell traits are provided inline by <wl/xdg_shell.hpp>.
 // All xdg_decoration traits are provided inline by <wl/xdg_decoration.hpp>.
 // ══════════════════════════════════════════════════════════════════════════════
@@ -111,9 +111,6 @@ const wl_interface& wl_shm_traits::wl_iface() noexcept {
 }
 const wl_interface& wl_buffer_traits::wl_iface() noexcept {
   return wl_buffer_interface;
-}
-const wl_interface& wl_pointer_traits::wl_iface() noexcept {
-  return wl_pointer_interface;
 }
 
 }  // namespace wayland::client

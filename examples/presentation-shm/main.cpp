@@ -67,8 +67,9 @@ extern "C" {
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() — core Wayland interfaces
 //
-// wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
-// inline by <wl/seat.hpp> (already included above).
+// The wl_iface() definitions for every interface SeatManager binds (wl_seat,
+// wl_keyboard, wl_pointer, wl_touch) are provided inline by <wl/seat.hpp>
+// (already included above).
 // All xdg_shell traits wl_iface() implementations are provided inline by
 // <wl/xdg_shell.hpp> (already included above).
 // ══════════════════════════════════════════════════════════════════════════════

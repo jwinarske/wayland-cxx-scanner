@@ -61,8 +61,9 @@ extern "C" {
 //
 // <wayland-client-protocol.h> exposes pre-built extern const wl_interface
 // symbols for every core Wayland interface.
-// wl_seat_traits::wl_iface() and wl_keyboard_traits::wl_iface() are provided
-// inline by <wl/seat.hpp> (already included above).
+// The wl_iface() definitions for every interface SeatManager binds (wl_seat,
+// wl_keyboard, wl_pointer, wl_touch) are provided inline by <wl/seat.hpp>
+// (already included above).
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wayland::client {
@@ -144,6 +145,10 @@ class App {
   void OnToplevelConfigure(int32_t w, int32_t h);
   void OnToplevelClose();
   void OnKey(const wl::KeyEvent& ev);
+  /// Defining this hook is all it takes to receive scroll: SeatManager binds a
+  /// wl_pointer and wl::PointerHandler normalizes every wl_pointer version's
+  /// axis events down to value120 (120 == one wheel notch).
+  void OnPointerAxis(const wl::PointerAxisEvent& ev);
   /// Called by WlCallbackHandler::OnDone — render one frame and arm the next
   /// frame callback.
   void OnFrameReady(uint32_t time_ms) noexcept;
@@ -215,6 +220,7 @@ class App {
   int width_ = 800;
   int height_ = 600;
   uint64_t frame_ = 0;
+  int32_t scroll_value120_ = 0;  // accumulated scroll; 120 == one wheel notch
 
   // Globals recorded during registry scan
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
@@ -618,6 +624,15 @@ void App::OnToplevelClose() {
 void App::OnKey(const wl::KeyEvent& ev) {
   if (ev.key == KEY_ESC && ev.state == WL_KEYBOARD_KEY_STATE_PRESSED)
     running_ = false;
+}
+
+void App::OnPointerAxis(const wl::PointerAxisEvent& ev) {
+  // value120 is already normalized across every wl_pointer version and scroll
+  // source, so accumulating notches needs no version checks of its own.
+  scroll_value120_ += ev.value120;
+  std::printf("simple-egl: scroll %s value120=%+d (total %+d notches)%s\n",
+              ev.axis == WL_POINTER_AXIS_VERTICAL_SCROLL ? "vert" : "horiz",
+              ev.value120, scroll_value120_ / 120, ev.stop ? " stop" : "");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -71,7 +71,7 @@ extern "C" {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() definitions for the core interfaces this example touches.
-// (wl_seat / wl_keyboard come from <wl/seat.hpp>.)
+// (wl_seat / wl_keyboard / wl_pointer / wl_touch come from <wl/seat.hpp>.)
 // ══════════════════════════════════════════════════════════════════════════════
 namespace wayland::client {
 const wl_interface& wl_callback_traits::wl_iface() noexcept {
@@ -85,12 +85,6 @@ const wl_interface& wl_shm_traits::wl_iface() noexcept {
 }
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
-}
-const wl_interface& wl_pointer_traits::wl_iface() noexcept {
-  return wl_pointer_interface;
-}
-const wl_interface& wl_touch_traits::wl_iface() noexcept {
-  return wl_touch_interface;
 }
 }  // namespace wayland::client
 

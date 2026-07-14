@@ -55,7 +55,8 @@ agl_shell_client_hdr = custom_target(
     'agl-presentation-egl-agl-shell-client-header',
     input:   agl_shell_xml,
     output:  'agl_shell_client.hpp',
-    command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
 )
 
 # presentation-time is not in libwayland, so generate with

@@ -67,12 +67,6 @@ const wl_interface& wl_shm_traits::wl_iface() noexcept {
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
 }
-const wl_interface& wl_pointer_traits::wl_iface() noexcept {
-  return wl_pointer_interface;
-}
-const wl_interface& wl_touch_traits::wl_iface() noexcept {
-  return wl_touch_interface;
-}
 }  // namespace wayland::client
 
 class App;

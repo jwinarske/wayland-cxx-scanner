@@ -47,7 +47,8 @@ agl_shell_client_hdr = custom_target(
     'agl-compositor-agl-shell-client-header',
     input:   agl_shell_xml,
     output:  'agl_shell_client.hpp',
-    command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
 )
 
 # ── Include paths ─────────────────────────────────────────────────────────────
