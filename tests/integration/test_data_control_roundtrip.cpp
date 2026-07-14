@@ -272,6 +272,10 @@ TEST(DataControlRoundtrip, ExtProtocolSeparatesRegularAndPrimarySelections) {
   wl_display_disconnect(client);
   wl_display_terminate(server);
   server_thread.join();
+  // Reap the client explicitly: terminate can stop the loop before it processes
+  // the disconnect above, and wl_display_destroy does not destroy surviving
+  // clients, so their resources would leak on whichever run loses that race.
+  wl_display_destroy_clients(server);
   wl_display_destroy(server);
 }
 
