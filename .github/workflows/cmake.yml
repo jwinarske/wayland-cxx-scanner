@@ -292,6 +292,7 @@ jobs:
           sudo apt-get install -y \
             meson ninja-build cmake g++ \
             libwayland-dev wayland-protocols libpugixml-dev pkg-config \
+            libgtest-dev libgmock-dev \
             libxkbcommon-dev \
             libegl-dev libgles-dev \
             libvulkan-dev libdrm-dev \

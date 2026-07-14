@@ -97,12 +97,20 @@ done
 # hand-writes its interface tables and the other has the scanner emit them.
 # Examples and tests are both enabled so every call site is covered.
 echo "== Comparing scanner invocations =="
-meson setup "$WORK/gm" "$ROOT" -Dtests=true -Dexamples=true >/dev/null 2>&1 \
-    || fail "meson configure (tests+examples) failed"
-cmake -S "$ROOT" -B "$WORK/gc" -G Ninja \
-    -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON \
-    -DWAYLAND_CXX_SCANNER_BUILD_TESTS=ON >/dev/null 2>&1 \
-    || fail "cmake configure (tests+examples) failed"
+# Keep the configure logs: when this fails it is almost always a missing
+# dependency, and swallowing the reason turns a one-line fix into a CI round
+# trip.
+if ! meson setup "$WORK/gm" "$ROOT" -Dtests=true -Dexamples=true \
+        >"$WORK/gm.log" 2>&1; then
+    tail -20 "$WORK/gm.log" >&2
+    fail "meson configure (tests+examples) failed — see above"
+fi
+if ! cmake -S "$ROOT" -B "$WORK/gc" -G Ninja \
+        -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON \
+        -DWAYLAND_CXX_SCANNER_BUILD_TESTS=ON >"$WORK/gc.log" 2>&1; then
+    tail -20 "$WORK/gc.log" >&2
+    fail "cmake configure (tests+examples) failed — see above"
+fi
 
 # Pull "--mode=X [--flags] <path>.xml <output>" out of the generated ninja files.
 # Anchored on --mode= because the source tree path itself contains the string
