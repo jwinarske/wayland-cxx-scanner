@@ -73,6 +73,55 @@ jobs:
           name: test-results-ubuntu-${{ matrix.compiler }}-${{ matrix.std }}
           path: builddir/meson-logs/
 
+  sanitizers:
+    name: Sanitizers (ASan+UBSan, clang)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    env:
+      CC: clang-19
+      CXX: clang++-19
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            meson ninja-build \
+            clang-19 \
+            libwayland-dev \
+            wayland-protocols \
+            libpugixml-dev
+
+      # The live-dispatch roundtrip tests drive libwayland's real C listener
+      # ABI, where a wrong-width argument slot is a silent truncated load rather
+      # than a visible failure. They only catch that class of defect with a
+      # sanitizer attached, so this is the job that makes them mean something.
+      # Meson exports halt_on_error=1:abort_on_error=1 for the test runner.
+      - name: Configure
+        run: |
+          meson setup builddir \
+            -Db_sanitize=address,undefined \
+            -Dtests=true \
+            -Dexamples=false \
+            --wrap-mode=forcefallback
+
+      - name: Build
+        run: ninja -C builddir
+
+      - name: Test
+        run: meson test -C builddir --print-errorlogs
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-sanitizers
+          path: builddir/meson-logs/
+
   ime-backends:
     name: IME backend (${{ matrix.ime_backend }})
     runs-on: ubuntu-24.04
