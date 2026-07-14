@@ -8,7 +8,14 @@
 #   1. the installed framework header set AND contents,
 #   2. the installed wayland-cxx.pc,
 #   3. both install the scanner executable (tool-install parity),
-#   4. each ime_backend maps to the SAME WL_IME_BACKEND_* compile define.
+#   4. each ime_backend maps to the SAME WL_IME_BACKEND_* compile define,
+#   5. every protocol header both builds generate is generated with the SAME
+#      scanner flags.
+#
+# Check 5 exists because the first four all passed while the CMake build was
+# generating agl_shell_client.hpp without --emit-interface-tables and failing to
+# link: nothing here compared how the scanner is actually invoked, only what
+# ends up installed, and generated headers are not installed.
 #
 # Exits non-zero on any divergence. Runnable locally and from CI.
 set -euo pipefail
@@ -74,5 +81,83 @@ for bk in none text-input-v1 text-input-v3 input-method-v1 input-method-v2 virtu
     [ "$cdef" = "$mdef" ] || fail "ime_backend=$bk → Meson=$mdef CMake=$cdef"
     echo "OK: ime_backend=$bk → $cdef (both)"
 done
+
+# ── 5. Scanner invocation parity ─────────────────────────────────────────────
+# Both build systems invoke the scanner once per generated protocol header, and
+# the flags decide what the header contains.  Compare the invocations rather
+# than the outputs: the generated headers are not installed, so checks 1-3 never
+# see them, and a missing flag surfaces only as a link error in whichever build
+# forgot it.
+#
+# The key is (call site, protocol XML, output header) and the value is the flag
+# set.  The call site is the last directory of the output path — the example or
+# test name, which both builds agree on even though they lay out their build
+# trees differently.  It has to be part of the key: two examples may legitimately
+# generate the same header from the same XML with different flags, because one
+# hand-writes its interface tables and the other has the scanner emit them.
+# Examples and tests are both enabled so every call site is covered.
+echo "== Comparing scanner invocations =="
+meson setup "$WORK/gm" "$ROOT" -Dtests=true -Dexamples=true >/dev/null 2>&1 \
+    || fail "meson configure (tests+examples) failed"
+cmake -S "$ROOT" -B "$WORK/gc" -G Ninja \
+    -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON \
+    -DWAYLAND_CXX_SCANNER_BUILD_TESTS=ON >/dev/null 2>&1 \
+    || fail "cmake configure (tests+examples) failed"
+
+# Pull "--mode=X [--flags] <path>.xml <output>" out of the generated ninja files.
+# Anchored on --mode= because the source tree path itself contains the string
+# "wayland-cxx-scanner" and would otherwise match.
+scanner_invocations() {
+    grep -ohE -- "--mode=[a-z-]+( --[a-z-]+)* [^ ]+\.xml [^ &|]+" "$1/build.ninja" \
+    | awk '{
+        xml = ""; out = ""; flags = "";
+        for (i = 1; i <= NF; i++) {
+            if ($i ~ /^--/)         { flags = flags " " $i }
+            else if ($i ~ /\.xml$/) { n = split($i, a, "/"); xml = a[n] }
+            else {
+                # Keep the last two path components: "<call site>/<header>".
+                n = split($i, a, "/");
+                out = (n > 1 ? a[n-1] "/" a[n] : a[n]);
+            }
+        }
+        print out " from " xml ":" flags
+    }' | sort -u
+}
+
+scanner_invocations "$WORK/gm" > "$WORK/inv.meson"
+scanner_invocations "$WORK/gc" > "$WORK/inv.cmake"
+[ -s "$WORK/inv.meson" ] || fail "no scanner invocations found in the Meson build"
+[ -s "$WORK/inv.cmake" ] || fail "no scanner invocations found in the CMake build"
+
+# Compare flags only where both builds generate the same header from the same
+# XML.  A header only one build generates is reported, not failed: the two
+# builds legitimately cover different sets of examples and tests today.
+cut -d: -f1 "$WORK/inv.meson" | sort -u > "$WORK/keys.meson"
+cut -d: -f1 "$WORK/inv.cmake" | sort -u > "$WORK/keys.cmake"
+comm -12 "$WORK/keys.meson" "$WORK/keys.cmake" > "$WORK/keys.shared"
+
+divergent=0
+while read -r key; do
+    # No quotes around the greps' failure: a key comes from these same files, so
+    # a miss means the extraction is broken, not that the flags differ — but
+    # `set -e` would kill the script silently rather than say so.
+    mflags="$(grep -F "$key:" "$WORK/inv.meson" | sed 's/^[^:]*://' | sort -u)" \
+        || fail "key vanished from the Meson invocation list: $key"
+    cflags="$(grep -F "$key:" "$WORK/inv.cmake" | sed 's/^[^:]*://' | sort -u)" \
+        || fail "key vanished from the CMake invocation list: $key"
+    if [ "$mflags" != "$cflags" ]; then
+        echo "  DIVERGED: $key" >&2
+        echo "      Meson:$mflags" >&2
+        echo "      CMake:$cflags" >&2
+        divergent=1
+    fi
+done < "$WORK/keys.shared"
+[ "$divergent" -eq 0 ] || fail "scanner flags differ between Meson and CMake"
+echo "OK: scanner flags identical for all $(wc -l < "$WORK/keys.shared") shared protocol headers"
+
+# Informational: not a failure, but the asymmetry should be visible rather than
+# silently absorbed.
+comm -23 "$WORK/keys.meson" "$WORK/keys.cmake" | sed 's/^/  only Meson generates: /'
+comm -13 "$WORK/keys.meson" "$WORK/keys.cmake" | sed 's/^/  only CMake generates: /'
 
 echo "ALL DUAL-BUILD SYNC CHECKS PASSED"

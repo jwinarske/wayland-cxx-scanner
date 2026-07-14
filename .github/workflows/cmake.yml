@@ -283,14 +283,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The example dependencies are needed even though the gate builds nothing:
+      # an example whose deps are missing is configured out of both builds, and
+      # a scanner call site that is not configured cannot be compared.
       - name: Install dependencies
         run: |
           sudo apt-get update -q
           sudo apt-get install -y \
             meson ninja-build cmake g++ \
-            libwayland-dev wayland-protocols libpugixml-dev pkg-config
+            libwayland-dev wayland-protocols libpugixml-dev pkg-config \
+            libxkbcommon-dev \
+            libegl-dev libgles-dev \
+            libvulkan-dev libdrm-dev \
+            libgtk-3-dev libcairo2-dev libpango1.0-dev
 
       # Asserts both builds install the same headers + wayland-cxx.pc, both
-      # install the exe, and map every ime_backend to the same compile define.
+      # install the exe, map every ime_backend to the same compile define, and
+      # invoke the scanner with the same flags for every shared protocol header.
       - name: Run dual-build sync gate
         run: ./scripts/dual-build-sync.sh
