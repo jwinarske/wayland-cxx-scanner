@@ -86,6 +86,14 @@ void GtkCsdPlugin::SetInputState(const InputState& state) {
     impl_->backend->SetInputState(state);
 }
 
+int GtkCsdPlugin::DoubleClickTimeMs() const {
+  return impl_->backend ? impl_->backend->DoubleClickTimeMs() : 400;
+}
+
+int GtkCsdPlugin::DragThreshold() const {
+  return impl_->backend ? impl_->backend->DragThreshold() : 8;
+}
+
 void GtkCsdPlugin::Dispatch() {
   if (impl_->backend)
     impl_->backend->Dispatch();

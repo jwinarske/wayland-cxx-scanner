@@ -188,6 +188,20 @@ class CsdPlugin {
   /// Update pointer position and window state for themed rendering.
   virtual void SetInputState(const InputState& state) = 0;
 
+  // ── Input gesture parameters ──────────────────────────────────────────
+
+  /// Interval within which two presses count as a double-click, in ms.
+  ///
+  /// A desktop-wide user setting, so a themed plugin answers with the
+  /// toolkit's value rather than this fallback.
+  [[nodiscard]] virtual int DoubleClickTimeMs() const { return 400; }
+
+  /// Distance the pointer must travel before a press becomes a drag, in px.
+  ///
+  /// Also a toolkit setting: below it a press on the title bar is still a
+  /// click and may yet become a double-click, above it the press is a move.
+  [[nodiscard]] virtual int DragThreshold() const { return 8; }
+
   // ── Rendering ─────────────────────────────────────────────────────────
 
   /// Render the decoration chrome (borders, title bar, buttons) into an

@@ -37,8 +37,17 @@ namespace {
 
 /// A header element and the widget GTK built for it (null when the theme's
 /// decoration layout omits it — a close-only layout has no maximize button).
+///
+/// `type` is what the element must actually be, and it is load-bearing rather
+/// than a sanity check.  The search matches a substring of the style-context
+/// dump, and those names are not disjoint: ".maximize" is a prefix of
+/// ".maximized", the class added to the header while the window is maximized.
+/// Without the type check, asking for the maximize button of a maximized
+/// window returns the header bar itself — whose clip covers the whole title
+/// bar, so every point in it would hit-test as the maximize button.
 struct HeaderElement {
   const char* name = nullptr;
+  GType type = G_TYPE_INVALID;
   GtkWidget* widget = nullptr;
 };
 
@@ -55,7 +64,7 @@ void FindByName(GtkWidget* widget, void* data) {
   if (elem->widget != nullptr)
     return;  // Already found; do not let a later sibling overwrite it.
 
-  if (GTK_IS_WIDGET(widget)) {
+  if (GTK_IS_WIDGET(widget) && G_TYPE_CHECK_INSTANCE_TYPE(widget, elem->type)) {
     gchar* desc =
         gtk_style_context_to_string(gtk_widget_get_style_context(widget),
                                     GTK_STYLE_CONTEXT_PRINT_SHOW_STYLE);
@@ -72,10 +81,11 @@ void FindByName(GtkWidget* widget, void* data) {
     gtk_container_forall(GTK_CONTAINER(widget), &FindByName, data);
 }
 
-/// Find a header element by its style-context selector.
+/// Find a header element of type @p type whose style context names @p selector.
 [[nodiscard]] HeaderElement FindElement(GtkWidget* header,
-                                        const char* selector) {
-  HeaderElement elem{selector, nullptr};
+                                        const char* selector,
+                                        GType type) {
+  HeaderElement elem{selector, type, nullptr};
   FindByName(header, &elem);
   return elem;
 }
@@ -161,7 +171,7 @@ class Gtk3Backend final : public GtkThemeBackend {
 
     // The buttons have no position until the header has been laid out, so a
     // hit test arriving before the first draw would otherwise find nothing.
-    Layout(width);
+    LayoutIfNeeded(width);
 
     // Buttons before the header itself: they sit inside it.
     static constexpr struct {
@@ -174,7 +184,7 @@ class Gtk3Backend final : public GtkThemeBackend {
     };
 
     for (const auto& b : kButtons) {
-      GtkWidget* w = FindElement(header_, b.sel).widget;
+      GtkWidget* w = FindElement(header_, b.sel, GTK_TYPE_BUTTON).widget;
       if (w == nullptr)
         continue;
       GtkAllocation alloc{};
@@ -183,6 +193,24 @@ class Gtk3Backend final : public GtkThemeBackend {
         return b.zone;
     }
     return HitZone::TitleBar;
+  }
+
+  [[nodiscard]] int DoubleClickTimeMs() override {
+    if (!GTK_IS_WIDGET(window_))
+      return 400;
+    gint ms = 400;
+    g_object_get(gtk_widget_get_settings(window_), "gtk-double-click-time", &ms,
+                 nullptr);
+    return ms;
+  }
+
+  [[nodiscard]] int DragThreshold() override {
+    if (!GTK_IS_WIDGET(window_))
+      return 8;
+    gint px = 8;
+    g_object_get(gtk_widget_get_settings(window_), "gtk-dnd-drag-threshold",
+                 &px, nullptr);
+    return px;
   }
 
   void Dispatch() override {
@@ -215,17 +243,29 @@ class Gtk3Backend final : public GtkThemeBackend {
       gtk_style_context_remove_class(ctx, "maximized");
   }
 
-  /// Size-allocate the header to @p width.  Called per draw and per hit test,
-  /// so it early-outs when the width has not moved: re-allocating on every
-  /// pointer motion would be pure waste.
+  /// Show and size-allocate the header to @p width.
+  ///
+  /// Unconditional, and must stay that way.  GTK rebuilds the header's buttons
+  /// when the decoration layout changes, and the widgets it creates have
+  /// neither been shown nor allocated: skipping this because the width happens
+  /// to be unchanged leaves them with no geometry, so they draw nothing and
+  /// hit-test nothing — the title bar silently loses its buttons.
   void Layout(int width) {
-    if (width == laid_out_width_)
-      return;
     gtk_widget_show_all(window_);
     GtkAllocation alloc{0, 0, width, 0};
     gtk_widget_get_preferred_height(header_, nullptr, &alloc.height);
     gtk_widget_size_allocate(header_, &alloc);
     laid_out_width_ = width;
+  }
+
+  /// Lay out only if the geometry would otherwise be missing or stale.
+  ///
+  /// For the hit-test path, where a full re-layout per pointer motion would be
+  /// waste: the draw path lays out every frame regardless, so a widget-tree
+  /// change is picked up there within one frame.
+  void LayoutIfNeeded(int width) {
+    if (width != laid_out_width_)
+      Layout(width);
   }
 
   void DrawBackground(cairo_t* cr) {
@@ -238,7 +278,7 @@ class Gtk3Backend final : public GtkThemeBackend {
   /// Draw the real GtkLabel, so the title picks up the theme's font and color
   /// rather than a hardcoded family and size.
   void DrawTitle(cairo_surface_t* surface) {
-    GtkWidget* label = FindElement(header_, kSelTitle).widget;
+    GtkWidget* label = FindElement(header_, kSelTitle, GTK_TYPE_LABEL).widget;
     if (label == nullptr)
       return;
 
@@ -281,7 +321,7 @@ class Gtk3Backend final : public GtkThemeBackend {
                   cairo_surface_t* surface,
                   const char* selector,
                   const char* icon_name) {
-    GtkWidget* button = FindElement(header_, selector).widget;
+    GtkWidget* button = FindElement(header_, selector, GTK_TYPE_BUTTON).widget;
     if (button == nullptr)
       return;  // This layout has no such button.
 

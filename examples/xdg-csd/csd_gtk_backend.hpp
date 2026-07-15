@@ -70,6 +70,14 @@ class GtkThemeBackend {
   /// having been rendered first.
   [[nodiscard]] virtual HitZone HitTestHeader(int x, int y, int width) = 0;
 
+  /// Interval within which two presses count as a double-click, in ms, as the
+  /// toolkit's own settings define it.
+  [[nodiscard]] virtual int DoubleClickTimeMs() = 0;
+
+  /// Distance the pointer must travel before a press becomes a drag, in px,
+  /// as the toolkit's own settings define it.
+  [[nodiscard]] virtual int DragThreshold() = 0;
+
   /// Drain the toolkit's event source without blocking, so it observes
   /// settings and theme changes.
   virtual void Dispatch() = 0;

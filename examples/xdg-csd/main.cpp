@@ -443,6 +443,11 @@ class App {
   // ── Hit testing ───────────────────────────────────────────────────────────
   [[nodiscard]] HitZone HitTest(int x, int y) const noexcept;
 
+  // ── Title-bar gesture ─────────────────────────────────────────────────────
+  [[nodiscard]] bool IsDoubleClick(
+      const wl::PointerButtonEvent& ev) const noexcept;
+  void ToggleMaximized() noexcept;
+
   // Point the cursor at the shape for the zone currently under the pointer.
   void UpdateCursor() noexcept {
     cursor_.Set(seat_.Pointer(), enter_serial_,
@@ -488,6 +493,15 @@ class App {
   // Which zone the press landed in, so the release can be matched to it: a
   // button only fires when press and release agree.
   HitZone pressed_zone_ = HitZone::None;
+
+  // A press on the title bar, held until it turns out to be a drag, a
+  // double-click, or neither.  The move cannot start on press: it grabs the
+  // pointer, and the second click of a double-click would never arrive.
+  bool title_press_pending_ = false;
+  uint32_t title_press_serial_ = 0;
+  uint32_t title_press_time_ = 0;  // 0 ⇒ no press to pair a double-click with
+  int title_press_x_ = 0;
+  int title_press_y_ = 0;
   uint32_t enter_serial_ = 0;  // last wl_pointer.enter serial, for set_cursor
 
   // Driven by the xdg_toplevel configure `states` array, not by keyboard focus:
@@ -838,12 +852,31 @@ void App::OnPointerLeave() noexcept {
   pointer_y_ = -1;
   pointer_pressed_ = false;
   pressed_zone_ = HitZone::None;  // A press the pointer leaves is cancelled.
+  title_press_pending_ = false;
+  title_press_time_ = 0;
 }
 
 void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
   pointer_x_ = static_cast<int>(ev.x);
   pointer_y_ = static_cast<int>(ev.y);
   UpdateCursor();
+
+  // A held title-bar press becomes a move once the pointer travels far enough
+  // to mean it. Below the threshold it stays a click, so a double-click still
+  // has a chance to happen.
+  if (!title_press_pending_)
+    return;
+  const int threshold = csd_plugin_ ? csd_plugin_->DragThreshold() : 8;
+  if (std::abs(pointer_x_ - title_press_x_) <= threshold &&
+      std::abs(pointer_y_ - title_press_y_) <= threshold)
+    return;
+
+  title_press_pending_ = false;
+  title_press_time_ = 0;  // Became a drag: not half of a double-click.
+  pointer_pressed_ = false;
+  pressed_zone_ = HitZone::None;
+  if (wl_proxy* const seat = seat_.Seat())
+    xdg_toplevel_.Get()->Move(seat, title_press_serial_);
 }
 
 // A window button fires on release over the button it was pressed on — the
@@ -870,8 +903,28 @@ void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
     const uint32_t edge = wl::csd::HitZoneToResizeEdge(zone);
 
     if (zone == HitZone::TitleBar && seat != nullptr) {
-      xdg_toplevel_.Get()->Move(seat, ev.serial);
-    } else if (edge != 0 && seat != nullptr) {
+      // Do not start the move yet.  xdg_toplevel.move() hands the pointer to
+      // the compositor's grab, and every later event — including the second
+      // click of a double-click — goes there instead of here.  So the press is
+      // held: it becomes a move once the pointer travels past the drag
+      // threshold (see OnPointerMotion), and a maximize toggle if a second
+      // press arrives first.
+      if (IsDoubleClick(ev)) {
+        ToggleMaximized();
+        title_press_time_ = 0;  // Consumed: a third click starts over.
+        pointer_pressed_ = false;
+        pressed_zone_ = HitZone::None;
+        return;
+      }
+      title_press_pending_ = true;
+      title_press_serial_ = ev.serial;
+      title_press_time_ = ev.time;
+      title_press_x_ = pointer_x_;
+      title_press_y_ = pointer_y_;
+      return;
+    }
+
+    if (edge != 0 && seat != nullptr) {
       xdg_toplevel_.Get()->Resize(seat, ev.serial, edge);
     } else {
       return;  // A button: hold the press and wait for the release.
@@ -888,6 +941,9 @@ void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
   const HitZone pressed = pressed_zone_;
   pointer_pressed_ = false;
   pressed_zone_ = HitZone::None;
+  // A title-bar press that never travelled is just a click. title_press_time_
+  // survives, so a second press soon after can still pair with it.
+  title_press_pending_ = false;
 
   // Released somewhere other than where the press landed: cancelled.
   if (pressed != zone)
@@ -899,12 +955,7 @@ void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
       break;
 
     case HitZone::MaximizeButton:
-      // Request only. maximized_ follows the configure the compositor sends
-      // back, so a refused request does not leave us drawing the wrong icon.
-      if (maximized_)
-        xdg_toplevel_.Get()->UnsetMaximized();
-      else
-        xdg_toplevel_.Get()->SetMaximized();
+      ToggleMaximized();
       break;
 
     case HitZone::MinimizeButton:
@@ -914,6 +965,28 @@ void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
     default:
       break;
   }
+}
+
+// A second press on the title bar close enough in time and place to the last
+// one. The interval and the slop are the toolkit's own settings, not invented
+// here: both are desktop-wide user preferences.
+bool App::IsDoubleClick(const wl::PointerButtonEvent& ev) const noexcept {
+  if (title_press_time_ == 0)
+    return false;
+  const int interval = csd_plugin_ ? csd_plugin_->DoubleClickTimeMs() : 400;
+  const int threshold = csd_plugin_ ? csd_plugin_->DragThreshold() : 8;
+  return (ev.time - title_press_time_) <= static_cast<uint32_t>(interval) &&
+         std::abs(pointer_x_ - title_press_x_) <= threshold &&
+         std::abs(pointer_y_ - title_press_y_) <= threshold;
+}
+
+// Request only. maximized_ follows the configure the compositor sends back, so
+// a refused request does not leave us drawing the wrong icon.
+void App::ToggleMaximized() noexcept {
+  if (maximized_)
+    xdg_toplevel_.Get()->UnsetMaximized();
+  else
+    xdg_toplevel_.Get()->SetMaximized();
 }
 
 // ── Frame commit ────────────────────────────────────────────────────────────
