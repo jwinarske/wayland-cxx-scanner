@@ -61,6 +61,157 @@ function(wlcxx_gen exe tag outname xml)
         OUTPUT "gen/${tag}/${outname}" ${_extra} TARGET ${exe})
 endfunction()
 
+# ── csd-common — the decoration plugins, shared by any example wanting a frame ─
+# Mirrors examples/csd-common/meson.build; keep the two in lock-step.
+#
+# These are not framework headers: the themed plugins need a .cpp and a toolkit
+# on the link line, and the framework is header-only. Only the interface, the
+# header-only fallback and the color helpers are installed from include/wl/.
+set(CSD_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csd-common")
+
+# ── CSD resolution — shared by every example that wants a window frame ───────
+#
+# Resolved once, here, rather than inside one example: the frame is taken by
+# more than one of them now, and CMake has no csd_common library for them to
+# link the way Meson does — the sources compile into each example, which is also
+# what supplies the generated protocol headers they include.
+#
+# Produces:  _csd_src   sources to add to the example
+#            _csd_deps  link libraries
+#            _csd_defs  compile definitions
+# and wlcxx_csd(<exe>) to apply all three.
+# 'none' and 'ssd' outrank the GTK selection: with no plugin compiled there
+# is no backend to choose, so asking for both is a contradiction.
+if ((WAYLAND_CXX_CSD STREQUAL "none" OR WAYLAND_CXX_CSD STREQUAL "ssd") AND
+    (WAYLAND_CXX_CSD_GTK STREQUAL "gtk3" OR WAYLAND_CXX_CSD_GTK STREQUAL "gtk4"))
+    message(FATAL_ERROR
+        "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK} selects a GTK backend, "
+        "but WAYLAND_CXX_CSD=${WAYLAND_CXX_CSD} builds no decoration plugin "
+        "for it to back. Set WAYLAND_CXX_CSD=gtk to build the GTK plugin.")
+endif ()
+
+# Resolve which GTK the themed plugin builds against.
+set(_csd_gtk_found FALSE)
+if (WAYLAND_CXX_CSD STREQUAL "none" OR WAYLAND_CXX_CSD STREQUAL "ssd")
+    # Skip GTK detection entirely: nothing will link it.
+elseif (WAYLAND_CXX_CSD_GTK STREQUAL "gtk4")
+    message(FATAL_ERROR
+        "WAYLAND_CXX_CSD_GTK=gtk4: the GTK 4 backend is not implemented. "
+        "GTK 4 removed the offscreen widget-draw path this plugin renders "
+        "through, so it needs a backend of its own. Use gtk3 or auto.")
+elseif (WAYLAND_CXX_CSD_GTK STREQUAL "gtk3")
+    if (NOT TARGET PkgConfig::gtk3)
+        message(FATAL_ERROR "WAYLAND_CXX_CSD_GTK=gtk3: gtk+-3.0 not found.")
+    endif ()
+    set(_csd_gtk_found TRUE)
+elseif (WAYLAND_CXX_CSD_GTK STREQUAL "auto")
+    if (TARGET PkgConfig::gtk3)
+        set(_csd_gtk_found TRUE)
+    endif ()
+endif ()
+
+set(_csd_cairo_found FALSE)
+if (NOT WAYLAND_CXX_CSD STREQUAL "none" AND NOT WAYLAND_CXX_CSD STREQUAL "ssd"
+    AND TARGET PkgConfig::cairo AND TARGET PkgConfig::pangocairo)
+    set(_csd_cairo_found TRUE)
+endif ()
+
+# Resolve 'auto' to the highest-fidelity plugin available. The runtime
+# still prefers the compositor's own decorations and only falls back to the
+# plugin if it declines; naming a plugin is what forces client-side.
+set(_csd_choice "${WAYLAND_CXX_CSD}")
+set(_csd_extra_defs "")
+if (_csd_choice STREQUAL "auto")
+    set(_csd_extra_defs CSD_PREFER_SSD)
+    if (_csd_gtk_found)
+        set(_csd_choice gtk)
+    elseif (_csd_cairo_found)
+        set(_csd_choice cairo)
+    else ()
+        set(_csd_choice fallback)
+    endif ()
+endif ()
+
+set(_csd_src   "")
+set(_csd_deps  "")
+set(_csd_defs  "")
+if (_csd_choice STREQUAL "gtk")
+    if (NOT _csd_gtk_found)
+        if (WAYLAND_CXX_CSD_GTK STREQUAL "disabled")
+            message(FATAL_ERROR
+                "WAYLAND_CXX_CSD=gtk conflicts with WAYLAND_CXX_CSD_GTK="
+                "disabled: the GTK plugin was asked for and gated off at "
+                "the same time.")
+        endif ()
+        message(FATAL_ERROR
+            "WAYLAND_CXX_CSD=gtk: gtk+-3.0 not found. Install it, or pick "
+            "another plugin with WAYLAND_CXX_CSD=cairo / fallback.")
+    endif ()
+    set(_csd_src  csd-common/csd_gtk.cpp csd-common/csd_gtk_backend_gtk3.cpp)
+    set(_csd_deps PkgConfig::gtk3)
+    set(_csd_defs USE_GTK_CSD)
+elseif (_csd_choice STREQUAL "cairo")
+    if (NOT _csd_cairo_found)
+        message(FATAL_ERROR
+            "WAYLAND_CXX_CSD=cairo: cairo and pangocairo are both required.")
+    endif ()
+    set(_csd_src  csd-common/csd_cairo.cpp)
+    set(_csd_deps PkgConfig::cairo PkgConfig::pangocairo)
+    set(_csd_defs USE_CAIRO_CSD)
+elseif (_csd_choice STREQUAL "fallback")
+    # Header-only: no source to add, but the define still has to say so, or
+    # 'ssd' and 'fallback' would be indistinguishable to the example.
+    set(_csd_defs USE_FALLBACK_CSD)
+endif ()
+# 'none' and 'ssd' add no plugin source and no plugin define.
+
+# csd_factory reads whichever define the choice above set, and
+# DecoratedWindow owns the decoration negotiation — which with no plugin is
+# the whole of the csd=ssd case. Both are wanted for every choice but
+# 'none', so they are appended after the chain rather than inside it. Meson
+# builds these into a csd_common library; here they compile into the
+# example, which is also what supplies the generated protocol headers they
+# include.
+#
+# 'none' adds neither, and defines nothing: the consumer's
+# <decorated_window.hpp> then resolves to empty inlines and no decoration
+# code reaches the binary at all.
+if (NOT WAYLAND_CXX_CSD STREQUAL "none")
+    list(APPEND _csd_src csd-common/csd_factory.cpp csd-common/decorated_window.cpp)
+    list(APPEND _csd_defs CSD_ENABLED)
+endif ()
+
+list(APPEND _csd_defs ${_csd_extra_defs})
+message(STATUS "examples: CSD '${_csd_choice}' "
+               "(WAYLAND_CXX_CSD=${WAYLAND_CXX_CSD}, "
+               "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK})")
+
+# Give <exe> the decoration the options selected. <tag> is its per-example
+# generated-header subdir, as passed to wlcxx_gen().
+#
+# With csd=none this adds only the include path, and the header found there is
+# all empty inlines — no sources, no defines, no protocol, nothing linked.
+#
+# Otherwise the frame's sources compile into <exe> (Meson has a csd_common
+# library; CMake does not), so <exe> is also what must generate the protocol
+# headers the frame includes. It already generates wayland_client.hpp and
+# xdg_shell_client.hpp for itself; xdg-decoration is the frame's alone, so it is
+# generated here rather than left for each example to remember.
+function(wlcxx_csd exe tag)
+    target_sources(${exe} PRIVATE ${_csd_src})
+    target_include_directories(${exe} PRIVATE ${CSD_COMMON_DIR})
+    if (_csd_deps)
+        target_link_libraries(${exe} PRIVATE ${_csd_deps})
+    endif ()
+    if (_csd_defs)
+        target_compile_definitions(${exe} PRIVATE ${_csd_defs})
+    endif ()
+    if (NOT WAYLAND_CXX_CSD STREQUAL "none")
+        wlcxx_gen(${exe} ${tag} xdg_decoration_unstable_v1_client.hpp
+                  ${XDG_DECORATION_XML})
+    endif ()
+endfunction()
+
 # ── minimal — bundled protocol; client + server roundtrip (also a test) ──────
 if (TARGET PkgConfig::wayland_client AND TARGET PkgConfig::wayland_server)
     wlcxx_example(minimal_roundtrip
@@ -79,6 +230,9 @@ endif ()
 if (TARGET PkgConfig::egl AND TARGET PkgConfig::glesv2 AND TARGET PkgConfig::wayland_egl
     AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
     wlcxx_example(simple_egl simple-egl/main.cpp)
+    # The window frame. With csd=none this is only an include path and the
+    # example carries no decoration code at all.
+    wlcxx_csd(simple_egl simple-egl)
     target_link_libraries(simple_egl PRIVATE PkgConfig::wayland_client
         PkgConfig::egl PkgConfig::glesv2 PkgConfig::wayland_egl PkgConfig::xkbcommon)
     wlcxx_gen(simple_egl simple-egl wayland_client.hpp   ${WAYLAND_XML})
@@ -213,125 +367,18 @@ if (WAYLAND_CXX_IME_BACKEND MATCHES "^text-input-v[13]$"
     wlcxx_gen(text_input text-input ${_ti_out} ${_ti_xml} TABLES)
 endif ()
 
-# ── csd-common — the decoration plugins, shared by any example wanting a frame ─
-# Mirrors examples/csd-common/meson.build; keep the two in lock-step.
-#
-# These are not framework headers: the themed plugins need a .cpp and a toolkit
-# on the link line, and the framework is header-only. Only the interface, the
-# header-only fallback and the color helpers are installed from include/wl/.
-set(CSD_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csd-common")
-
-# ── xdg-csd — decoration chosen by WAYLAND_CXX_CSD / WAYLAND_CXX_CSD_GTK ──────
+# ── xdg-csd — the CSD example ────────────────────────────────────────────────
+# Not built at csd=none: this example exists to demonstrate client-side
+# decoration and negotiates the mode itself, so a build that asked for no
+# decoration code has no use for it. Skipped rather than built inert.
 if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
-    AND TARGET PkgConfig::wayland_cursor)
-    # 'ssd' outranks the GTK selection: with no plugin compiled there is no
-    # backend to choose, so asking for both is a contradiction.
-    if (WAYLAND_CXX_CSD STREQUAL "ssd" AND
-        (WAYLAND_CXX_CSD_GTK STREQUAL "gtk3" OR WAYLAND_CXX_CSD_GTK STREQUAL "gtk4"))
-        message(FATAL_ERROR
-            "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK} selects a GTK backend, "
-            "but WAYLAND_CXX_CSD=ssd (the default) builds no decoration plugin "
-            "for it to back. Set WAYLAND_CXX_CSD=gtk to build the GTK plugin.")
-    endif ()
-
-    # Resolve which GTK the themed plugin builds against.
-    set(_csd_gtk_found FALSE)
-    if (WAYLAND_CXX_CSD STREQUAL "ssd")
-        # Skip GTK detection entirely: nothing will link it.
-    elseif (WAYLAND_CXX_CSD_GTK STREQUAL "gtk4")
-        message(FATAL_ERROR
-            "WAYLAND_CXX_CSD_GTK=gtk4: the GTK 4 backend is not implemented. "
-            "GTK 4 removed the offscreen widget-draw path this plugin renders "
-            "through, so it needs a backend of its own. Use gtk3 or auto.")
-    elseif (WAYLAND_CXX_CSD_GTK STREQUAL "gtk3")
-        if (NOT TARGET PkgConfig::gtk3)
-            message(FATAL_ERROR "WAYLAND_CXX_CSD_GTK=gtk3: gtk+-3.0 not found.")
-        endif ()
-        set(_csd_gtk_found TRUE)
-    elseif (WAYLAND_CXX_CSD_GTK STREQUAL "auto")
-        if (TARGET PkgConfig::gtk3)
-            set(_csd_gtk_found TRUE)
-        endif ()
-    endif ()
-
-    set(_csd_cairo_found FALSE)
-    if (NOT WAYLAND_CXX_CSD STREQUAL "ssd"
-        AND TARGET PkgConfig::cairo AND TARGET PkgConfig::pangocairo)
-        set(_csd_cairo_found TRUE)
-    endif ()
-
-    # Resolve 'auto' to the highest-fidelity plugin available. The runtime
-    # still prefers the compositor's own decorations and only falls back to the
-    # plugin if it declines; naming a plugin is what forces client-side.
-    set(_csd_choice "${WAYLAND_CXX_CSD}")
-    set(_csd_extra_defs "")
-    if (_csd_choice STREQUAL "auto")
-        set(_csd_extra_defs CSD_PREFER_SSD)
-        if (_csd_gtk_found)
-            set(_csd_choice gtk)
-        elseif (_csd_cairo_found)
-            set(_csd_choice cairo)
-        else ()
-            set(_csd_choice fallback)
-        endif ()
-    endif ()
-
-    set(_csd_src   "")
-    set(_csd_deps  "")
-    set(_csd_defs  "")
-    if (_csd_choice STREQUAL "gtk")
-        if (NOT _csd_gtk_found)
-            if (WAYLAND_CXX_CSD_GTK STREQUAL "disabled")
-                message(FATAL_ERROR
-                    "WAYLAND_CXX_CSD=gtk conflicts with WAYLAND_CXX_CSD_GTK="
-                    "disabled: the GTK plugin was asked for and gated off at "
-                    "the same time.")
-            endif ()
-            message(FATAL_ERROR
-                "WAYLAND_CXX_CSD=gtk: gtk+-3.0 not found. Install it, or pick "
-                "another plugin with WAYLAND_CXX_CSD=cairo / fallback.")
-        endif ()
-        set(_csd_src  csd-common/csd_gtk.cpp csd-common/csd_gtk_backend_gtk3.cpp)
-        set(_csd_deps PkgConfig::gtk3)
-        set(_csd_defs USE_GTK_CSD)
-    elseif (_csd_choice STREQUAL "cairo")
-        if (NOT _csd_cairo_found)
-            message(FATAL_ERROR
-                "WAYLAND_CXX_CSD=cairo: cairo and pangocairo are both required.")
-        endif ()
-        set(_csd_src  csd-common/csd_cairo.cpp)
-        set(_csd_deps PkgConfig::cairo PkgConfig::pangocairo)
-        set(_csd_defs USE_CAIRO_CSD)
-    elseif (_csd_choice STREQUAL "fallback")
-        # Header-only: no source to add, but the define still has to say so, or
-        # 'ssd' and 'fallback' would be indistinguishable to the example.
-        set(_csd_defs USE_FALLBACK_CSD)
-    endif ()
-    # 'ssd' adds neither plugin source nor plugin define.
-
-    # csd_factory reads whichever define the choice above set, and
-    # DecoratedWindow owns the decoration negotiation — which with no plugin is
-    # the whole of the csd=ssd case. Both are wanted for every choice, so they
-    # are appended after the chain rather than inside it. Meson builds these
-    # into a csd_common library; here they compile into the example, which is
-    # also what supplies the generated protocol headers they include.
-    list(APPEND _csd_src csd-common/csd_factory.cpp csd-common/decorated_window.cpp)
-    list(APPEND _csd_defs CSD_HAVE_DECORATED_WINDOW)
-
-    list(APPEND _csd_defs ${_csd_extra_defs})
-    message(STATUS "xdg-csd: CSD plugin '${_csd_choice}' "
-                   "(WAYLAND_CXX_CSD=${WAYLAND_CXX_CSD}, "
-                   "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK})")
-    wlcxx_example(xdg_csd xdg-csd/main.cpp ${_csd_src})
-    # The themed plugins' headers live beside their sources, not in include/wl/.
-    target_include_directories(xdg_csd PRIVATE ${CSD_COMMON_DIR})
-    target_link_libraries(xdg_csd PRIVATE PkgConfig::wayland_client PkgConfig::wayland_cursor PkgConfig::xkbcommon ${_csd_deps})
-    if (_csd_defs)
-        target_compile_definitions(xdg_csd PRIVATE ${_csd_defs})
-    endif ()
+    AND TARGET PkgConfig::wayland_cursor AND NOT WAYLAND_CXX_CSD STREQUAL "none")
+    wlcxx_example(xdg_csd xdg-csd/main.cpp)
+    wlcxx_csd(xdg_csd xdg-csd)
+    target_link_libraries(xdg_csd PRIVATE PkgConfig::wayland_client
+        PkgConfig::wayland_cursor PkgConfig::xkbcommon)
     wlcxx_gen(xdg_csd xdg-csd wayland_client.hpp                  ${WAYLAND_XML})
     wlcxx_gen(xdg_csd xdg-csd xdg_shell_client.hpp               ${XDG_SHELL_XML})
-    wlcxx_gen(xdg_csd xdg-csd xdg_decoration_unstable_v1_client.hpp ${XDG_DECORATION_XML})
     # Extension protocols: TABLES keeps their headers self-contained.
     wlcxx_gen(xdg_csd xdg-csd viewporter_client.hpp       ${VIEWPORTER_XML}       TABLES)
     wlcxx_gen(xdg_csd xdg-csd fractional_scale_client.hpp ${FRACTIONAL_SCALE_XML} TABLES)

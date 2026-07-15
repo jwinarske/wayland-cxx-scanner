@@ -23,8 +23,8 @@ endif
 
 # ── Locate system protocol XMLs ───────────────────────────────────────────────
 
-wayland_xml   = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
-xdg_shell_xml = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+wayland_xml        = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
+xdg_shell_xml      = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
 
 # ── Generate C++ client headers from protocol XMLs ────────────────────────────
 
@@ -65,6 +65,11 @@ executable(
         glesv2_dep,
         wayland_egl_dep,
         xkbcommon_dep,
+        # Carries the decoration plugin the csd option selected, and the window
+        # frame that puts it on a subsurface. With csd=ssd (the default) that is
+        # no plugin at all, and the frame simply asks the compositor to
+        # decorate.
+        csd_dep,
     ],
     # The generated headers use /* param */ comment-suppression for unused
     # virtual-method parameters, but the outer -Werror/-Wunused-parameter

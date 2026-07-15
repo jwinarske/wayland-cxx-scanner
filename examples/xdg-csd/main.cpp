@@ -129,6 +129,15 @@ const wl_interface& wl_buffer_traits::wl_iface() noexcept {
 const wl_interface& wl_region_traits::wl_iface() noexcept {
   return wl_region_interface;
 }
+// The window frame's, not this example's: it puts the decoration on a
+// subsurface. Defined here because the repo defines wl_iface() per consumer, so
+// the frame cannot define them without colliding with whatever links it.
+const wl_interface& wl_subcompositor_traits::wl_iface() noexcept {
+  return wl_subcompositor_interface;
+}
+const wl_interface& wl_subsurface_traits::wl_iface() noexcept {
+  return wl_subsurface_interface;
+}
 
 }  // namespace wayland::client
 
