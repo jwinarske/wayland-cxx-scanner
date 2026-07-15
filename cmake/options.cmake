@@ -84,9 +84,15 @@ if (NOT WAYLAND_CXX_CSD_GTK IN_LIST _wlcxx_csd_gtk_choices)
         "${_wlcxx_csd_gtk_list}")
 endif ()
 
-set(WAYLAND_CXX_CSD "auto" CACHE STRING
-    "CSD plugin the xdg-csd example uses (auto = highest fidelity available)")
-set(_wlcxx_csd_choices auto gtk cairo fallback)
+# How the xdg-csd example is decorated. Defaults to 'ssd': no plugin compiled,
+# the example asks the compositor to decorate, and the binary carries no toolkit
+# dependency. Same reasoning as the Skia and ImGui examples — building the
+# examples must never drag in a toolkit. 'auto' compiles the best plugin but
+# still prefers the compositor at run time; naming a plugin forces client-side.
+# 'ssd' outranks WAYLAND_CXX_CSD_GTK.
+set(WAYLAND_CXX_CSD "ssd" CACHE STRING
+    "How the xdg-csd example is decorated (ssd = compositor only, no toolkit dependency; auto = prefer compositor, fall back to best plugin; naming a plugin forces client-side)")
+set(_wlcxx_csd_choices ssd auto gtk cairo fallback)
 set_property(CACHE WAYLAND_CXX_CSD PROPERTY STRINGS ${_wlcxx_csd_choices})
 if (NOT WAYLAND_CXX_CSD IN_LIST _wlcxx_csd_choices)
     string(REPLACE ";" ", " _wlcxx_csd_list "${_wlcxx_csd_choices}")

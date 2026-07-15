@@ -11,9 +11,12 @@
 //   • CairoCsdPlugin    — Cairo + Pango decorations (optional)
 //   • FallbackCsdPlugin — flat-color SHM decorations (always available)
 //
-// Which one is built and used is a build-time choice: the csd and csd_gtk
-// options (WAYLAND_CXX_CSD / WAYLAND_CXX_CSD_GTK under CMake).  A themed
-// plugin may also decline at run time, in which case the fallback is used.
+// The csd option (WAYLAND_CXX_CSD under CMake) chooses between them, and
+// defaults to ssd: no plugin at all, the compositor is asked to decorate, and
+// the binary has no toolkit dependency.  csd=auto compiles the best available
+// plugin but still prefers the compositor, using the plugin only if it
+// declines; naming a plugin forces client-side.  A themed plugin may also
+// decline at run time, in which case the fallback is used.
 //
 // Decoration features:
 //   • Decoration mode negotiation via xdg-decoration-unstable-v1
@@ -44,14 +47,17 @@
 #include <wl/client_helpers.hpp>
 #include <wl/csd_plugin.hpp>
 #include <wl/cursor.hpp>
-// The fallback is always available and always compiled in: it is both the
-// build-time choice when nothing richer is present, and the run-time landing
-// spot when a themed plugin declines to start.
-#include <wl/csd_fallback.hpp>
+// Exactly one plugin is compiled in, chosen by the build (the csd option), and
+// with csd=ssd there is none at all. The fallback comes along with the GTK
+// plugin regardless: it is the run-time landing spot when GTK declines to
+// start.
 #ifdef USE_GTK_CSD
+#include <wl/csd_fallback.hpp>
 #include <wl/csd_gtk.hpp>
 #elif defined(USE_CAIRO_CSD)
 #include <wl/csd_cairo.hpp>
+#elif defined(USE_FALLBACK_CSD)
+#include <wl/csd_fallback.hpp>
 #endif
 #include <wl/display.hpp>
 #include <wl/raii.hpp>
@@ -125,6 +131,18 @@ const wl_interface& wl_region_traits::wl_iface() noexcept {
 
 using wl::csd::CsdPlugin;
 using wl::csd::HitZone;
+
+// Whether to ask the compositor to decorate even though a plugin is compiled
+// in. Set by the build for csd=auto: a client should prefer the compositor's
+// own decorations, which are cheaper and match the rest of the desktop, and
+// only draw its own if the compositor declines. Naming a plugin explicitly
+// (csd=gtk / cairo / fallback) leaves this off, forcing client-side — the point
+// of naming one is to see it.
+#ifdef CSD_PREFER_SSD
+inline constexpr bool kPreferSsd = true;
+#else
+inline constexpr bool kPreferSsd = false;
+#endif
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Shared-memory helper
@@ -395,6 +413,7 @@ class App {
         content_h_(content_h),
         title_(title),
         csd_plugin_(std::move(plugin)) {
+    use_csd_ = csd_plugin_ != nullptr;
     if (csd_plugin_)
       csd_plugin_->SetTitle(title);
   }
@@ -424,7 +443,10 @@ class App {
   const char* title_;
 
   // ── Decoration state ──────────────────────────────────────────────────────
-  bool use_csd_ = true;  // default to CSD if no decoration manager
+  // Default when the compositor offers no decoration manager: draw our own
+  // frame if we have a plugin, otherwise go undecorated and let the compositor
+  // do whatever it does.
+  bool use_csd_ = false;
   bool maximized_ = false;
 
   // ── CSD plugin (fallback or GTK-themed) ───────────────────────────────
@@ -653,9 +675,17 @@ bool App::BindGlobals() {
     }
   }
   if (decoration_mgr_.IsNull()) {
+    // Nothing to negotiate with, so the decision is ours alone: decorate if we
+    // have a plugin, and otherwise leave it to whatever the compositor does
+    // unasked — which may well be nothing.
+    // Nothing to prefer and nothing to ask: if we have a plugin it is the only
+    // way this window gets a frame, whatever csd=auto would rather have done.
     std::fprintf(stderr,
-                 "xdg-csd: zxdg_decoration_manager_v1 not available — "
-                 "falling back to client-side decorations\n");
+                 "xdg-csd: zxdg_decoration_manager_v1 not available — %s\n",
+                 csd_plugin_ ? "drawing client-side decorations unasked"
+                             : "no plugin either; the window will be "
+                               "undecorated unless the compositor decorates "
+                               "it");
   }
 
   // wl_seat — SeatManager binds the keyboard and, since App defines OnPointer*
@@ -734,9 +764,14 @@ bool App::CreateWindow() {
             *decoration_mgr_.Get(), xdg_toplevel_.Get()->GetProxy())) {
       if (wl::SetupHandler(decoration_, raw)) {
         decoration_.Get()->app_ = this;
-        // Request client-side decorations.
-        decoration_.Get()->SetMode(
-            static_cast<uint32_t>(ZxdgToplevelDecorationV1Mode::ClientSide));
+        // Ask for client-side only when we both can and want to. With no
+        // plugin there is nothing to draw a frame with, and under csd=auto the
+        // compositor is preferred; either way the compositor has the last word
+        // and answers with a configure.
+        const bool want_csd = csd_plugin_ != nullptr && !kPreferSsd;
+        decoration_.Get()->SetMode(static_cast<uint32_t>(
+            want_csd ? ZxdgToplevelDecorationV1Mode::ClientSide
+                     : ZxdgToplevelDecorationV1Mode::ServerSide));
       }
     }
   }
@@ -810,9 +845,12 @@ void App::OnToplevelClose() {
 
 void App::OnDecorationConfigure(uint32_t mode) {
   const bool was_csd = use_csd_;
-  use_csd_ = (mode == static_cast<uint32_t>(
-                          xdg_decoration_unstable_v1::client::
-                              ZxdgToplevelDecorationV1Mode::ClientSide));
+  // Without a plugin the answer is always server-side, whatever the compositor
+  // asks for: there is nothing compiled in that could draw a frame.
+  use_csd_ = csd_plugin_ != nullptr &&
+             mode == static_cast<uint32_t>(
+                         xdg_decoration_unstable_v1::client::
+                             ZxdgToplevelDecorationV1Mode::ClientSide);
   if (was_csd != use_csd_) {
     need_redraw_ = true;
     std::fprintf(stderr, "xdg-csd: decoration mode → %s\n",
@@ -1114,10 +1152,15 @@ App::~App() {
 }
 
 bool App::MainLoop() {
+  // "SSD" here means only that this client is not drawing them — whether the
+  // compositor does is its business, and with no decoration manager it was
+  // never asked.
   std::fprintf(stderr,
                "xdg-csd: %dx%d content, decorations=%s "
-               "(press ESC or click ✕ to quit)\n",
-               content_w_, content_h_, use_csd_ ? "CSD" : "SSD");
+               "(press ESC%s to quit)\n",
+               content_w_, content_h_,
+               use_csd_ ? "client-side" : "not drawn by this client",
+               use_csd_ ? " or click ✕" : "");
 
   // Kickstart: request the first frame callback, then commit.
   RequestFrameCallback();
@@ -1197,15 +1240,19 @@ int main(const int argc, char* argv[]) {
   }
 
   // Which plugin is compiled in is a build-time choice (the csd / csd_gtk
-  // options). The themed plugin can still fail at run time — GTK may be linked
-  // but have no usable display or theme — so it is asked rather than assumed,
-  // and the dependency-free fallback covers the refusal.
+  // options), and csd=ssd compiles none: the example then decorates nothing
+  // and asks the compositor to do it instead.
+  //
+  // The themed plugin can still fail at run time — GTK may be linked but have
+  // no usable display or theme — so it is asked rather than assumed, and the
+  // dependency-free fallback covers the refusal.
   std::unique_ptr<CsdPlugin> plugin;
 #ifdef USE_GTK_CSD
   plugin = wl::csd::GtkCsdPlugin::TryCreate();
   if (plugin) {
     std::fprintf(stderr, "xdg-csd: using GTK CSD plugin\n");
   } else {
+    plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
     std::fprintf(stderr,
                  "xdg-csd: GTK unavailable at run time — using fallback CSD "
                  "plugin\n");
@@ -1213,13 +1260,18 @@ int main(const int argc, char* argv[]) {
 #elif defined(USE_CAIRO_CSD)
   plugin = std::make_unique<wl::csd::CairoCsdPlugin>();
   std::fprintf(stderr, "xdg-csd: using Cairo CSD plugin\n");
+#elif defined(USE_FALLBACK_CSD)
+  plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
+  std::fprintf(stderr, "xdg-csd: using fallback CSD plugin\n");
+#else
+  std::fprintf(stderr,
+               "xdg-csd: no CSD plugin compiled in — requesting server-side "
+               "decorations\n");
 #endif
-
-  if (!plugin) {
-    plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
-#if !defined(USE_GTK_CSD) && !defined(USE_CAIRO_CSD)
-    std::fprintf(stderr, "xdg-csd: using fallback CSD plugin\n");
-#endif
+  if (plugin && kPreferSsd) {
+    std::fprintf(stderr,
+                 "xdg-csd: preferring server-side decorations; the plugin is "
+                 "only used if the compositor declines\n");
   }
 
   App app{content_w, content_h, title, std::move(plugin)};

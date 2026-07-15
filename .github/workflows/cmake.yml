@@ -118,11 +118,13 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      # The examples job leaves WAYLAND_CXX_CSD at 'auto', which resolves to the
-      # GTK plugin whenever GTK is installed — so the Cairo and fallback plugins
-      # would otherwise never be compiled by CI at all. Pin each one explicitly.
+      # WAYLAND_CXX_CSD defaults to 'ssd', so no plugin is compiled unless one
+      # is asked for by name — which means none of them would be built by CI at
+      # all. Pin each explicitly, including 'ssd' itself (the default every
+      # other job builds, and the only one that must link no toolkit) and
+      # 'auto', whose resolution differs from all of them.
       matrix:
-        csd: [gtk, cairo, fallback]
+        csd: [gtk, cairo, fallback, ssd, auto]
 
     steps:
       - uses: actions/checkout@v4

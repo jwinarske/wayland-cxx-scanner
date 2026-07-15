@@ -215,9 +215,21 @@ endif ()
 # Mirrors the Meson csd / csd_gtk combos; keep the two in lock-step.
 if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
     AND TARGET PkgConfig::wayland_cursor)
+    # 'ssd' outranks the GTK selection: with no plugin compiled there is no
+    # backend to choose, so asking for both is a contradiction.
+    if (WAYLAND_CXX_CSD STREQUAL "ssd" AND
+        (WAYLAND_CXX_CSD_GTK STREQUAL "gtk3" OR WAYLAND_CXX_CSD_GTK STREQUAL "gtk4"))
+        message(FATAL_ERROR
+            "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK} selects a GTK backend, "
+            "but WAYLAND_CXX_CSD=ssd (the default) builds no decoration plugin "
+            "for it to back. Set WAYLAND_CXX_CSD=gtk to build the GTK plugin.")
+    endif ()
+
     # Resolve which GTK the themed plugin builds against.
     set(_csd_gtk_found FALSE)
-    if (WAYLAND_CXX_CSD_GTK STREQUAL "gtk4")
+    if (WAYLAND_CXX_CSD STREQUAL "ssd")
+        # Skip GTK detection entirely: nothing will link it.
+    elseif (WAYLAND_CXX_CSD_GTK STREQUAL "gtk4")
         message(FATAL_ERROR
             "WAYLAND_CXX_CSD_GTK=gtk4: the GTK 4 backend is not implemented. "
             "GTK 4 removed the offscreen widget-draw path this plugin renders "
@@ -234,13 +246,18 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     endif ()
 
     set(_csd_cairo_found FALSE)
-    if (TARGET PkgConfig::cairo AND TARGET PkgConfig::pangocairo)
+    if (NOT WAYLAND_CXX_CSD STREQUAL "ssd"
+        AND TARGET PkgConfig::cairo AND TARGET PkgConfig::pangocairo)
         set(_csd_cairo_found TRUE)
     endif ()
 
-    # Resolve 'auto' to the highest-fidelity plugin available.
+    # Resolve 'auto' to the highest-fidelity plugin available. The runtime
+    # still prefers the compositor's own decorations and only falls back to the
+    # plugin if it declines; naming a plugin is what forces client-side.
     set(_csd_choice "${WAYLAND_CXX_CSD}")
+    set(_csd_extra_defs "")
     if (_csd_choice STREQUAL "auto")
+        set(_csd_extra_defs CSD_PREFER_SSD)
         if (_csd_gtk_found)
             set(_csd_choice gtk)
         elseif (_csd_cairo_found)
@@ -276,8 +293,13 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
         set(_csd_src  xdg-csd/csd_cairo.cpp)
         set(_csd_deps PkgConfig::cairo PkgConfig::pangocairo)
         set(_csd_defs USE_CAIRO_CSD)
+    elseif (_csd_choice STREQUAL "fallback")
+        # Header-only: no source to add, but the define still has to say so, or
+        # 'ssd' and 'fallback' would be indistinguishable to the example.
+        set(_csd_defs USE_FALLBACK_CSD)
     endif ()
-    # 'fallback' adds no source: the plugin is header-only.
+    # 'ssd' adds neither source nor define.
+    list(APPEND _csd_defs ${_csd_extra_defs})
     message(STATUS "xdg-csd: CSD plugin '${_csd_choice}' "
                    "(WAYLAND_CXX_CSD=${WAYLAND_CXX_CSD}, "
                    "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK})")

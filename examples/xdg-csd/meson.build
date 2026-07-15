@@ -40,7 +40,17 @@ csd_opt     = get_option('csd')
 gtk_dep   = []
 gtk_found = false
 
-if csd_gtk_opt == 'gtk4'
+# 'ssd' outranks csd_gtk: with no plugin compiled there is no GTK backend to
+# choose. Asking for both is a contradiction rather than a preference.
+if csd_opt == 'ssd' and csd_gtk_opt in ['gtk3', 'gtk4']
+    error('csd_gtk=' + csd_gtk_opt + ' selects a GTK backend, but csd=ssd ' +
+          '(the default) builds no decoration plugin for it to back. ' +
+          'Add -Dcsd=gtk to build the GTK plugin.')
+endif
+
+if csd_opt == 'ssd'
+    # Skip GTK detection entirely: nothing will link it.
+elif csd_gtk_opt == 'gtk4'
     error('csd_gtk=gtk4: the GTK 4 backend is not implemented. GTK 4 removed ' +
           'the offscreen widget-draw path this plugin renders through, so it ' +
           'needs a backend of its own. Use csd_gtk=gtk3 or csd_gtk=auto.')
@@ -55,9 +65,14 @@ elif csd_gtk_opt == 'auto'
     endif
 endif
 
-cairo_dep      = dependency('cairo',      required: csd_opt == 'cairo')
-pangocairo_dep = dependency('pangocairo', required: csd_opt == 'cairo')
-cairo_found    = cairo_dep.found() and pangocairo_dep.found()
+cairo_dep      = []
+pangocairo_dep = []
+cairo_found    = false
+if csd_opt != 'ssd'
+    cairo_dep      = dependency('cairo',      required: csd_opt == 'cairo')
+    pangocairo_dep = dependency('pangocairo', required: csd_opt == 'cairo')
+    cairo_found    = cairo_dep.found() and pangocairo_dep.found()
+endif
 
 # ── Locate system protocol XMLs ───────────────────────────────────────────────
 
@@ -108,8 +123,13 @@ xdg_csd_args = ['-Wno-unused-parameter']
 # ── Plugin selection ─────────────────────────────────────────────────────────
 
 csd_choice = csd_opt
-if csd_choice == 'auto'
-    # Highest fidelity available.
+if csd_choice == 'ssd'
+    # No plugin, no define: the example asks for server-side decorations.
+elif csd_choice == 'auto'
+    # Highest fidelity available -- but the runtime still prefers the
+    # compositor's own decorations, and only falls back to this plugin if the
+    # compositor declines. Naming a plugin instead is what forces client-side.
+    xdg_csd_args += '-DCSD_PREFER_SSD'
     if gtk_found
         csd_choice = 'gtk'
     elif cairo_found
@@ -138,8 +158,11 @@ elif csd_choice == 'cairo'
     xdg_csd_sources += 'csd_cairo.cpp'
     xdg_csd_deps    += [cairo_dep, pangocairo_dep]
     xdg_csd_args    += '-DUSE_CAIRO_CSD'
+elif csd_choice == 'fallback'
+    # Header-only: no source to add, but the define still has to say so, or
+    # 'none' and 'fallback' would be indistinguishable to the example.
+    xdg_csd_args    += '-DUSE_FALLBACK_CSD'
 endif
-# 'fallback' adds no source: the plugin is header-only.
 
 message('xdg-csd: CSD plugin "' + csd_choice + '" (csd=' + csd_opt +
         ', csd_gtk=' + csd_gtk_opt + ')')
