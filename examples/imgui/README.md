@@ -36,8 +36,16 @@ and `xdg-shell.xml`, exactly like the other examples.
 | Clipboard | `wl::DataDevice` on the core `wl_data_device`: copy publishes a source quoting the latest key/button serial (the compositor requires one), paste reads the offered pipe with a 500 ms / 1 MiB bound so a stalled peer cannot hang the frame. A paste of our own selection is answered locally — reading it would deadlock against our own `OnSend` |
 | Lifecycle | Backend-private `wl_registry` on the app's connection; versioned `release` teardown; seat is optional (headless/kiosk safe) |
 
-Not wired: multi-viewport and `SetMousePos`, both impossible on Wayland — it has
-no global coordinates and cannot warp the pointer.
+Deliberately not wired, and why:
+
+- **Multi-viewport** and **`SetMousePos`** — impossible on Wayland: it has no
+  global coordinates, and a client cannot warp the pointer.
+- **OS drag-and-drop** — nothing to wire it to. ImGui's drag-and-drop
+  (`BeginDragDropSource` / `AcceptDragDropPayload`) moves payloads between ImGui
+  windows inside one context; there is no platform hook for a drag that crosses
+  the process boundary. `wl::DataDevice` is selection-only to match, so both
+  ends would need building. Worth revisiting only if ImGui grows a platform API
+  for it.
 
 ## Integration contract
 
