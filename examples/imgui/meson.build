@@ -67,6 +67,31 @@ imgui_xdg_shell_client_hdr = custom_target(
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
 )
 
+# The IME facade resolves to the build-selected text-input backend, and that
+# backend's header includes the matching generated protocol header — so
+# generate whichever one the option chose.  The backend compiles its IME path
+# out entirely for the other choices (including 'none'), falling back to plain
+# keysym text input.
+ime_backend = get_option('ime_backend')
+imgui_ime_hdr = []
+if ime_backend == 'text-input-v3'
+    imgui_ime_hdr = custom_target(
+        'imgui-text-input-v3-client-header',
+        input:   wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v3.xml',
+        output:  'text_input_v3_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+elif ime_backend == 'text-input-v1'
+    imgui_ime_hdr = custom_target(
+        'imgui-text-input-v1-client-header',
+        input:   wp_dep.get_variable('pkgdatadir') / 'unstable/text-input/text-input-unstable-v1.xml',
+        output:  'text_input_v1_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+endif
+
 framework_inc = include_directories('../../include')
 generated_inc = include_directories('.')
 
@@ -74,7 +99,8 @@ generated_inc = include_directories('.')
 
 imgui_backend_lib = static_library(
     'imgui_impl_wayland_cxx',
-    sources: ['imgui_impl_wayland_cxx.cpp', imgui_wayland_client_hdr],
+    sources: ['imgui_impl_wayland_cxx.cpp', imgui_wayland_client_hdr]
+        + imgui_ime_hdr,
     include_directories: [framework_inc, generated_inc],
     dependencies: [
         imgui_dep,

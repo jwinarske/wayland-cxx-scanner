@@ -47,9 +47,20 @@ extern "C" {
 #include <wl/touch.hpp>           // wl::TouchHandler, wl::TouchPoint
 #include <wl/wl_ptr.hpp>          // wl::WlPtr
 
+// The IME facade resolves to whichever text-input backend the build selected
+// (ime_backend), and both speak the same ITextInputReceiver, so nothing here
+// names a protocol version.  With ime_backend=none the alias does not exist and
+// the whole IME path compiles out.
+#if defined(WL_IME_BACKEND_TEXT_INPUT_V1) || \
+    defined(WL_IME_BACKEND_TEXT_INPUT_V3)
+#define IMGUI_IMPL_WAYLAND_CXX_HAS_IME 1
+#include <wl/ime/backend.hpp>  // wl::ime::SelectedTextInput
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() definitions
@@ -118,7 +129,11 @@ struct BackendPointer : public wayland::client::CWlPointer<BackendPointer> {
   void OnFrame() override;
 };
 
-struct ImGui_ImplWaylandCxx_Data {
+struct ImGui_ImplWaylandCxx_Data
+#ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
+    : public wl::ime::TextInputListener
+#endif
+{
   wl_display* display = nullptr;
   wl_proxy* surface = nullptr;  // application's wl_surface (borrowed)
 
@@ -168,6 +183,47 @@ struct ImGui_ImplWaylandCxx_Data {
   bool shift_l = false, shift_r = false;
   bool alt_l = false, alt_r = false;
   bool super_l = false, super_r = false;
+
+#ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
+  // ── IME (text-input) ──────────────────────────────────────────────────────
+  wl::ime::SelectedTextInput text_input;
+  uint32_t ti_name = 0, ti_ver_adv = 0;
+
+  // True between enable and disable, i.e. while ImGui wants a text field.  The
+  // compositor still delivers ordinary keys over wl_keyboard while enabled, and
+  // an engaged IME ALSO commits them as commit_string — so the keysym->UTF-32
+  // path below must stand down whenever this is set, or every character that
+  // round-trips through the IME is typed twice.
+  bool ime_enabled = false;
+
+  // Uncommitted composition text.  ImGui has no API to draw a preedit inline,
+  // so it is kept here for the application to render itself and deliberately
+  // not fed to AddInputCharacter — doing that would insert composition text
+  // that the next preedit_string is supposed to replace.
+  std::string preedit;
+  int32_t preedit_cursor_begin = 0;
+  int32_t preedit_cursor_end = 0;
+
+  // The most recent request from ImGui.  It has to be kept: enable resets all
+  // text-input state, the backend issues its own enable whenever the field
+  // re-enters focus, and ImGui only calls the platform hook when *its* data
+  // changes — so after a re-enter nothing would re-send the cursor rectangle
+  // and the IME would sit enabled at (0,0,0,0).
+  ImGuiPlatformImeData ime_want{};
+
+  // ── wl::ime::TextInputListener ────────────────────────────────────────────
+  void OnEnter() override;
+  void OnLeave() override;
+  void OnCommitString(std::string_view utf8) override;
+  void OnPreeditString(std::string_view utf8,
+                       int32_t cursor_begin,
+                       int32_t cursor_end) override;
+  void OnDeleteSurroundingText(uint32_t before_bytes,
+                               uint32_t after_bytes) override;
+
+  void ApplyImeData(const ImGuiPlatformImeData& data);
+  void PushImeState();
+#endif
 
   // ── Hooks required by wl::KeyboardHandler<Data> ───────────────────────────
   void OnKey(const wl::KeyEvent& ev);
@@ -609,6 +665,22 @@ void ImGui_ImplWaylandCxx_Data::OnKey(const wl::KeyEvent& ev) {
   // is handled by ImGui itself (io.KeyRepeatDelay / io.KeyRepeatRate),
   // matching the GLFW / SDL backends.
 
+#ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
+  // Stand down only while the IME is actually composing.
+  //
+  // A text field merely being enabled is NOT enough: the compositor withholds
+  // the keys an input method consumes and passes the rest through wl_keyboard,
+  // so with nothing in composition the keysym path below is the only source of
+  // text.  Suppressing on `ime_enabled` alone silences ordinary typing on any
+  // system without an active input-method engine — which is most of them.
+  //
+  // A non-empty preedit means the input method is mid-composition and will
+  // deliver the result as commit_string; resolving the same keys here too would
+  // type every character twice.
+  if (!preedit.empty())
+    return;
+#endif
+
   if (down && ev.keysym != XKB_KEY_NoSymbol &&
       !(ctrl_l || ctrl_r)) {  // Ctrl chords are commands, not text
     const uint32_t cp = xkb_keysym_to_utf32(ev.keysym);
@@ -616,6 +688,128 @@ void ImGui_ImplWaylandCxx_Data::OnKey(const wl::KeyEvent& ev) {
       io.AddInputCharacter(cp);
   }
 }
+
+#ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
+// ══════════════════════════════════════════════════════════════════════════════
+// IME (text-input), delivered through wl::ime::TextInputListener
+//
+// The compositor's input method owns composition; ImGui only ever sees the
+// result.  Two of the five events map cleanly onto ImGui, one does not, and the
+// asymmetry is the interesting part — see OnPreeditString.
+// ══════════════════════════════════════════════════════════════════════════════
+
+void ImGui_ImplWaylandCxx_Data::OnEnter() {
+  // The field just (re)gained IME focus and the backend has issued its own
+  // enable, which resets every field of the text-input state.  ImGui will not
+  // call the platform hook again — it only fires when its own data changes — so
+  // re-send what it last asked for, or the IME stays enabled at a (0,0,0,0)
+  // cursor rectangle and the on-screen keyboard has nowhere to anchor.
+  PushImeState();
+}
+
+void ImGui_ImplWaylandCxx_Data::OnLeave() {
+  // The text field lost IME focus; anything half-composed is gone with it.
+  preedit.clear();
+}
+
+void ImGui_ImplWaylandCxx_Data::OnCommitString(std::string_view utf8) {
+  // Composition resolved to final text.  This is the one path that inserts
+  // characters while an IME is engaged — the keysym path stands down.
+  if (utf8.empty())
+    return;
+  // AddInputCharactersUTF8 wants a NUL-terminated buffer, and string_view is
+  // not required to be one.
+  const std::string owned{utf8};
+  ImGui::GetIO().AddInputCharactersUTF8(owned.c_str());
+  preedit.clear();
+}
+
+void ImGui_ImplWaylandCxx_Data::OnPreeditString(std::string_view utf8,
+                                                int32_t cursor_begin,
+                                                int32_t cursor_end) {
+  // Uncommitted composition.  ImGui has no API to display a preedit inside a
+  // widget, so it is stored for the application to draw and deliberately not
+  // inserted: preedit text is provisional and the next preedit_string replaces
+  // it wholesale, which AddInputCharacter cannot express.  The GLFW and SDL
+  // Wayland backends have the same hole.
+  preedit.assign(utf8);
+  preedit_cursor_begin = cursor_begin;
+  preedit_cursor_end = cursor_end;
+}
+
+void ImGui_ImplWaylandCxx_Data::OnDeleteSurroundingText(uint32_t before_bytes,
+                                                        uint32_t after_bytes) {
+  // ImGui has no surrounding-text API, so the deletion is approximated with
+  // Backspace / Delete key events.  The protocol counts BYTES of UTF-8 before
+  // and after the cursor; count code points instead, since that is what a key
+  // press removes.  Only the preedit is available to count against — without
+  // set_surrounding_text the compositor is deleting text this backend never
+  // sent, so anything beyond it is a best-effort guess.
+  ImGuiIO& io = ImGui::GetIO();
+  auto press = [&io](ImGuiKey k) {
+    io.AddKeyEvent(k, true);
+    io.AddKeyEvent(k, false);
+  };
+  // Count UTF-8 lead bytes: every code point has exactly one.
+  auto code_points = [](std::string_view s) {
+    size_t n = 0;
+    for (unsigned char c : s)
+      if ((c & 0xC0) != 0x80)
+        ++n;
+    return n;
+  };
+  const std::string_view pre{preedit};
+  const size_t before_cp =
+      code_points(pre.substr(0, std::min<size_t>(before_bytes, pre.size())));
+  for (size_t i = 0; i < before_cp; ++i)
+    press(ImGuiKey_Backspace);
+  const size_t after_cp =
+      code_points(pre.substr(0, std::min<size_t>(after_bytes, pre.size())));
+  for (size_t i = 0; i < after_cp; ++i)
+    press(ImGuiKey_Delete);
+}
+
+// Send the enabled text input's full state and apply it.  Every field has to be
+// re-sent after each enable, because enable resets all of them — so this is
+// called both when ImGui's request changes and when the field re-enters focus
+// and the backend enables again on its own.
+void ImGui_ImplWaylandCxx_Data::PushImeState() {
+  if (!ime_enabled)
+    return;
+  // No set_surrounding_text: ImGui gives the platform backend no access to the
+  // focused widget's buffer, and sending an empty one would tell the input
+  // method the field is empty when it may not be — worse than saying nothing.
+  // An IME that wants context (conversion, prediction) therefore gets none
+  // here; wiring it up needs a surrounding-text query in ImGui itself.
+  text_input.SetContentType(wl::ime::ContentHint::kNone,
+                            wl::ime::ContentPurpose::kNormal);
+  // The rectangle the IME's candidate window or on-screen keyboard should
+  // anchor to and avoid, in surface-local coordinates — which is what ImGui
+  // reports, so no scaling is applied.
+  text_input.SetCursorRectangle(static_cast<int32_t>(ime_want.InputPos.x),
+                                static_cast<int32_t>(ime_want.InputPos.y), 1,
+                                static_cast<int32_t>(ime_want.InputLineHeight));
+  text_input.Commit();
+}
+
+// Drive the compositor's IME from ImGui's request.  ImGui calls this only when
+// its data changes, so there is no per-frame filtering to do here.
+void ImGui_ImplWaylandCxx_Data::ApplyImeData(const ImGuiPlatformImeData& data) {
+  ime_want = data;
+  const bool want = data.WantVisible;
+  if (want != ime_enabled) {
+    if (want) {
+      text_input.Activate();
+    } else {
+      // Deactivate already disables and commits.
+      text_input.Deactivate();
+      preedit.clear();
+    }
+    ime_enabled = want;
+  }
+  PushImeState();
+}
+#endif  // IMGUI_IMPL_WAYLAND_CXX_HAS_IME
 
 void ImGui_ImplWaylandCxx_Data::OnKeyboardLeave() {
   focus_lost = true;
@@ -747,6 +941,14 @@ bool ImGui_ImplWaylandCxx_Init(wl_display* display,
   bd->registry.OnGlobal([bd](wl::CRegistry&, uint32_t name,
                              std::string_view iface, uint32_t ver) {
     using namespace wayland::client;
+#if defined(WL_IME_BACKEND_TEXT_INPUT_V3)
+    using ti_mgr =
+        text_input_unstable_v3::client::zwp_text_input_manager_v3_traits;
+#elif defined(WL_IME_BACKEND_TEXT_INPUT_V1)
+    using ti_mgr =
+        text_input_unstable_v1::client::zwp_text_input_manager_v1_traits;
+#endif
+
     if (iface == wl_seat_traits::interface_name) {
       bd->seat_name = name;
       bd->seat_ver_adv = ver;
@@ -754,6 +956,12 @@ bool ImGui_ImplWaylandCxx_Init(wl_display* display,
       bd->shm_name = name;
       bd->shm_ver_adv = ver;
     }
+#ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
+    else if (iface == ti_mgr::interface_name) {
+      bd->ti_name = name;
+      bd->ti_ver_adv = ver;
+    }
+#endif
   });
   if (!wl::RoundtripWithTimeout(display)) {
     ImGui_ImplWaylandCxx_Shutdown();
@@ -777,6 +985,26 @@ bool ImGui_ImplWaylandCxx_Init(wl_display* display,
     (void)wl::BindHandler<wl_shm_traits>(bd->registry, bd->shm, bd->shm_name,
                                          bd->shm_ver_adv);
   }
+
+#ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
+  // Text input is best-effort and needs the seat: v3 creates the text_input
+  // from it, and a compositor with no input method advertises no manager.  A
+  // failure here leaves every ITextInputReceiver call a no-op, so typing still
+  // works through the keysym path.
+  if (bd->ti_name != 0 && !bd->seat.IsNull()) {
+    bd->text_input.Record(bd->ti_name, bd->ti_ver_adv);
+    if (bd->text_input.Bind(bd->registry, bd, bd->seat.Get()->GetProxy())) {
+      // v1 needs the surface to activate against; v3 ignores it.
+      bd->text_input.SetSurface(bd->surface);
+      ImGui::GetPlatformIO().Platform_SetImeDataFn =
+          [](ImGuiContext*, ImGuiViewport*, ImGuiPlatformImeData* data) {
+            if (ImGui_ImplWaylandCxx_Data* b =
+                    ImGui_ImplWaylandCxx_GetBackendData())
+              b->ApplyImeData(*data);
+          };
+    }
+  }
+#endif
 
   // Seat capabilities arrive on this roundtrip → keyboard/pointer/touch are
   // created inside OnSeatCapabilities before Init returns.
@@ -806,6 +1034,13 @@ void ImGui_ImplWaylandCxx_Shutdown() {
   ImGuiIO& io = ImGui::GetIO();
 
   bd->cursor.Release();
+#ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
+  // Drop the ImGui hook before the receiver it calls into, then the text_input
+  // and manager proxies — they are created from the seat, so they go first.
+  if (ImGui::GetCurrentContext() != nullptr)
+    ImGui::GetPlatformIO().Platform_SetImeDataFn = nullptr;
+  bd->text_input.Release();
+#endif
   bd->ReleaseInput();
   if (!bd->seat.IsNull()) {
     using namespace wayland::client;
