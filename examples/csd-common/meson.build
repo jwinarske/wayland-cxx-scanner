@@ -14,7 +14,14 @@
 #
 # How the decoration is chosen:
 #
-#   ssd       no plugin at all; the example asks the compositor to decorate
+#   none      nothing at all is compiled or linked -- no plugin, no window
+#             frame, no decoration protocol. For targets that will never want a
+#             client-drawn frame, where the shell owns the screen. Consumers
+#             still compile unchanged: <decorated_window.hpp> then defines a
+#             window whose decoration calls are empty inlines.
+#   ssd       no plugin, but the frame is built so it can ask the compositor to
+#             decorate. This is what gets a title bar out of a compositor that
+#             draws its own.
 #   auto      the highest-fidelity plugin available, but still prefer the
 #             compositor at run time
 #   gtk       |
@@ -32,15 +39,16 @@ csd_opt     = get_option('csd')
 gtk_dep   = []
 gtk_found = false
 
-# 'ssd' outranks csd_gtk: with no plugin compiled there is no GTK backend to
-# choose. Asking for both is a contradiction rather than a preference.
-if csd_opt == 'ssd' and csd_gtk_opt in ['gtk3', 'gtk4']
-    error('csd_gtk=' + csd_gtk_opt + ' selects a GTK backend, but csd=ssd ' +
-          '(the default) builds no decoration plugin for it to back. ' +
+# 'none' and 'ssd' outrank csd_gtk: with no plugin compiled there is no GTK
+# backend to choose. Asking for both is a contradiction rather than a
+# preference.
+if csd_opt in ['none', 'ssd'] and csd_gtk_opt in ['gtk3', 'gtk4']
+    error('csd_gtk=' + csd_gtk_opt + ' selects a GTK backend, but csd=' +
+          csd_opt + ' builds no decoration plugin for it to back. ' +
           'Add -Dcsd=gtk to build the GTK plugin.')
 endif
 
-if csd_opt == 'ssd'
+if csd_opt in ['none', 'ssd']
     # Skip GTK detection entirely: nothing will link it.
 elif csd_gtk_opt == 'gtk4'
     error('csd_gtk=gtk4: the GTK 4 backend is not implemented. GTK 4 removed ' +
@@ -60,7 +68,7 @@ endif
 cairo_dep      = []
 pangocairo_dep = []
 cairo_found    = false
-if csd_opt != 'ssd'
+if csd_opt not in ['none', 'ssd']
     cairo_dep      = dependency('cairo',      required: csd_opt == 'cairo')
     pangocairo_dep = dependency('pangocairo', required: csd_opt == 'cairo')
     cairo_found    = cairo_dep.found() and pangocairo_dep.found()
@@ -73,8 +81,9 @@ csd_sources  = []
 csd_deps     = []
 csd_args     = []
 
-if csd_choice == 'ssd'
-    # No plugin, no define: the example asks for server-side decorations.
+if csd_choice in ['none', 'ssd']
+    # No plugin, no plugin define. 'none' goes further and builds nothing at
+    # all, which is handled below.
 elif csd_choice == 'auto'
     # Highest fidelity available -- but the runtime still prefers the
     # compositor's own decorations, and only falls back to this plugin if the
@@ -121,13 +130,25 @@ message('csd-common: CSD plugin "' + csd_choice + '" (csd=' + csd_opt +
 #
 # DecoratedWindow puts the decoration on a subsurface, which is what lets an EGL
 # or Vulkan client be decorated at all: it has no CPU buffer of its own for a
-# plugin to paint into. It is built whatever the csd option says, because it
-# owns the decoration negotiation — with no plugin that negotiation is what asks
-# the compositor to decorate, which is precisely the csd=ssd case.
+# plugin to paint into. It is built for every choice but 'none', because it owns
+# the decoration negotiation -- with no plugin that negotiation is what asks the
+# compositor to decorate, which is precisely the csd=ssd case.
 #
 # It speaks the protocol, so unlike the plugins it needs the scanner and the
 # protocol XMLs. Every example that would take it needs those too and skips
 # itself without them, so their absence costs nothing here but the frame.
+
+if csd_opt == 'none'
+    # Nothing is compiled and nothing is linked -- no library, no protocol
+    # headers, no toolkit, not even the frame. The consumer's include of
+    # <decorated_window.hpp> resolves to empty inlines because CSD_ENABLED is
+    # absent, so it compiles unchanged and carries none of this.
+    message('csd-common: no decoration (csd=none) -- nothing built')
+    csd_dep = declare_dependency(
+        include_directories: include_directories('.'),
+    )
+    subdir_done()
+endif
 
 wp_dep_csd         = dependency('wayland-protocols', required: false)
 wl_scanner_dep_csd = dependency('wayland-scanner',   required: false)
@@ -135,7 +156,7 @@ wl_scanner_dep_csd = dependency('wayland-scanner',   required: false)
 csd_frame_ok = (wp_dep_csd.found() and wl_scanner_dep_csd.found()
                 and wayland_client_dep.found())
 
-# csd_factory is pure C++ and always builds: it is where the csd option's
+# csd_factory is pure C++ and always builds here: it is where the csd option's
 # defines are read, and reading them is the whole point of the option.
 csd_sources += 'csd_factory.cpp'
 
@@ -170,7 +191,11 @@ if csd_frame_ok
         csd_xdg_decoration_client_hdr,
     ]
     csd_deps += wayland_client_dep
-    csd_args += '-DCSD_HAVE_DECORATED_WINDOW'
+    # Says the library exists to link. Without it every consumer's
+    # <decorated_window.hpp> and <csd_factory.hpp> resolve to empty inlines, so
+    # a missing scanner degrades to an undecorated window rather than a
+    # configure error.
+    csd_args += '-DCSD_ENABLED'
 else
     message('csd-common: no wayland-protocols/scanner — building the plugins ' +
             'without the subsurface window frame')
@@ -181,10 +206,10 @@ endif
 csd_common_inc = include_directories('.')
 framework_inc_csd = include_directories('../../include')
 
-# There is always something to build — csd_factory at least — so unlike the
-# plugins this is unconditional. The generated headers land in this target's
-# build directory, which csd_common_inc covers, so decorated_window.cpp includes
-# them by bare name the way an example does.
+# There is always something to build here — csd_factory at least — because
+# csd=none returned above. The generated headers land in this target's build
+# directory, which csd_common_inc covers, so decorated_window.cpp includes them
+# by bare name the way an example does.
 #
 # The library deliberately leaves wl_iface() for the core wl_* interfaces
 # undefined: this repo defines those per-consumer, so defining them here would

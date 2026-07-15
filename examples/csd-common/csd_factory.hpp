@@ -14,9 +14,11 @@
 
 namespace wl::csd {
 
+#ifdef CSD_ENABLED
+
 /// Construct the plugin the build selected.
 ///
-/// @returns null when the build selected none (csd=ssd), and also when a
+/// @returns null when the build selected no plugin (csd=ssd), and also when a
 ///          themed plugin declines at run time — GTK may be linked but have no
 ///          usable display or theme. A null plugin is a supported state, not an
 ///          error: the caller draws no decoration and asks the compositor to.
@@ -26,5 +28,20 @@ namespace wl::csd {
 /// plugin only if it declines (csd=auto). False when a plugin was named
 /// explicitly, which means client-side is wanted.
 [[nodiscard]] bool CsdPrefersServerSide() noexcept;
+
+#else  // !CSD_ENABLED
+
+/// csd=none: no decoration code is built, so there is nothing to construct and
+/// nothing to link. Inline rather than absent, so a caller compiles unchanged.
+[[nodiscard]] inline std::unique_ptr<CsdPlugin> MakeCsdPlugin() {
+  return nullptr;
+}
+
+/// Nobody is asked to decorate, so there is no preference to express.
+[[nodiscard]] inline bool CsdPrefersServerSide() noexcept {
+  return false;
+}
+
+#endif  // CSD_ENABLED
 
 }  // namespace wl::csd

@@ -17,6 +17,8 @@
 #include "xdg_shell_client.hpp"
 
 #include <wl/client_helpers.hpp>
+#include <wl/display.hpp>
+#include <wl/registry.hpp>
 #include <wl/scale_policy.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_decoration.hpp>
@@ -40,6 +42,7 @@ namespace {
 
 using xdg_decoration_unstable_v1::client::zxdg_decoration_manager_v1_traits;
 using xdg_decoration_unstable_v1::client::ZxdgToplevelDecorationV1Mode;
+using xdg_shell::client::xdg_surface_traits;
 using xdg_shell::client::xdg_toplevel_traits;
 
 /// Send a request on a proxy this does not own.
@@ -63,6 +66,16 @@ class SurfaceHandler : public wayland::client::CWlSurface<SurfaceHandler> {};
 class SubsurfaceHandler
     : public wayland::client::CWlSubsurface<SubsurfaceHandler> {};
 class ShmPoolHandler : public wayland::client::CWlShmPool<ShmPoolHandler> {};
+class CompositorHandler
+    : public wayland::client::CWlCompositor<CompositorHandler> {};
+class SubcompositorHandler
+    : public wayland::client::CWlSubcompositor<SubcompositorHandler> {};
+// wl_shm has a format event, but the frame asks for ARGB8888 — which every
+// compositor supports — so there is nothing worth listening for.
+class ShmHandler : public wayland::client::CWlShm<ShmHandler> {};
+class DecorationManagerHandler
+    : public xdg_decoration_unstable_v1::client::CZxdgDecorationManagerV1<
+          DecorationManagerHandler> {};
 
 // wl_buffer has a release event, so it gets a real handler.
 class BufferHandler : public wayland::client::CWlBuffer<BufferHandler> {
@@ -177,10 +190,18 @@ struct Pool {
 
 struct DecoratedWindow::Impl {
   std::unique_ptr<CsdPlugin> plugin;
-  wl_proxy* shm = nullptr;
   wl_proxy* content = nullptr;
   wl_proxy* seat = nullptr;
   wl_proxy* toplevel = nullptr;
+  wl_proxy* xdg_surface = nullptr;
+
+  // Bound from a registry of this frame's own, so a caller never has to hand
+  // over globals it does not otherwise use.
+  wl::CRegistry registry;
+  wl::WlPtr<CompositorHandler> compositor;
+  wl::WlPtr<SubcompositorHandler> subcompositor;
+  wl::WlPtr<ShmHandler> shm;
+  wl::WlPtr<DecorationManagerHandler> decoration_mgr;
 
   wl::WlPtr<SurfaceHandler> surface;
   wl::WlPtr<SubsurfaceHandler> subsurface;
@@ -205,9 +226,21 @@ struct DecoratedWindow::Impl {
   int content_w = 0;
   int content_h = 0;
 
+  // The size to go back to when the compositor stops imposing one. Tracked here
+  // rather than by the caller because only this knows the difference between a
+  // configure the compositor chose and one it left to us — and because the
+  // caller getting it wrong is invisible until an un-maximize.
+  int restore_w = 0;
+  int restore_h = 0;
+
+  // Geometry last declared, so an unchanged frame does not re-declare it.
+  int geom_w = -1;
+  int geom_h = -1;
+
   // ── Toplevel state, as the compositor reports it ──────────────────────────
   bool activated = true;
   bool maximized = false;
+  bool fullscreen = false;
 
   // ── Pointer ───────────────────────────────────────────────────────────────
   bool over_frame = false;
@@ -224,6 +257,22 @@ struct DecoratedWindow::Impl {
   int title_press_y = 0;
 
   bool close_requested = false;
+
+  // Whether the decoration surface has been taken off the screen. Not drawing
+  // is not the same as removing what was drawn: the subsurface keeps its last
+  // buffer until told otherwise, so going fullscreen would leave a title bar
+  // stranded over the content.
+  bool frame_hidden = false;
+
+  void HideFrame() noexcept {
+    if (surface.IsNull() || frame_hidden)
+      return;
+    // A surface with no buffer is not mapped, which is how a subsurface is
+    // taken off the screen -- there is no other way to unmap one.
+    surface.Get()->Attach(nullptr, 0, 0);
+    surface.Get()->Commit();
+    frame_hidden = true;
+  }
 
   [[nodiscard]] HitZone HitTest(int x, int y) const noexcept {
     if (!plugin)
@@ -285,10 +334,72 @@ DecoratedWindow::~DecoratedWindow() = default;
 bool DecoratedWindow::Init(const Config& config,
                            std::unique_ptr<CsdPlugin> plugin) {
   impl_->plugin = std::move(plugin);
-  impl_->shm = config.shm;
   impl_->content = config.content_surface;
   impl_->seat = config.seat;
   impl_->toplevel = config.xdg_toplevel;
+  impl_->xdg_surface = config.xdg_surface;
+
+  // The size to restore to until a compositor imposes one. Seeded from the
+  // caller's own default: the first configure is often "you pick", and this is
+  // the only thing that knows what the caller would have picked.
+  impl_->restore_w = std::max(1, config.content_width);
+  impl_->restore_h = std::max(1, config.content_height);
+
+  if (config.display == nullptr)
+    return false;
+
+  // A registry of this frame's own. The protocol allows any number of them, and
+  // one here means a caller never binds wl_shm or wl_subcompositor purely to
+  // hand them over — nor silently loses the decoration negotiation by
+  // forgetting the manager.
+  uint32_t compositor_name = 0, compositor_ver = 0;
+  uint32_t subcompositor_name = 0, subcompositor_ver = 0;
+  uint32_t shm_name = 0, shm_ver = 0;
+  uint32_t deco_name = 0, deco_ver = 0;
+
+  if (!impl_->registry.Create(config.display))
+    return false;
+  impl_->registry.OnGlobal([&](wl::CRegistry& /*reg*/, uint32_t name,
+                               std::string_view iface, uint32_t ver) {
+    if (iface == wayland::client::wl_compositor_traits::interface_name) {
+      compositor_name = name;
+      compositor_ver = ver;
+    } else if (iface ==
+               wayland::client::wl_subcompositor_traits::interface_name) {
+      subcompositor_name = name;
+      subcompositor_ver = ver;
+    } else if (iface == wayland::client::wl_shm_traits::interface_name) {
+      shm_name = name;
+      shm_ver = ver;
+    } else if (iface == zxdg_decoration_manager_v1_traits::interface_name) {
+      deco_name = name;
+      deco_ver = ver;
+    }
+  });
+  if (!wl::RoundtripWithTimeout(config.display))
+    return false;
+
+  auto bind = [&](auto& holder, auto traits_tag, uint32_t name,
+                  uint32_t ver) -> bool {
+    using Traits = decltype(traits_tag);
+    if (name == 0)
+      return false;
+    wl_proxy* raw =
+        impl_->registry.Bind<Traits>(name, std::min(ver, Traits::version));
+    if (raw == nullptr)
+      return false;
+    holder.Attach(raw);
+    return true;
+  };
+  bind(impl_->compositor, wayland::client::wl_compositor_traits{},
+       compositor_name, compositor_ver);
+  bind(impl_->subcompositor, wayland::client::wl_subcompositor_traits{},
+       subcompositor_name, subcompositor_ver);
+  bind(impl_->shm, wayland::client::wl_shm_traits{}, shm_name, shm_ver);
+  // Optional: a compositor offering no decoration manager cannot be asked to
+  // decorate, and will not.
+  bind(impl_->decoration_mgr, zxdg_decoration_manager_v1_traits{}, deco_name,
+       deco_ver);
 
   // Ask for client-side only when we both can and want to. With no plugin there
   // is nothing to draw a frame with, and when the build prefers the compositor
@@ -296,14 +407,14 @@ bool DecoratedWindow::Init(const Config& config,
   // answers with a configure.
   const bool want_csd = impl_->plugin != nullptr && !config.prefer_server_side;
 
-  if (config.decoration_manager != nullptr && config.xdg_toplevel != nullptr) {
+  if (!impl_->decoration_mgr.IsNull() && config.xdg_toplevel != nullptr) {
     // The manager is borrowed too, so the decoration is constructed by hand
     // rather than through wl::construct, which wants an owning handler. The
     // decoration itself *is* owned from here: it carries the configure that
     // settles who draws.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
     wl_proxy* raw = wl_proxy_marshal_constructor(
-        config.decoration_manager,
+        impl_->decoration_mgr.Get()->GetProxy(),
         zxdg_decoration_manager_v1_traits::Op::GetToplevelDecoration,
         &wl::xdg_decoration::decoration_iface, nullptr, config.xdg_toplevel);
     if (raw != nullptr && wl::SetupHandler(impl_->decoration, raw)) {
@@ -324,13 +435,16 @@ bool DecoratedWindow::Init(const Config& config,
   if (!impl_->plugin)
     return true;
 
-  if (config.compositor == nullptr || config.subcompositor == nullptr ||
-      config.shm == nullptr || config.content_surface == nullptr)
+  // No compositor, subcompositor or shm: nowhere to put a decoration. The
+  // window is then undecorated unless the compositor took the job above, which
+  // is a worse outcome than a frame but not a broken one.
+  if (impl_->compositor.IsNull() || impl_->subcompositor.IsNull() ||
+      impl_->shm.IsNull() || config.content_surface == nullptr)
     return false;
 
   // Create the decoration surface and make it a child of the content surface.
   wl_surface* raw_surface = wl_compositor_create_surface(
-      reinterpret_cast<wl_compositor*>(config.compositor));
+      reinterpret_cast<wl_compositor*>(impl_->compositor.Get()->GetProxy()));
   if (raw_surface == nullptr)
     return false;
   // _SetProxy, not Attach: wl_surface has events, so it takes the generated
@@ -341,8 +455,9 @@ bool DecoratedWindow::Init(const Config& config,
     return false;
 
   wl_subsurface* raw_sub = wl_subcompositor_get_subsurface(
-      reinterpret_cast<wl_subcompositor*>(config.subcompositor), raw_surface,
-      reinterpret_cast<wl_surface*>(config.content_surface));
+      reinterpret_cast<wl_subcompositor*>(
+          impl_->subcompositor.Get()->GetProxy()),
+      raw_surface, reinterpret_cast<wl_surface*>(config.content_surface));
   if (raw_sub == nullptr)
     return false;
   // wl_subsurface has no events, so a bare Attach is right here.
@@ -357,7 +472,12 @@ bool DecoratedWindow::Init(const Config& config,
 }
 
 bool DecoratedWindow::DrawsClientSide() const noexcept {
-  return impl_->draws_client_side && impl_->plugin != nullptr;
+  // Fullscreen outranks the negotiation: the compositor gave the client the
+  // whole output, so there is no window to put a frame around. Every margin
+  // then reports zero and the geometry becomes the content, which is what a
+  // fullscreen surface wants.
+  return impl_->draws_client_side && impl_->plugin != nullptr &&
+         !impl_->fullscreen;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -376,25 +496,54 @@ Margins DecoratedWindow::VisibleMargins() const {
   return DrawsClientSide() ? impl_->plugin->VisibleMargins() : Margins{};
 }
 
-DecoratedWindow::Geometry DecoratedWindow::WindowGeometry(int content_w,
-                                                          int content_h) const {
-  const Margins v = VisibleMargins();
-  return {-v.left, -v.top, v.left + content_w + v.right,
-          v.top + content_h + v.bottom};
-}
-
 void DecoratedWindow::ContentSizeForConfigure(int width,
                                               int height,
                                               int* content_w,
-                                              int* content_h) const {
-  // Only the decoration that is part of the window: a shadow lies outside the
-  // window geometry the compositor just sized, so subtracting it here would
-  // shrink the content by the shadow on every configure.
-  const Margins v = VisibleMargins();
-  if (content_w != nullptr)
-    *content_w = std::max(1, width - v.left - v.right);
-  if (content_h != nullptr)
-    *content_h = std::max(1, height - v.top - v.bottom);
+                                              int* content_h) {
+  // A compositor's dimension reaches an allocation, so it is clamped before it
+  // is believed. Same reasoning as the scale clamp: the value is not ours.
+  static constexpr int kMaxDim = 16384;
+
+  int cw = 0;
+  int ch = 0;
+  if (width > 0 && height > 0) {
+    // Only the decoration that is part of the window: a shadow lies outside the
+    // window geometry the compositor just sized, so subtracting it here would
+    // shrink the content by the shadow on every configure. This is the exact
+    // inverse of the rectangle Commit() declares.
+    const Margins v = VisibleMargins();
+    cw = std::min(width, kMaxDim) - v.left - v.right;
+    ch = std::min(height, kMaxDim) - v.top - v.bottom;
+  } else {
+    // A zero axis means the compositor has no opinion and the size is ours to
+    // pick. It is how a compositor says "go back to whatever you were", so this
+    // is the path an un-maximize takes -- and ignoring it leaves the window
+    // holding its maximized buffer, still looking maximized while the
+    // compositor believes it was restored. The compositor then has nothing to
+    // change on the next maximize, so it stays silent and the window is stuck
+    // for good.
+    //
+    // Only the zero axes are ours to choose; the other still binds.
+    const Margins v = VisibleMargins();
+    cw = width > 0 ? std::min(width, kMaxDim) - v.left - v.right
+                   : impl_->restore_w;
+    ch = height > 0 ? std::min(height, kMaxDim) - v.top - v.bottom
+                    : impl_->restore_h;
+  }
+
+  cw = std::clamp(cw, 1, kMaxDim);
+  ch = std::clamp(ch, 1, kMaxDim);
+
+  // Remember the size to come back to, but only while the compositor is not
+  // imposing one: a maximized or fullscreen size is the compositor's, not a
+  // size we would ever choose to return to.
+  if (!impl_->maximized && !impl_->fullscreen) {
+    impl_->restore_w = cw;
+    impl_->restore_h = ch;
+  }
+
+  *content_w = cw;
+  *content_h = ch;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -413,9 +562,11 @@ void DecoratedWindow::SetScale(int scale_120) {
 }
 
 void DecoratedWindow::SetToplevelStates(bool activated,
-                                        bool maximized) noexcept {
+                                        bool maximized,
+                                        bool fullscreen) noexcept {
   impl_->activated = activated;
   impl_->maximized = maximized;
+  impl_->fullscreen = fullscreen;
   impl_->PushInputState();
 }
 
@@ -432,8 +583,35 @@ void DecoratedWindow::Commit(int content_w, int content_h) {
   impl_->content_w = content_w;
   impl_->content_h = content_h;
 
-  if (!DrawsClientSide() || impl_->surface.IsNull())
+  // Declare the window's visible bounds — the content inset by the decoration
+  // that is part of the window, the shadow being outside it. This is the exact
+  // rectangle ContentSizeForConfigure() reads back out of the next configure;
+  // if the two ever disagree the window resizes itself by the difference on
+  // every round trip, which is why neither is the caller's to compute.
+  //
+  // With no decoration the geometry is the content, which is what an
+  // undecorated window wants anyway — so this is right on the server-side path
+  // too.
+  if (impl_->xdg_surface != nullptr &&
+      (content_w != impl_->geom_w || content_h != impl_->geom_h)) {
+    const Margins v = VisibleMargins();
+    Marshal(impl_->xdg_surface, xdg_surface_traits::Op::SetWindowGeometry,
+            -v.left, -v.top, v.left + content_w + v.right,
+            v.top + content_h + v.bottom);
+    impl_->geom_w = content_w;
+    impl_->geom_h = content_h;
+  }
+
+  if (!DrawsClientSide()) {
+    // Either the compositor took the job, there is no plugin, or the window is
+    // fullscreen. In every case the decoration comes off the screen rather than
+    // simply stopping being redrawn.
+    impl_->HideFrame();
     return;
+  }
+  if (impl_->surface.IsNull())
+    return;
+  impl_->frame_hidden = false;
 
   const Margins m = impl_->plugin->DecorationMargins();
   const int sw = content_w + m.left + m.right;
@@ -449,7 +627,8 @@ void DecoratedWindow::Commit(int content_w, int content_h) {
     if (!impl_->retired || impl_->retired->AllReleased())
       impl_->retired = std::move(impl_->pool);
     impl_->pool = std::make_unique<Pool>();
-    if (!impl_->pool->Create(buf.width, buf.height, impl_->shm)) {
+    if (!impl_->pool->Create(buf.width, buf.height,
+                             impl_->shm.Get()->GetProxy())) {
       std::fprintf(stderr, "csd: decoration pool %dx%d failed\n", buf.width,
                    buf.height);
       return;
