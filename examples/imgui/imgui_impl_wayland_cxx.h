@@ -13,10 +13,17 @@
 //      (io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors), animated
 //      cursors included.
 //  [X] Platform: Keyboard focus loss (wl_keyboard.leave -> io.AddFocusEvent).
+//  [X] Platform: IME via the wl::ime facade (the backend the ime_backend build
+//      option selects; compiled out entirely for ime_backend=none).
+//      Platform_SetImeDataFn drives enable/disable + cursor rectangle,
+//      commit_string feeds AddInputCharactersUTF8, delete_surrounding_text is
+//      synthesized as Backspace.
 // Missing features / issues:
 //  [ ] Platform: Clipboard via wl_data_device (wl::DataDevice) not yet wired.
-//  [ ] Platform: IME (zwp_text_input_v3); dead keys / compose sequences are
-//      not composed — text input is per-keysym via xkb_keysym_to_utf32().
+//  [ ] Platform: IME composition text is tracked but not drawn (ImGui has no
+//      preedit API) and is not exposed, so an application cannot render it
+//      either.  Dead keys / compose sequences are likewise not composed by the
+//      backend; ordinary text is per-keysym via xkb_keysym_to_utf32().
 //  [ ] Platform: Multi-viewport (impossible: Wayland has no global coords).
 //  [ ] Platform: SetMousePos (impossible: Wayland cannot warp the pointer).
 //

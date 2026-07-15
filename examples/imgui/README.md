@@ -28,19 +28,16 @@ and `xdg-shell.xml`, exactly like the other examples.
 
 | Area | Implementation |
 |---|---|
-| Mouse | `BackendPointer` on the generated `CWlPointer<T>`: continuous `axis`, `axis_discrete` (v5–7), hi-res `axis_value120` (v8+), batched on `wl_pointer.frame`; BTN_LEFT/RIGHT/MIDDLE/SIDE/EXTRA; surface-filtered enter/leave |
+| Mouse | `wl::PointerHandler` hooks: position, BTN_LEFT/RIGHT/MIDDLE/SIDE/EXTRA, and the normalized axis family — continuous `axis`, `axis_discrete` (v5–7) and hi-res `axis_value120` (v8+) all arrive as `value120`, batched on `wl_pointer.frame`; enter/leave filtered to the application's surface |
 | Keyboard | `wl::KeyboardHandler` as-is: xkbcommon keymap, timerfd key repeat (plus wl_keyboard v10 server-driven repeat), evdev→`ImGuiKey` table, keysym→UTF-32 text input, per-side modifier tracking, focus loss via `OnKeyboardLeave` |
+| IME | `wl::ime` facade (whichever backend `ime_backend` selects; compiled out for `none`): `Platform_SetImeDataFn` drives enable/disable and the cursor rectangle, `commit_string` → `AddInputCharactersUTF8`, `delete_surrounding_text` → synthesized Backspace. Composition text is tracked but not drawn — ImGui has no preedit API — and the keysym text path stands down while it is non-empty so composed characters are not typed twice. Dead keys / compose sequences are not composed by the backend itself |
 | Touch | `wl::TouchHandler` hooks, single-touch mouse emulation reported as `ImGuiMouseSource_TouchScreen` |
 | Cursor | `wl::CursorManager` — XDG cursor-spec shape names for all 11 `ImGuiMouseCursor_` values, animated cursors, HiDPI theme reload, `MouseDrawCursor`/`None` → `set_cursor(null)` |
 | Lifecycle | Backend-private `wl_registry` on the app's connection; versioned `release` teardown; seat is optional (headless/kiosk safe) |
 
-Not wired: clipboard (`wl::DataDevice`), IME/compose (`zwp_text_input_v3` — text
-input is per-keysym), multi-viewport and `SetMousePos` (both impossible on
-Wayland).
-
-`BackendPointer` predates `wl::PointerHandler`'s scroll hooks and could now use
-them, except that it filters enter/leave by surface and `wl::PointerEvent` does
-not carry the surface. See the note above it.
+Not wired: clipboard (`wl::DataDevice`), multi-viewport and `SetMousePos` (the
+last two impossible on Wayland — it has no global coordinates and cannot warp
+the pointer).
 
 ## Integration contract
 
