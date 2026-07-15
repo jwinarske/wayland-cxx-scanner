@@ -210,6 +210,16 @@ class CsdPlugin {
   /// Update pointer position and window state for themed rendering.
   virtual void SetInputState(const InputState& state) = 0;
 
+  /// Set the output scale the decoration is rendered for, in 1/120 units —
+  /// the form wp_fractional_scale_v1 delivers, where 120 is unity and an
+  /// integer wl_output.scale N is N * 120.  See <wl/scale_policy.hpp>.
+  ///
+  /// Everything else in this interface is in logical pixels, this included:
+  /// the scale says how many physical pixels a logical one is worth, so the
+  /// decoration can be drawn at the panel's real resolution rather than
+  /// drawn small and stretched.  Margins do not change with it.
+  virtual void SetScale(int scale_120) { static_cast<void>(scale_120); }
+
   // ── Input gesture parameters ──────────────────────────────────────────
 
   /// Interval within which two presses count as a double-click, in ms.
@@ -226,19 +236,25 @@ class CsdPlugin {
 
   // ── Rendering ─────────────────────────────────────────────────────────
 
-  /// Render the decoration chrome (borders, title bar, buttons) into an
+  /// Render the decoration chrome (shadow, title bar, buttons) into an
   /// ARGB8888 buffer with premultiplied alpha.
+  ///
+  /// Every dimension here is logical.  The buffer behind them is physical —
+  /// scaled by SetScale() — and @p stride_px is what connects the two, since
+  /// it is the one measurement that cannot be derived from the logical size.
   ///
   /// The content rectangle — @p content_w × @p content_h at
   /// (`DecorationMargins().left`, `DecorationMargins().top`) — is left
   /// untouched for the application to paint.
   ///
   /// @param buffer     Pointer to the first pixel of the surface buffer.
-  /// @param surface_w  Total surface width (content + decoration).
-  /// @param surface_h  Total surface height (content + decoration).
-  /// @param content_w  Content area width.
-  /// @param content_h  Content area height.
+  /// @param stride_px  Buffer stride, in pixels, not bytes.
+  /// @param surface_w  Total logical surface width (content + decoration).
+  /// @param surface_h  Total logical surface height (content + decoration).
+  /// @param content_w  Logical content area width.
+  /// @param content_h  Logical content area height.
   virtual void RenderDecoration(uint32_t* buffer,
+                                int stride_px,
                                 int surface_w,
                                 int surface_h,
                                 int content_w,

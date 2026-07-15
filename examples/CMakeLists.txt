@@ -17,6 +17,8 @@ set(XDG_SHELL_XML          "${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.
 set(PRESENTATION_TIME_XML  "${WAYLAND_PROTOCOLS_DIR}/stable/presentation-time/presentation-time.xml")
 set(XDG_OUTPUT_XML         "${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-output/xdg-output-unstable-v1.xml")
 set(XDG_DECORATION_XML     "${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml")
+set(VIEWPORTER_XML         "${WAYLAND_PROTOCOLS_DIR}/stable/viewporter/viewporter.xml")
+set(FRACTIONAL_SCALE_XML   "${WAYLAND_PROTOCOLS_DIR}/staging/fractional-scale/fractional-scale-v1.xml")
 set(LINUX_DMABUF_XML       "${WAYLAND_PROTOCOLS_DIR}/unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml")
 set(EXT_DATA_CONTROL_XML   "${WAYLAND_PROTOCOLS_DIR}/staging/ext-data-control/ext-data-control-v1.xml")
 set(AGL_SHELL_XML          "${PROJECT_SOURCE_DIR}/protocols/agl-shell.xml")
@@ -311,6 +313,9 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     wlcxx_gen(xdg_csd xdg-csd wayland_client.hpp                  ${WAYLAND_XML})
     wlcxx_gen(xdg_csd xdg-csd xdg_shell_client.hpp               ${XDG_SHELL_XML})
     wlcxx_gen(xdg_csd xdg-csd xdg_decoration_unstable_v1_client.hpp ${XDG_DECORATION_XML})
+    # Extension protocols: TABLES keeps their headers self-contained.
+    wlcxx_gen(xdg_csd xdg-csd viewporter_client.hpp       ${VIEWPORTER_XML}       TABLES)
+    wlcxx_gen(xdg_csd xdg-csd fractional_scale_client.hpp ${FRACTIONAL_SCALE_XML} TABLES)
 endif ()
 
 # ── xdg-ssd — server-side decorations; compositor draws the frame (Weston) ────

@@ -39,7 +39,9 @@
 //             cppcoreguidelines-pro-type-reinterpret-cast)
 
 // ── Generated C++ protocol headers ───────────────────────────────────────────
-#include "wayland_client.hpp"                     // namespace wayland::client
+#include "fractional_scale_client.hpp"  // namespace fractional_scale_v1::client
+#include "viewporter_client.hpp"        // namespace viewporter::client
+#include "wayland_client.hpp"           // namespace wayland::client
 #include "xdg_decoration_unstable_v1_client.hpp"  // namespace xdg_decoration_unstable_v1::client
 #include "xdg_shell_client.hpp"                   // namespace xdg_shell::client
 
@@ -62,6 +64,7 @@
 #include <wl/display.hpp>
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
+#include <wl/scale_policy.hpp>  // wl::ScalePolicy — buffer/viewport sizing
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_decoration.hpp>
@@ -237,6 +240,27 @@ class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 // ── WlRegionHandler ─────────────────────────────────────────────────────────
 
 class WlRegionHandler : public wayland::client::CWlRegion<WlRegionHandler> {};
+
+// ── Scale: viewporter + fractional-scale ────────────────────────────────────
+// wp_viewporter / wp_viewport and the fractional-scale manager have no events.
+
+class WpViewporterHandler
+    : public viewporter::client::CWpViewporter<WpViewporterHandler> {};
+class WpViewportHandler
+    : public viewporter::client::CWpViewport<WpViewportHandler> {};
+class WpFractionalScaleManagerHandler
+    : public fractional_scale_v1::client::CWpFractionalScaleManagerV1<
+          WpFractionalScaleManagerHandler> {};
+
+// wp_fractional_scale_v1 delivers the compositor's preferred scale in 1/120
+// units via preferred_scale.
+class WpFractionalScaleHandler
+    : public fractional_scale_v1::client::CWpFractionalScaleV1<
+          WpFractionalScaleHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnPreferredScale(uint32_t scale_120) override;
+};
 
 // ── WlCallbackHandler ───────────────────────────────────────────────────────
 
@@ -430,6 +454,7 @@ class App {
   void OnToplevelConfigure(int32_t width, int32_t height);
   void OnToplevelStates(const wl::ToplevelStates& states);
   void OnToplevelClose();
+  void OnPreferredScale(int32_t scale_120) noexcept;
   void OnDecorationConfigure(uint32_t mode);
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(uint32_t stamp_ms) noexcept;
@@ -510,6 +535,20 @@ class App {
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
   wl::WlPtr<WlCallbackHandler> frame_cb_;
+
+  // Optional: viewporter + fractional-scale. Bound as a pair or not at all —
+  // a preferred scale with no viewport to present the physical buffer back at
+  // the logical size would just make the window the wrong size on screen.
+  wl::WlPtr<WpViewporterHandler> viewporter_;
+  wl::WlPtr<WpFractionalScaleManagerHandler> fractional_mgr_;
+  wl::WlPtr<WpViewportHandler> viewport_;
+  wl::WlPtr<WpFractionalScaleHandler> fractional_;
+
+  // The compositor's preferred scale, in 1/120 units (120 = unity). Every
+  // other dimension in this file is logical; this is what turns them into the
+  // buffer's physical pixels. See <wl/scale_policy.hpp>.
+  int32_t scale_120_ = wl::ScalePolicy::kUnityScale120;
+  [[nodiscard]] bool CanScale() const noexcept { return !viewport_.IsNull(); }
   // Held by pointer so a resize can hand the old pool aside intact rather than
   // tearing it down underneath the compositor.
   std::unique_ptr<BufferPool> pool_ = std::make_unique<BufferPool>();
@@ -555,6 +594,8 @@ class App {
   uint32_t shm_name_ = 0, shm_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
   uint32_t decoration_mgr_name_ = 0, decoration_mgr_ver_ = 0;
+  uint32_t viewporter_name_ = 0, viewporter_ver_ = 0;
+  uint32_t fractional_mgr_name_ = 0, fractional_mgr_ver_ = 0;
 
   // ── Pipeline ──────────────────────────────────────────────────────────────
   bool ConnectDisplay();
@@ -574,6 +615,9 @@ class App {
   // Last window geometry submitted, likewise. Both are double-buffered state
   // that only needs re-declaring when it actually changes.
   int geometry_x_ = -1, geometry_y_ = -1, geometry_w_ = -1, geometry_h_ = -1;
+
+  // Last viewport destination submitted, same reasoning.
+  int viewport_w_ = -1, viewport_h_ = -1;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -582,6 +626,10 @@ class App {
 
 void WlCallbackHandler::OnDone(uint32_t time_ms) {
   app_->OnFrameDone(time_ms);
+}
+
+void WpFractionalScaleHandler::OnPreferredScale(uint32_t scale_120) {
+  app_->OnPreferredScale(static_cast<int32_t>(scale_120));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -628,6 +676,8 @@ bool App::ScanGlobals() {
     using namespace wayland::client;
     using namespace xdg_shell::client;
     using namespace xdg_decoration_unstable_v1::client;
+    using namespace viewporter::client;
+    using namespace fractional_scale_v1::client;
 
     if (iface == wl_compositor_traits::interface_name) {
       compositor_name_ = name;
@@ -641,6 +691,12 @@ bool App::ScanGlobals() {
     } else if (iface == zxdg_decoration_manager_v1_traits::interface_name) {
       decoration_mgr_name_ = name;
       decoration_mgr_ver_ = ver;
+    } else if (iface == wp_viewporter_traits::interface_name) {
+      viewporter_name_ = name;
+      viewporter_ver_ = ver;
+    } else if (iface == wp_fractional_scale_manager_v1_traits::interface_name) {
+      fractional_mgr_name_ = name;
+      fractional_mgr_ver_ = ver;
     } else if (iface == wl_seat_traits::interface_name) {
       seat_.Record(name, ver);
     }
@@ -686,6 +742,31 @@ bool App::BindGlobals() {
           registry_, xdg_wm_base_, xdg_wm_base_name_, xdg_wm_base_ver_)) {
     std::fprintf(stderr, "xdg-csd: xdg_wm_base bind failed\n");
     return false;
+  }
+
+  // wp_viewporter + wp_fractional_scale_manager_v1 — optional, and bound as a
+  // pair or not at all: a preferred scale is only useful with a viewport to
+  // present the physical buffer back at the logical size, and a viewport with
+  // no scale to apply has nothing to do.
+  if (viewporter_name_ && fractional_mgr_name_) {
+    using namespace viewporter::client;
+    using namespace fractional_scale_v1::client;
+    wl_proxy* vp = registry_.Bind<wp_viewporter_traits>(
+        viewporter_name_,
+        std::min(viewporter_ver_, wp_viewporter_traits::version));
+    wl_proxy* fm = registry_.Bind<wp_fractional_scale_manager_v1_traits>(
+        fractional_mgr_name_,
+        std::min(fractional_mgr_ver_,
+                 wp_fractional_scale_manager_v1_traits::version));
+    if (vp != nullptr && fm != nullptr) {
+      viewporter_.Attach(vp);
+      fractional_mgr_.Attach(fm);
+    } else {
+      if (vp != nullptr)
+        wl_proxy_destroy(vp);
+      if (fm != nullptr)
+        wl_proxy_destroy(fm);
+    }
   }
 
   // zxdg_decoration_manager_v1 — optional.
@@ -778,6 +859,24 @@ bool App::CreateWindow() {
   toplevel->app_ = this;
   toplevel->SetTitle(title_);
   toplevel->SetAppId("org.wayland-cxx.xdg-csd");
+
+  // Per-surface viewport and fractional-scale objects.
+  if (!viewporter_.IsNull() && !fractional_mgr_.IsNull()) {
+    using namespace viewporter::client;
+    using namespace fractional_scale_v1::client;
+    if (wl_proxy* raw = wl::construct<wp_viewport_traits,
+                                      wp_viewporter_traits::Op::GetViewport>(
+            *viewporter_.Get(), surface_.Get()->GetProxy())) {
+      viewport_.Attach(raw);
+    }
+    if (wl_proxy* raw = wl::construct<
+            wp_fractional_scale_v1_traits,
+            wp_fractional_scale_manager_v1_traits::Op::GetFractionalScale>(
+            *fractional_mgr_.Get(), surface_.Get()->GetProxy())) {
+      if (wl::SetupHandler(fractional_, raw))
+        fractional_.Get()->app_ = this;
+    }
+  }
 
   // Negotiate decoration mode via zxdg_decoration_manager_v1.
   if (!decoration_mgr_.IsNull()) {
@@ -893,6 +992,19 @@ void App::OnToplevelStates(const wl::ToplevelStates& states) {
 
 void App::OnToplevelClose() {
   running_ = false;
+}
+
+// The compositor's preferred scale for this surface — which changes when the
+// window is dragged onto an output with a different scale.
+void App::OnPreferredScale(const int32_t scale_120) noexcept {
+  // Honoured only with a viewport to present the physical buffer at the
+  // logical size; without one the window would come out the wrong size.
+  if (!CanScale() || scale_120 <= 0 || scale_120 == scale_120_)
+    return;
+  scale_120_ = scale_120;
+  if (csd_plugin_)
+    csd_plugin_->SetScale(scale_120_);
+  need_redraw_ = true;
 }
 
 void App::OnDecorationConfigure(uint32_t mode) {
@@ -1124,17 +1236,25 @@ void App::UpdateOpaqueRegion(int x, int y, int w, int h) noexcept {
 }
 
 void App::CommitFrame(uint32_t time_ms) noexcept {
+  // Logical: what the window is worth on screen, and what every margin, hit
+  // test and configure is expressed in.
   const int sw = SurfaceWidth();
   const int sh = SurfaceHeight();
+  // Physical: what the buffer actually holds. The viewport presents it back at
+  // the logical size, so the two are derived from the same pair and cannot
+  // drift apart.
+  const wl::ScalePolicy::BufferSize buf =
+      wl::ScalePolicy::ToBuffer(sw, sh, scale_120_);
 
   // The compositor may still be displaying buffers from the current pool, so a
   // resize retires it rather than freeing it, and a fresh pool takes over.
-  if (pool_->width != sw || pool_->height != sh) {
+  if (pool_->width != buf.width || pool_->height != buf.height) {
     if (!retired_ || retired_->AllReleased())
       retired_ = std::move(pool_);  // Drops any older pool, now safely idle.
     pool_ = std::make_unique<BufferPool>();
-    if (!pool_->Create(sw, sh, shm_.Get()->GetProxy())) {
-      std::fprintf(stderr, "xdg-csd: buffer pool %dx%d failed\n", sw, sh);
+    if (!pool_->Create(buf.width, buf.height, shm_.Get()->GetProxy())) {
+      std::fprintf(stderr, "xdg-csd: buffer pool %dx%d failed\n", buf.width,
+                   buf.height);
       return;
     }
   }
@@ -1157,8 +1277,8 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
   }
 
   auto* pixels = static_cast<uint32_t*>(pool_->PixelData(idx));
-  const std::size_t npixels =
-      static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh);
+  const std::size_t npixels = static_cast<std::size_t>(buf.width) *
+                              static_cast<std::size_t>(buf.height);
 
   if (use_csd_ && csd_plugin_) {
     // Let the plugin pump its own event source (theme changes, etc.) before it
@@ -1175,9 +1295,16 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
 
     // The plugin paints the chrome; the app paints its own content into the
     // content rect the chrome leaves untouched.
-    csd_plugin_->RenderDecoration(pixels, sw, sh, content_w_, content_h_);
-    paint_content({pixels, npixels}, m.left, m.top, content_w_, content_h_, sw,
-                  time_ms);
+    csd_plugin_->RenderDecoration(pixels, buf.width, sw, sh, content_w_,
+                                  content_h_);
+    // The content is the application's, so it is the application that scales
+    // it: painted at physical size into the physical rect the logical content
+    // rect maps to.
+    paint_content(
+        {pixels, npixels}, wl::ScalePolicy::ScaledDim(m.left, scale_120_),
+        wl::ScalePolicy::ScaledDim(m.top, scale_120_),
+        wl::ScalePolicy::ScaledDim(content_w_, scale_120_),
+        wl::ScalePolicy::ScaledDim(content_h_, scale_120_), buf.width, time_ms);
 
     // Window geometry is the window's visible bounds: the surface inset by
     // whatever part of the decoration is not window, which is the shadow.
@@ -1215,6 +1342,20 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
     UpdateOpaqueRegion(0, 0, sw, sh);
   }
 
+  // The viewport presents the physical buffer back at the logical size.
+  // Without it the surface would be the buffer's size, so the window would come
+  // out scaled up on screen and the window geometry would describe only the
+  // fraction of it that the logical size covers — which is why a preferred
+  // scale is only ever honoured when there is a viewport to answer it with.
+  //
+  // Sent every frame it could change: the destination and the buffer are both
+  // derived from (sw, sh, scale_120_), so they cannot disagree.
+  if (CanScale() && (sw != viewport_w_ || sh != viewport_h_)) {
+    viewport_.Get()->SetDestination(sw, sh);
+    viewport_w_ = sw;
+    viewport_h_ = sh;
+  }
+
   surface_.Get()->Attach(
       pool_->bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
   surface_.Get()->Damage(0, 0, sw, sh);
@@ -1230,6 +1371,8 @@ App::~App() {
   seat_.Release();
   // Destroy decoration before toplevel (protocol requirement).
   decoration_.Reset();
+  fractional_.Reset();
+  viewport_.Reset();
 }
 
 bool App::MainLoop() {

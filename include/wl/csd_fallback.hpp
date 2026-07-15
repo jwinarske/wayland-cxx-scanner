@@ -18,6 +18,7 @@
 #pragma once
 
 #include <wl/csd_plugin.hpp>
+#include <wl/scale_policy.hpp>
 
 #include <cstdint>
 #include <string>
@@ -56,44 +57,50 @@ class FallbackCsdPlugin final : public CsdPlugin {
 
   void SetInputState(const InputState& state) override { state_ = state; }
 
+  void SetScale(int scale_120) override { scale_120_ = scale_120; }
+
   void RenderDecoration(uint32_t* buffer,
+                        int stride_px,
                         int surface_w,
                         int surface_h,
                         int content_w,
                         int /*content_h*/) override {
+    // Everything arrives logical and the buffer is physical, so every
+    // dimension is scaled on the way in. Flat colour has no detail to gain
+    // from the extra pixels, but it still has to fill them: drawn at logical
+    // size it would occupy a corner of the buffer.
+    const int bw = S(kBorderWidth);
+    const int tbh = S(kTitleBarHeight);
+    const int btn = S(kButtonSize);
+    const int pad = S(kButtonPadding);
+    const int sw = S(surface_w);
+    const int sh = S(surface_h);
+    const int cw = S(content_w);
+
     // Borders — the four bands around the content rect.  The content area is
     // left untouched for the application to paint.
-    FillRect(buffer, surface_w, 0, 0, surface_w, kTitleBarHeight, kColorBorder);
-    FillRect(buffer, surface_w, 0, surface_h - kBorderWidth, surface_w,
-             kBorderWidth, kColorBorder);
-    FillRect(buffer, surface_w, 0, kTitleBarHeight, kBorderWidth,
-             surface_h - kTitleBarHeight - kBorderWidth, kColorBorder);
-    FillRect(buffer, surface_w, surface_w - kBorderWidth, kTitleBarHeight,
-             kBorderWidth, surface_h - kTitleBarHeight - kBorderWidth,
-             kColorBorder);
+    FillRect(buffer, stride_px, 0, 0, sw, tbh, kColorBorder);
+    FillRect(buffer, stride_px, 0, sh - bw, sw, bw, kColorBorder);
+    FillRect(buffer, stride_px, 0, tbh, bw, sh - tbh - bw, kColorBorder);
+    FillRect(buffer, stride_px, sw - bw, tbh, bw, sh - tbh - bw, kColorBorder);
 
     // Title bar.
     const uint32_t tb_color =
         state_.focused ? kColorTitleBar : kColorTitleBarUnfocused;
-    FillRect(buffer, surface_w, kBorderWidth, kBorderWidth, content_w,
-             kTitleBarHeight - kBorderWidth, tb_color);
+    FillRect(buffer, stride_px, bw, bw, cw, tbh - bw, tb_color);
 
     // Close button (top-right of title bar).
-    const int btn_y =
-        kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
-    int btn_x = kBorderWidth + content_w - kButtonPadding - kButtonSize;
-    FillRect(buffer, surface_w, btn_x, btn_y, kButtonSize, kButtonSize,
-             kColorCloseBtn);
+    const int btn_y = bw + (tbh - bw - btn) / 2;
+    int btn_x = bw + cw - pad - btn;
+    FillRect(buffer, stride_px, btn_x, btn_y, btn, btn, kColorCloseBtn);
 
     // Maximize button.
-    btn_x -= (kButtonSize + kButtonPadding);
-    FillRect(buffer, surface_w, btn_x, btn_y, kButtonSize, kButtonSize,
-             kColorMaxBtn);
+    btn_x -= (btn + pad);
+    FillRect(buffer, stride_px, btn_x, btn_y, btn, btn, kColorMaxBtn);
 
     // Minimize button.
-    btn_x -= (kButtonSize + kButtonPadding);
-    FillRect(buffer, surface_w, btn_x, btn_y, kButtonSize, kButtonSize,
-             kColorMinBtn);
+    btn_x -= (btn + pad);
+    FillRect(buffer, stride_px, btn_x, btn_y, btn, btn, kColorMinBtn);
   }
 
   [[nodiscard]] HitZone HitTest(int x,
@@ -151,6 +158,12 @@ class FallbackCsdPlugin final : public CsdPlugin {
  private:
   std::string title_;
   InputState state_;
+  int scale_120_ = ScalePolicy::kUnityScale120;
+
+  /// Logical to physical, using the project's normative rounding.
+  [[nodiscard]] int S(int logical) const noexcept {
+    return ScalePolicy::ScaledDim(logical, scale_120_);
+  }
 
   // ── Pixel helpers ─────────────────────────────────────────────────────
 

@@ -79,6 +79,8 @@ endif
 wayland_xml        = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
 xdg_shell_xml      = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
 xdg_decoration_xml = wp_dep.get_variable('pkgdatadir') / 'unstable/xdg-decoration/xdg-decoration-unstable-v1.xml'
+viewporter_xml       = wp_dep.get_variable('pkgdatadir') / 'stable/viewporter/viewporter.xml'
+fractional_scale_xml = wp_dep.get_variable('pkgdatadir') / 'staging/fractional-scale/fractional-scale-v1.xml'
 
 # ── Generate C++ client headers from protocol XMLs ────────────────────────────
 
@@ -103,6 +105,25 @@ xdg_decoration_client_hdr = custom_target(
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
 )
 
+# viewporter and fractional-scale are extension protocols, so their headers are
+# generated with --emit-interface-tables to stay self-contained (they define
+# their own wl_interface tables and wl_iface()).
+xdg_csd_viewporter_client_hdr = custom_target(
+    'xdg-csd-viewporter-client-header',
+    input:   viewporter_xml,
+    output:  'viewporter_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
+)
+
+xdg_csd_fractional_scale_client_hdr = custom_target(
+    'xdg-csd-fractional-scale-client-header',
+    input:   fractional_scale_xml,
+    output:  'fractional_scale_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
+)
+
 # ── Include paths ─────────────────────────────────────────────────────────────
 
 framework_inc = include_directories('../../include')
@@ -115,6 +136,8 @@ xdg_csd_sources = [
     wayland_client_hdr,
     xdg_shell_client_hdr,
     xdg_decoration_client_hdr,
+    xdg_csd_viewporter_client_hdr,
+    xdg_csd_fractional_scale_client_hdr,
 ]
 
 xdg_csd_deps = [wayland_client_dep, xkbcommon_dep, wl_cursor_dep]

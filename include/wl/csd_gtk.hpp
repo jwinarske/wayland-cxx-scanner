@@ -78,8 +78,10 @@ class GtkCsdPlugin final : public CsdPlugin {
 
   void SetTitle(std::string_view title) override;
   void SetInputState(const InputState& state) override;
+  void SetScale(int scale_120) override;
 
   void RenderDecoration(uint32_t* buffer,
+                        int stride_px,
                         int surface_w,
                         int surface_h,
                         int content_w,

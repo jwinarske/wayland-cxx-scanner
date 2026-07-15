@@ -19,6 +19,8 @@
 
 #include "csd_gtk_backend.hpp"
 
+#include <wl/scale_policy.hpp>
+
 #include <algorithm>
 #include <memory>
 
@@ -39,6 +41,7 @@ struct GtkCsdPlugin::Impl {
   // the geometry must not silently disagree with what was drawn.
   int header_height = 0;
   Margins shadow;
+  int scale_120 = ScalePolicy::kUnityScale120;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -115,6 +118,10 @@ void GtkCsdPlugin::SetInputState(const InputState& state) {
   impl_->backend->SetInputState(local);
 }
 
+void GtkCsdPlugin::SetScale(int scale_120) {
+  impl_->scale_120 = scale_120;
+}
+
 int GtkCsdPlugin::DoubleClickTimeMs() const {
   return impl_->backend ? impl_->backend->DoubleClickTimeMs() : 400;
 }
@@ -131,6 +138,7 @@ void GtkCsdPlugin::Dispatch() {
 // ── Rendering ───────────────────────────────────────────────────────────────
 
 void GtkCsdPlugin::RenderDecoration(uint32_t* buffer,
+                                    int stride_px,
                                     int surface_w,
                                     int surface_h,
                                     int content_w,
@@ -147,13 +155,24 @@ void GtkCsdPlugin::RenderDecoration(uint32_t* buffer,
   // One Cairo pass over the whole surface: the shadow is translucent and the
   // theme rounds the title bar's corners, so this composites rather than fills.
   // Writing straight into the wl_shm buffer keeps it to a single pass.
+  const int phys_w = ScalePolicy::ScaledDim(surface_w, impl_->scale_120);
+  const int phys_h = ScalePolicy::ScaledDim(surface_h, impl_->scale_120);
   cairo_surface_t* surface = cairo_image_surface_create_for_data(
-      reinterpret_cast<unsigned char*>(buffer), CAIRO_FORMAT_ARGB32, surface_w,
-      surface_h, surface_w * 4);
+      reinterpret_cast<unsigned char*>(buffer), CAIRO_FORMAT_ARGB32, phys_w,
+      phys_h, stride_px * 4);
   if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
     cairo_surface_destroy(surface);
     return;
   }
+
+  // Everything below is drawn in logical units; the device scale is what turns
+  // them into the panel's physical pixels. GTK renders through it, so the text
+  // and the symbolic icons come out at the panel's real resolution rather than
+  // drawn small and stretched — and the backend reads this same device scale
+  // back off the surface to ask the icon theme for the right size.
+  const double s = static_cast<double>(impl_->scale_120) /
+                   static_cast<double>(ScalePolicy::kUnityScale120);
+  cairo_surface_set_device_scale(surface, s, s);
 
   // Clear the decoration to transparent, leaving the content rect alone: it is
   // the application's, painted after this returns. The buffer is recycled, so
