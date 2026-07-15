@@ -247,6 +247,34 @@ class Gtk3Backend final : public GtkThemeBackend {
     return HitZone::TitleBar;
   }
 
+  // gtk-cursor-theme-name / -size are the desktop's cursor preferences, and GTK
+  // keeps them in step with the settings daemon — so they follow a live change
+  // the same way the window theme does. The string is cached because
+  // g_object_get hands over ownership and the caller only borrows it.
+  [[nodiscard]] const char* CursorThemeName() override {
+    if (!GTK_IS_WIDGET(window_))
+      return nullptr;
+    gchar* name = nullptr;
+    g_object_get(gtk_widget_get_settings(window_), "gtk-cursor-theme-name",
+                 &name, nullptr);
+    cursor_theme_.clear();
+    if (name != nullptr) {
+      cursor_theme_ = name;
+      g_free(name);
+    }
+    return cursor_theme_.empty() ? nullptr : cursor_theme_.c_str();
+  }
+
+  [[nodiscard]] int CursorSize() override {
+    if (!GTK_IS_WIDGET(window_))
+      return 0;
+    gint size = 0;
+    g_object_get(gtk_widget_get_settings(window_), "gtk-cursor-theme-size",
+                 &size, nullptr);
+    // GTK uses 0 to mean "the theme's own default", which is our 0 too.
+    return size;
+  }
+
   [[nodiscard]] int DoubleClickTimeMs() override {
     if (!GTK_IS_WIDGET(window_))
       return 400;
@@ -278,6 +306,9 @@ class Gtk3Backend final : public GtkThemeBackend {
   GtkWidget* header_ = nullptr;
   GtkStyleContext* decoration_ctx_ = nullptr;
   std::string title_;
+  // Owns the string CursorThemeName() hands back: g_object_get transfers the
+  // GTK copy to us, and the caller only borrows.
+  std::string cursor_theme_;
   InputState state_;
   int laid_out_width_ = -1;
 

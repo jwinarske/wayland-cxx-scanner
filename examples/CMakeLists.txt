@@ -228,13 +228,15 @@ endif ()
 
 # ── simple-egl ───────────────────────────────────────────────────────────────
 if (TARGET PkgConfig::egl AND TARGET PkgConfig::glesv2 AND TARGET PkgConfig::wayland_egl
-    AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
+    AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
+    AND TARGET PkgConfig::wayland_cursor)
     wlcxx_example(simple_egl simple-egl/main.cpp)
     # The window frame. With csd=none this is only an include path and the
     # example carries no decoration code at all.
     wlcxx_csd(simple_egl simple-egl)
     target_link_libraries(simple_egl PRIVATE PkgConfig::wayland_client
-        PkgConfig::egl PkgConfig::glesv2 PkgConfig::wayland_egl PkgConfig::xkbcommon)
+        PkgConfig::egl PkgConfig::glesv2 PkgConfig::wayland_egl PkgConfig::xkbcommon
+        PkgConfig::wayland_cursor)
     wlcxx_gen(simple_egl simple-egl wayland_client.hpp   ${WAYLAND_XML})
     wlcxx_gen(simple_egl simple-egl xdg_shell_client.hpp ${XDG_SHELL_XML})
 endif ()

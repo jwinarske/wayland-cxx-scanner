@@ -843,6 +843,14 @@ bool DecoratedWindow::CloseRequested() const noexcept {
   return impl_->close_requested;
 }
 
+const char* DecoratedWindow::CursorThemeName() const {
+  return impl_->plugin ? impl_->plugin->CursorThemeName() : nullptr;
+}
+
+int DecoratedWindow::CursorSize() const {
+  return impl_->plugin ? impl_->plugin->CursorSize() : 0;
+}
+
 const char* DecoratedWindow::CursorName() const noexcept {
   if (!impl_->over_frame || !DrawsClientSide())
     return nullptr;

@@ -241,6 +241,16 @@ class DecoratedWindow {
   /// polls it and stops.
   [[nodiscard]] bool CloseRequested() const noexcept;
 
+  /// The desktop's cursor theme and size, as the decoration's toolkit reports
+  /// them, or null/0 when it has no opinion — pass straight to
+  /// wl::CursorManager::Init, which then falls back to the environment.
+  ///
+  /// Here because the plugin is what holds a toolkit: a caller has nothing to
+  /// ask, and would otherwise read an environment variable that is only set if
+  /// something exported it.
+  [[nodiscard]] const char* CursorThemeName() const;
+  [[nodiscard]] int CursorSize() const;
+
   /// The cursor shape for wherever the pointer is, or null when it is not over
   /// the frame and the caller's own cursor applies.
   [[nodiscard]] const char* CursorName() const noexcept;

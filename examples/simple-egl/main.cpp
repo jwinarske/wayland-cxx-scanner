@@ -43,6 +43,7 @@ extern "C" {
 // ── Framework headers
 // ─────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
+#include <wl/cursor.hpp>
 #include <wl/display.hpp>
 #include <wl/registry.hpp>
 #include <wl/seat.hpp>
@@ -165,6 +166,12 @@ class WlCompositorHandler
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
+// wl_shm, for the cursor theme's buffers. The window frame binds its own for
+// the decoration; this one is the cursor's, which is the application's own
+// business — it owns the pointer, and wants a cursor over its content whether
+// or not anything decorates it.
+class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // App class
 // ══════════════════════════════════════════════════════════════════════════════
@@ -194,6 +201,7 @@ class App {
   void OnPointerLeave() noexcept;
   void OnPointerMotion(const wl::PointerEvent& ev) noexcept;
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
+  void UpdateCursor() noexcept;
 
   /// The compositor is the authority on these, not our own button clicks: a
   /// maximize can be refused, and can equally arrive from a keybinding.
@@ -257,6 +265,10 @@ class App {
   // Seat + keyboard manager — keyboard_ inside is destroyed before seat_.
   wl::SeatManager<App> seat_;
 
+  // Cursor theme, and the wl_shm it loads through.
+  wl::WlPtr<WlShmHandler> shm_;
+  wl::CursorManager cursor_;
+
   // The window frame. Declared after xdg_toplevel_ so it is destroyed first:
   // it holds a subsurface of surface_ and borrows the toplevel.
   wl::csd::DecoratedWindow window_frame_;
@@ -270,7 +282,9 @@ class App {
   int width_ = 800;
   int height_ = 600;
   uint64_t frame_ = 0;
-  bool fullscreen_ = false;      // as the compositor last reported it
+  bool fullscreen_ = false;    // as the compositor last reported it
+  uint32_t enter_serial_ = 0;  // wl_pointer.set_cursor must carry one
+  uint32_t shm_name_ = 0, shm_ver_ = 0;
   int32_t scroll_value120_ = 0;  // accumulated scroll; 120 == one wheel notch
 
   // Globals recorded during registry scan
@@ -377,6 +391,9 @@ bool App::ScanGlobals() {
       xdg_wm_base_ver_ = ver;
     } else if (iface == wl_s::interface_name) {
       seat_.Record(name, ver);
+    } else if (iface == wayland::client::wl_shm_traits::interface_name) {
+      shm_name_ = name;
+      shm_ver_ = ver;
     }
   });
 
@@ -479,6 +496,20 @@ bool App::CreateSurfaces() {
 
   xdg_toplevel_.Get()->SetTitle("simple-egl");
   xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.simple-egl");
+
+  // The cursor theme, loaded through our own wl_shm. Not fatal: a window with
+  // no cursor theme still works, it just shows whatever the compositor last
+  // set.
+  if (shm_name_ != 0) {
+    using shm_t = wayland::client::wl_shm_traits;
+    if (wl_proxy* raw = registry_.Bind<shm_t>(
+            shm_name_, std::min(shm_ver_, shm_t::version)))
+      shm_.Attach(raw);
+  }
+  if (!shm_.IsNull() &&
+      !cursor_.Init(shm_.Get()->GetProxy(), compositor_.Get()->GetProxy())) {
+    std::fprintf(stderr, "simple-egl: no cursor theme; cursors unchanged\n");
+  }
 
   // Hand the frame the connection and the window; it binds wl_shm,
   // wl_subcompositor and the decoration manager from a registry of its own, and
@@ -711,8 +742,22 @@ void App::OnToplevelStates(const wl::ToplevelStates& states) noexcept {
 
 // ── Pointer — forwarded whole; the frame keeps what is its own ──────────────
 
+// The frame names the shape it wants wherever the pointer is over its own
+// surface — a resize arrow on an edge, a pointer on a button — and answers null
+// everywhere else, which is where the application's own cursor applies. Setting
+// it stays here because the pointer is the application's: the frame never
+// touches a surface it does not own.
+void App::UpdateCursor() noexcept {
+  const char* name = window_frame_.CursorName();
+  cursor_.Set(seat_.Pointer(), enter_serial_,
+              name != nullptr ? name : "default");
+}
+
 void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+  enter_serial_ = ev.serial;  // set_cursor must carry the enter it answers
   window_frame_.OnPointerEnter({ev.x, ev.y, ev.serial, ev.time, ev.surface});
+  cursor_.Reset();  // the compositor drops the cursor on enter; re-apply
+  UpdateCursor();
 }
 
 void App::OnPointerLeave() noexcept {
@@ -721,6 +766,7 @@ void App::OnPointerLeave() noexcept {
 
 void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
   window_frame_.OnPointerMotion({ev.x, ev.y, ev.serial, ev.time, nullptr});
+  UpdateCursor();
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {

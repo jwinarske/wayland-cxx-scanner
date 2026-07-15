@@ -107,6 +107,9 @@ inline const char* HitZoneToCursorName(HitZone zone) noexcept {
     case HitZone::MinimizeButton:
       return "pointer";
     default:
+      // Including the title bar, which keeps the plain arrow: GTK shows no
+      // grab hand on one, in any state, and this follows the toolkit rather
+      // than improving on it.
       return "default";
   }
 }
@@ -231,6 +234,24 @@ class CsdPlugin {
   /// Also a toolkit setting: below it a press on the title bar is still a
   /// click and may yet become a double-click, above it the press is a move.
   [[nodiscard]] virtual int DragThreshold() const { return 8; }
+
+  // ── Cursor ────────────────────────────────────────────────────────────
+
+  /// The desktop's cursor theme name, or null for no opinion — the caller then
+  /// falls back to XCURSOR_THEME and the system default.
+  ///
+  /// Which cursor theme, and at what size, are user settings exactly like the
+  /// window theme this plugin already follows. A plugin with a toolkit in hand
+  /// should answer from it rather than leave the caller reading environment
+  /// variables that are only set if something took the trouble to export them.
+  ///
+  /// The shape *names* are not this: those are freedesktop cursor-spec names
+  /// every theme provides, and neither GTK's CSS nor its settings say which
+  /// zone uses which. See HitZoneToCursorName().
+  [[nodiscard]] virtual const char* CursorThemeName() const { return nullptr; }
+
+  /// The desktop's cursor size in logical pixels, or 0 for no opinion.
+  [[nodiscard]] virtual int CursorSize() const { return 0; }
 
   // ── Rendering ─────────────────────────────────────────────────────────
 

@@ -14,10 +14,11 @@ wayland_egl_dep = dependency('wayland-egl',       required: false)
 wp_dep          = dependency('wayland-protocols',  required: false)
 wl_scanner_dep  = dependency('wayland-scanner',   required: false)
 xkbcommon_dep   = dependency('xkbcommon',         required: false)
+wl_cursor_dep   = dependency('wayland-cursor',    required: false)
 
 if not (egl_dep.found() and glesv2_dep.found() and
         wayland_egl_dep.found() and wp_dep.found() and wl_scanner_dep.found() and
-        xkbcommon_dep.found())
+        xkbcommon_dep.found() and wl_cursor_dep.found())
     subdir_done()
 endif
 
@@ -65,6 +66,7 @@ executable(
         glesv2_dep,
         wayland_egl_dep,
         xkbcommon_dep,
+        wl_cursor_dep,
         # Carries the decoration plugin the csd option selected, and the window
         # frame that puts it on a subsurface. With csd=ssd (the default) that is
         # no plugin at all, and the frame simply asks the compositor to
