@@ -15,11 +15,11 @@
 // compiles unchanged:
 //
 //   void OnPointerEnter(const wl::PointerEvent& ev);
-//   void OnPointerLeave();
-//   void OnPointerMotion(const wl::PointerEvent& ev);
-//   void OnPointerButton(const wl::PointerButtonEvent& ev);
-//   void OnPointerAxis(const wl::PointerAxisEvent& ev);
-//   void OnPointerFrame();
+//   void OnPointerLeave();                          // or the form below
+//   void OnPointerLeave(const wl::PointerEvent& ev);  // when the surface
+//   matters void OnPointerMotion(const wl::PointerEvent& ev); void
+//   OnPointerButton(const wl::PointerButtonEvent& ev); void OnPointerAxis(const
+//   wl::PointerAxisEvent& ev); void OnPointerFrame();
 //
 // SeatManager only binds the pointer when the App defines at least one hook, so
 // keyboard-only consumers are entirely unaffected.
@@ -81,6 +81,13 @@ struct PointerEvent {
   double y = 0.0;
   std::uint32_t serial = 0;
   std::uint32_t time = 0;
+  // The surface the pointer entered or left, as wl_pointer reported it; null
+  // for motion, which carries none.  An App with more than one surface — a
+  // cursor surface, a subsurface, a second window on the same connection —
+  // needs this to tell which one an enter/leave belongs to, since one
+  // wl_pointer serves them all.  Compare it against the proxy the App created;
+  // wl::WlPtr::Get()->GetProxy() yields the same pointer the compositor names.
+  wl_proxy* surface = nullptr;
 };
 
 // A pointer button event, carrying the last known position so consumers do not
@@ -135,21 +142,21 @@ class PointerHandler : public wayland::client::CWlPointer<PointerHandler<App>> {
   App* app_ = nullptr;
 
   void OnEnter(std::uint32_t serial,
-               wl_proxy* /*surface*/,
+               wl_proxy* surface,
                wl_fixed_t sx,
                wl_fixed_t sy) override {
     x_ = wl_fixed_to_double(sx);
     y_ = wl_fixed_to_double(sy);
     if (app_ != nullptr)
-      CallEnter(PointerEvent{x_, y_, serial, 0u});
+      CallEnter(PointerEvent{x_, y_, serial, 0u, surface});
   }
 
-  void OnLeave(std::uint32_t /*serial*/, wl_proxy* /*surface*/) override {
+  void OnLeave(std::uint32_t serial, wl_proxy* surface) override {
     // A frame may never arrive for whatever was accumulated before the pointer
     // left, so drop it rather than misattribute it to the next surface.
     ResetAxes();
     if (app_ != nullptr)
-      CallLeave(0);
+      CallLeave(PointerEvent{x_, y_, serial, 0u, surface}, 0);
   }
 
   void OnMotion(std::uint32_t time, wl_fixed_t sx, wl_fixed_t sy) override {
@@ -334,11 +341,22 @@ class PointerHandler : public wayland::client::CWlPointer<PointerHandler<App>> {
   }
   void CallEnter(...) noexcept {}
 
+  // Two shapes of leave hook, resolved by the trailing int/long: an App that
+  // wants to know WHICH surface was left takes the event, one that does not
+  // keeps the original no-argument form.  The dummy argument is what orders
+  // them — both are viable for an App defining the event form, and without it
+  // the two templates would be ambiguous rather than ranked.
   template <typename A = App>
-  auto CallLeave(int) -> decltype(std::declval<A&>().OnPointerLeave(), void()) {
+  auto CallLeave(const PointerEvent& e, int)
+      -> decltype(std::declval<A&>().OnPointerLeave(e), void()) {
+    app_->OnPointerLeave(e);
+  }
+  template <typename A = App>
+  auto CallLeave(const PointerEvent&, long)
+      -> decltype(std::declval<A&>().OnPointerLeave(), void()) {
     app_->OnPointerLeave();
   }
-  void CallLeave(...) noexcept {}
+  void CallLeave(const PointerEvent&, ...) noexcept {}
 
   template <typename A = App>
   auto CallMotion(const PointerEvent& e)

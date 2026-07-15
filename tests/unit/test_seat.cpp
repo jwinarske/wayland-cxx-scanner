@@ -51,6 +51,24 @@ struct FakePointerApp {
   void OnPointerLeave() { left = true; }
 };
 
+// App that takes the surface-carrying leave hook instead of the plain one —
+// what a consumer with more than one surface needs to filter enter/leave.
+struct FakeSurfaceFilterApp {
+  wl::PointerEvent last_enter{};
+  wl::PointerEvent last_leave{};
+  int enters = 0;
+  int leaves = 0;
+
+  void OnPointerEnter(const wl::PointerEvent& ev) {
+    last_enter = ev;
+    ++enters;
+  }
+  void OnPointerLeave(const wl::PointerEvent& ev) {
+    last_leave = ev;
+    ++leaves;
+  }
+};
+
 // App with only the scroll hooks — also proves an axis-only consumer still gets
 // a pointer bound (wl::detail::WantsPointer).
 struct FakeScrollApp {
@@ -360,6 +378,51 @@ TEST(PointerHandler, EnterSeedsPositionAndLeaveFires) {
 
   EXPECT_FALSE(app.left);
   ptr.OnLeave(4u, nullptr);
+  EXPECT_TRUE(app.left);
+}
+
+// ── The surface on enter/leave ───────────────────────────────────────────────
+
+TEST(PointerHandler, EnterAndLeaveCarryTheSurface) {
+  wl::PointerHandler<FakeSurfaceFilterApp> ptr;
+  FakeSurfaceFilterApp app;
+  ptr.app_ = &app;
+
+  // Any two distinct addresses stand in for two surfaces the App owns; the
+  // handler only ever passes the pointer through.
+  auto* surface_a = reinterpret_cast<wl_proxy*>(0x1000);
+  auto* surface_b = reinterpret_cast<wl_proxy*>(0x2000);
+
+  ptr.OnEnter(7u, surface_a, Fixed(3.0), Fixed(4.0));
+  ASSERT_EQ(app.enters, 1);
+  EXPECT_EQ(app.last_enter.surface, surface_a);
+  EXPECT_EQ(app.last_enter.serial, 7u);
+  EXPECT_DOUBLE_EQ(app.last_enter.x, 3.0);
+
+  ptr.OnLeave(8u, surface_b);
+  ASSERT_EQ(app.leaves, 1);
+  EXPECT_EQ(app.last_leave.surface, surface_b)
+      << "leave must name the surface it left, not the last entered one";
+  EXPECT_EQ(app.last_leave.serial, 8u);
+}
+
+TEST(PointerHandler, MotionCarriesNoSurface) {
+  wl::PointerHandler<FakePointerApp> ptr;
+  FakePointerApp app;
+  ptr.app_ = &app;
+  ptr.OnMotion(1u, Fixed(1.0), Fixed(2.0));
+  EXPECT_EQ(app.last_motion.surface, nullptr)
+      << "wl_pointer.motion carries no surface; inventing one would be a lie";
+}
+
+TEST(PointerHandler, PlainLeaveHookStillWorks) {
+  // FakePointerApp takes OnPointerLeave() with no argument.  Both shapes are
+  // viable overloads for an App that defines the event form, so this pins that
+  // the no-argument form is still selected when it is the only one.
+  wl::PointerHandler<FakePointerApp> ptr;
+  FakePointerApp app;
+  ptr.app_ = &app;
+  ptr.OnLeave(1u, nullptr);
   EXPECT_TRUE(app.left);
 }
 

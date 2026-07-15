@@ -46,12 +46,25 @@ extern "C" {
 
 #include <gtest/gtest.h>
 
+// <wl/seat.hpp> defines wl_iface() for every interface SeatManager binds; the
+// pointer needs a surface to enter, so this test supplies those two itself.
+namespace wayland::client {
+const wl_interface& wl_compositor_traits::wl_iface() noexcept {
+  return wl_compositor_interface;
+}
+const wl_interface& wl_surface_traits::wl_iface() noexcept {
+  return wl_surface_interface;
+}
+}  // namespace wayland::client
+
 namespace {
 
 using wayland::client::wl_pointer_traits;
 using wayland::client::wl_seat_traits;
 
 // ── Protocol constants, from wayland.xml ─────────────────────────────────────
+constexpr uint32_t kEvtEnter = 0;         // since 1
+constexpr uint32_t kEvtLeave = 1;         // since 1
 constexpr uint32_t kEvtAxis = 4;          // since 1
 constexpr uint32_t kEvtFrame = 5;         // since 5
 constexpr uint32_t kEvtAxisSource = 6;    // since 5
@@ -78,6 +91,59 @@ using Sender = std::function<void(wl_resource*)>;
 // Note this TU cannot include wayland-server-protocol.h — it would redefine the
 // enums and interface externs that wayland-client-protocol.h (via seat.hpp)
 // already provides.  Hence raw opcodes and the generated wl_iface() tables.
+
+// wl_compositor / wl_surface exist here only so the pointer has a real surface
+// to enter: wl_pointer.enter names one, and the whole point of testing it over
+// a socketpair is that the surface crosses the wire as an object id and comes
+// back out of the generated thunk as a proxy.
+wl_resource* g_server_surface = nullptr;
+
+void SurfaceDestroy(wl_client*, wl_resource* r) {
+  wl_resource_destroy(r);
+}
+struct SurfaceImpl {
+  void (*destroy)(wl_client*, wl_resource*);
+  void (*attach)(wl_client*, wl_resource*, wl_resource*, int32_t, int32_t);
+  void (*damage)(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t);
+  void (*frame)(wl_client*, wl_resource*, uint32_t);
+  void (*set_opaque_region)(wl_client*, wl_resource*, wl_resource*);
+  void (*set_input_region)(wl_client*, wl_resource*, wl_resource*);
+  void (*commit)(wl_client*, wl_resource*);
+  void (*set_buffer_transform)(wl_client*, wl_resource*, int32_t);
+  void (*set_buffer_scale)(wl_client*, wl_resource*, int32_t);
+  void (*damage_buffer)(wl_client*,
+                        wl_resource*,
+                        int32_t,
+                        int32_t,
+                        int32_t,
+                        int32_t);
+  void (*offset)(wl_client*, wl_resource*, int32_t, int32_t);
+};
+constexpr SurfaceImpl kSurfaceImpl{&SurfaceDestroy, nullptr, nullptr, nullptr,
+                                   nullptr,         nullptr, nullptr, nullptr,
+                                   nullptr,         nullptr, nullptr};
+
+void CompositorCreateSurface(wl_client* client,
+                             wl_resource* compositor,
+                             uint32_t id) {
+  g_server_surface = wl_resource_create(
+      client, &wayland::client::wl_surface_traits::wl_iface(),
+      wl_resource_get_version(compositor), static_cast<int>(id));
+  wl_resource_set_implementation(g_server_surface, &kSurfaceImpl, nullptr,
+                                 nullptr);
+}
+struct CompositorImpl {
+  void (*create_surface)(wl_client*, wl_resource*, uint32_t);
+  void (*create_region)(wl_client*, wl_resource*, uint32_t);
+};
+constexpr CompositorImpl kCompositorImpl{&CompositorCreateSurface, nullptr};
+
+void CompositorBind(wl_client* client, void*, uint32_t version, uint32_t id) {
+  wl_resource* r = wl_resource_create(
+      client, &wayland::client::wl_compositor_traits::wl_iface(),
+      static_cast<int>(version), static_cast<int>(id));
+  wl_resource_set_implementation(r, &kCompositorImpl, nullptr, nullptr);
+}
 
 void PointerSetCursor(wl_client*,
                       wl_resource*,
@@ -140,16 +206,31 @@ struct SeatStub : wayland::client::CWlSeat<SeatStub> {
   void OnName(const char*) override {}
 };
 
+// wl_compositor has no events; wl_surface's are irrelevant here.
+struct CompositorStub : wayland::client::CWlCompositor<CompositorStub> {};
+struct SurfaceStub : wayland::client::CWlSurface<SurfaceStub> {};
+
 struct ScrollApp {
   std::vector<wl::PointerAxisEvent> axes;
   int frames = 0;
+  // enter/leave, kept whole so the surface each names can be checked against
+  // the proxy this client created.
+  std::vector<wl::PointerEvent> enters;
+  std::vector<wl::PointerEvent> leaves;
 
   void OnPointerAxis(const wl::PointerAxisEvent& e) { axes.push_back(e); }
   void OnPointerFrame() { ++frames; }
+  void OnPointerEnter(const wl::PointerEvent& e) { enters.push_back(e); }
+  void OnPointerLeave(const wl::PointerEvent& e) { leaves.push_back(e); }
 };
 
 // Drive one scenario end to end at a negotiated wl_seat version.
-void RunScenario(uint32_t version, Sender send, ScrollApp& app) {
+// @p out_surface, when non-null, receives the wl_surface proxy this client
+// created — the value an enter/leave event should name.
+void RunScenario(uint32_t version,
+                 Sender send,
+                 ScrollApp& app,
+                 wl_proxy** out_surface = nullptr) {
   std::array<int, 2> sv{-1, -1};
   ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv.data()), 0);
 
@@ -159,6 +240,10 @@ void RunScenario(uint32_t version, Sender send, ScrollApp& app) {
   // `send` outlives the server thread: it is joined before this frame returns.
   ASSERT_NE(wl_global_create(server, &wl_seat_traits::wl_iface(),
                              static_cast<int>(version), &send, &SeatBind),
+            nullptr);
+  ASSERT_NE(wl_global_create(server,
+                             &wayland::client::wl_compositor_traits::wl_iface(),
+                             6, nullptr, &CompositorBind),
             nullptr);
   std::thread server_thread([server] { wl_display_run(server); });
 
@@ -171,11 +256,15 @@ void RunScenario(uint32_t version, Sender send, ScrollApp& app) {
     ASSERT_TRUE(registry.Create(client));
     uint32_t name = 0;
     uint32_t advertised = 0;
+    uint32_t comp_name = 0;
     registry.OnGlobal(
         [&](wl::CRegistry&, uint32_t n, std::string_view iface, uint32_t v) {
           if (iface == wl_seat_traits::interface_name) {
             name = n;
             advertised = v;
+          } else if (iface ==
+                     wayland::client::wl_compositor_traits::interface_name) {
+            comp_name = n;
           }
         });
     ASSERT_NE(wl_display_roundtrip(client), -1);
@@ -184,6 +273,26 @@ void RunScenario(uint32_t version, Sender send, ScrollApp& app) {
 
     wl::WlPtr<SeatStub> seat;
     ASSERT_TRUE(wl::BindHandler<wl_seat_traits>(registry, seat, name, version));
+
+    // A real surface for the pointer to enter.  wl_compositor has no events, so
+    // it is adopted without a listener.
+    wl::WlPtr<SurfaceStub> surface;
+    ASSERT_NE(comp_name, 0u) << "wl_compositor global not advertised";
+    wl::WlPtr<CompositorStub> compositor;
+    wl_proxy* craw =
+        registry.Bind<wayland::client::wl_compositor_traits>(comp_name, 6);
+    ASSERT_NE(craw, nullptr);
+    compositor.Attach(craw);
+    wl_proxy* sraw =
+        wl::construct<wayland::client::wl_surface_traits,
+                      wayland::client::wl_compositor_traits::Op::CreateSurface>(
+            *compositor.Get());
+    ASSERT_NE(sraw, nullptr);
+    ASSERT_TRUE(wl::SetupHandler(surface, sraw));
+    if (out_surface != nullptr)
+      *out_surface = sraw;
+    // The server needs the surface to exist before it answers get_pointer.
+    ASSERT_NE(wl_display_roundtrip(client), -1);
 
     wl::WlPtr<wl::PointerHandler<ScrollApp>> ptr;
     wl_proxy* raw =
@@ -214,6 +323,37 @@ void RunScenario(uint32_t version, Sender send, ScrollApp& app) {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
+
+// ── enter/leave carry the surface ────────────────────────────────────────────
+// The surface crosses the wire as an object id and has to come back out of the
+// generated thunk as the very proxy this client created.  Nothing but a live
+// dispatch can check that: a wrong-width or mis-declared object slot would hand
+// the App a bogus pointer, and an App with several surfaces would then filter
+// against garbage.
+TEST(PointerAxisRoundtrip, EnterAndLeaveNameTheClientsSurface) {
+  ScrollApp app;
+  wl_proxy* client_surface = nullptr;
+  RunScenario(
+      8u,
+      [](wl_resource* p) {
+        wl_resource_post_event(p, kEvtEnter, 42u, g_server_surface, Fixed(12.5),
+                               Fixed(34.25));
+        wl_resource_post_event(p, kEvtLeave, 43u, g_server_surface);
+      },
+      app, &client_surface);
+
+  ASSERT_NE(client_surface, nullptr);
+  ASSERT_EQ(app.enters.size(), 1u);
+  EXPECT_EQ(app.enters[0].surface, client_surface)
+      << "enter must name the proxy this client created, not some other value";
+  EXPECT_EQ(app.enters[0].serial, 42u);
+  EXPECT_DOUBLE_EQ(app.enters[0].x, 12.5);
+  EXPECT_DOUBLE_EQ(app.enters[0].y, 34.25);
+
+  ASSERT_EQ(app.leaves.size(), 1u);
+  EXPECT_EQ(app.leaves[0].surface, client_surface);
+  EXPECT_EQ(app.leaves[0].serial, 43u);
+}
 
 TEST(PointerAxisRoundtrip, Value120WheelOnSeat8) {
   ScrollApp app;
