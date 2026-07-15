@@ -33,11 +33,11 @@ and `xdg-shell.xml`, exactly like the other examples.
 | IME | `wl::ime` facade (whichever backend `ime_backend` selects; compiled out for `none`): `Platform_SetImeDataFn` drives enable/disable and the cursor rectangle, `commit_string` → `AddInputCharactersUTF8`, `delete_surrounding_text` → synthesized Backspace. Composition text is tracked but not drawn — ImGui has no preedit API — and the keysym text path stands down while it is non-empty so composed characters are not typed twice. Dead keys / compose sequences are not composed by the backend itself |
 | Touch | `wl::TouchHandler` hooks, single-touch mouse emulation reported as `ImGuiMouseSource_TouchScreen` |
 | Cursor | `wl::CursorManager` — XDG cursor-spec shape names for all 11 `ImGuiMouseCursor_` values, animated cursors, HiDPI theme reload, `MouseDrawCursor`/`None` → `set_cursor(null)` |
+| Clipboard | `wl::DataDevice` on the core `wl_data_device`: copy publishes a source quoting the latest key/button serial (the compositor requires one), paste reads the offered pipe with a 500 ms / 1 MiB bound so a stalled peer cannot hang the frame. A paste of our own selection is answered locally — reading it would deadlock against our own `OnSend` |
 | Lifecycle | Backend-private `wl_registry` on the app's connection; versioned `release` teardown; seat is optional (headless/kiosk safe) |
 
-Not wired: clipboard (`wl::DataDevice`), multi-viewport and `SetMousePos` (the
-last two impossible on Wayland — it has no global coordinates and cannot warp
-the pointer).
+Not wired: multi-viewport and `SetMousePos`, both impossible on Wayland — it has
+no global coordinates and cannot warp the pointer.
 
 ## Integration contract
 

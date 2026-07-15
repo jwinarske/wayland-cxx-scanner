@@ -18,8 +18,11 @@
 //      Platform_SetImeDataFn drives enable/disable + cursor rectangle,
 //      commit_string feeds AddInputCharactersUTF8, delete_surrounding_text is
 //      synthesized as Backspace.
+//  [X] Platform: Clipboard via wl_data_device (wl::DataDevice) — copy publishes
+//      a data source quoting the latest input serial; paste reads the offered
+//      pipe (bounded: 500 ms, 1 MiB).  Absent wl_data_device_manager leaves
+//      Ctrl-C/V inert rather than failing.
 // Missing features / issues:
-//  [ ] Platform: Clipboard via wl_data_device (wl::DataDevice) not yet wired.
 //  [ ] Platform: IME composition text is tracked but not drawn (ImGui has no
 //      preedit API) and is not exposed, so an application cannot render it
 //      either.  Dead keys / compose sequences are likewise not composed by the
