@@ -52,6 +52,8 @@ endif
 
 wayland_xml   = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
 xdg_shell_xml = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+viewporter_xml       = wp_dep.get_variable('pkgdatadir') / 'stable/viewporter/viewporter.xml'
+fractional_scale_xml = wp_dep.get_variable('pkgdatadir') / 'staging/fractional-scale/fractional-scale-v1.xml'
 
 imgui_wayland_client_hdr = custom_target(
     'imgui-wayland-client-header',
@@ -65,6 +67,25 @@ imgui_xdg_shell_client_hdr = custom_target(
     input:   xdg_shell_xml,
     output:  'xdg_shell_client.hpp',
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+# viewporter and fractional-scale are extension protocols, so their headers are
+# generated with --emit-interface-tables to stay self-contained (they define
+# their own wl_interface tables and wl_iface()).
+imgui_viewporter_client_hdr = custom_target(
+    'imgui-viewporter-client-header',
+    input:   viewporter_xml,
+    output:  'viewporter_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
+)
+
+imgui_fractional_scale_client_hdr = custom_target(
+    'imgui-fractional-scale-client-header',
+    input:   fractional_scale_xml,
+    output:  'fractional_scale_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
 )
 
 # The IME facade resolves to the build-selected text-input backend, and that
@@ -126,6 +147,8 @@ executable(
         'main.cpp',
         imgui_wayland_client_hdr,
         imgui_xdg_shell_client_hdr,
+        imgui_viewporter_client_hdr,
+        imgui_fractional_scale_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
     dependencies: [
