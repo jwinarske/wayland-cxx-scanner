@@ -16,6 +16,7 @@ struct TextInputImpl : ITextInputReceiver, TextInputListener {
   void Activate() override {}
   void Deactivate() override {}
   void SetSurroundingText(std::string_view, uint32_t, uint32_t) override {}
+  void SetTextChangeCause(ChangeCause) override {}
   void SetContentType(ContentHint, ContentPurpose) override {}
   void SetCursorRectangle(int32_t, int32_t, int32_t, int32_t) override {}
   void Reset() override {}

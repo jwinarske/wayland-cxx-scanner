@@ -40,6 +40,13 @@ enum class ContentHint : uint32_t {
                                   static_cast<uint32_t>(b));
 }
 
+/// Why the surrounding text changed.  Values mirror zwp_text_input_v3's
+/// change_cause; v1 has no equivalent request and ignores it.
+enum class ChangeCause : uint32_t {
+  kInputMethod = 0,  // the input method's own commit changed it
+  kOther = 1,        // the application changed it (typing, a caret move, …)
+};
+
 /// Normalized content purpose.  Values mirror zwp_text_input_v3's
 /// content_purpose.
 enum class ContentPurpose : uint32_t {
@@ -80,6 +87,23 @@ struct TextInputListener {
 
 /// Requests the consumer issues (app -> compositor).  The backend owns serial
 /// numbering and the per-version commit protocol.
+///
+/// Every request below only stages a change: nothing reaches the input method
+/// until Commit().  Activate() included — on v3 it maps to enable, which resets
+/// content type, cursor rectangle and surrounding text, so the state a consumer
+/// wants must be sent after it and before the commit that applies them
+/// together:
+///
+///   Activate();
+///   SetContentType(...);
+///   SetCursorRectangle(...);
+///   Commit();
+///
+/// The same applies after TextInputListener::OnEnter: regaining focus
+/// re-enables the text input, which resets that state again, so OnEnter must
+/// re-send it and Commit().  A consumer that stages nothing there leaves the
+/// input method with defaults — no cursor rectangle for an on-screen keyboard
+/// or candidate window to anchor to.
 class ITextInputReceiver {
  public:
   virtual void Activate() = 0;    // v1 activate(seat, surface) / v3 enable
@@ -87,6 +111,9 @@ class ITextInputReceiver {
   virtual void SetSurroundingText(std::string_view utf8,
                                   uint32_t cursor,
                                   uint32_t anchor) = 0;
+  /// Why the surrounding text last changed.  v3 pairs this with
+  /// set_surrounding_text; v1 has no such request and ignores it.
+  virtual void SetTextChangeCause(ChangeCause cause) = 0;
   virtual void SetContentType(ContentHint hint, ContentPurpose purpose) = 0;
   virtual void SetCursorRectangle(int32_t x,
                                   int32_t y,

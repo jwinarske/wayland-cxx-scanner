@@ -724,6 +724,10 @@ class App : public wl::ime::TextInputListener {
 
   /// Render the current text buffer into a free SHM buffer and commit it.
   void Redraw() noexcept;
+  /// Stage this field's text-input state and apply it.  Called after every
+  /// enable — both the explicit Activate() and the implicit re-enable when the
+  /// field regains focus — because enable resets what was there.
+  void PushTextInputState() noexcept;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -951,12 +955,13 @@ bool App::CreateSurfaces() {
   }
 
   // The whole window is the text field: point text-input at this surface and
-  // activate it so the compositor's IME starts routing text here.
+  // activate it so the compositor's IME starts routing text here.  State has to
+  // follow Activate(), not precede it: on v3 that is enable, which resets
+  // content type and cursor rectangle, so anything staged earlier is discarded
+  // before the Commit() that applies them.
   ti_.SetSurface(surface_.Get()->GetProxy());
-  ti_.SetContentType(wl::ime::ContentHint::kNone,
-                     wl::ime::ContentPurpose::kNormal);
   ti_.Activate();
-  ti_.Commit();
+  PushTextInputState();
   return true;
 }
 
@@ -1117,8 +1122,22 @@ void App::OnToplevelClose() {
 
 // ── TextInputListener — events from the compositor's IME ─────────────────────
 
+void App::PushTextInputState() noexcept {
+  // Surrounding text is what makes the compositor's input method engage: with
+  // only a content type and an enable, GNOME leaves the text input inert.  This
+  // field's committed text is the surrounding text, with the caret at its end.
+  const auto cursor = static_cast<uint32_t>(text_buf_.cursor());
+  ti_.SetSurroundingText(text_buf_.text(), cursor, cursor);
+  ti_.SetTextChangeCause(wl::ime::ChangeCause::kOther);
+  ti_.SetContentType(wl::ime::ContentHint::kNone,
+                     wl::ime::ContentPurpose::kNormal);
+  ti_.Commit();
+}
+
 void App::OnEnter() {
-  // The text field gained IME focus; nothing extra to do here.
+  // Regaining focus re-enabled the text input, which reset its state, so send
+  // it again — nothing else will.
+  PushTextInputState();
   Redraw();
 }
 
