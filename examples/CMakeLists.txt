@@ -211,25 +211,76 @@ if (WAYLAND_CXX_IME_BACKEND MATCHES "^text-input-v[13]$"
     wlcxx_gen(text_input text-input ${_ti_out} ${_ti_xml} TABLES)
 endif ()
 
-# ── xdg-csd — CSD plugin chosen highest-fidelity-first (GTK → Cairo → none) ───
+# ── xdg-csd — CSD plugin chosen by WAYLAND_CXX_CSD / WAYLAND_CXX_CSD_GTK ──────
+# Mirrors the Meson csd / csd_gtk combos; keep the two in lock-step.
 if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
     AND TARGET PkgConfig::wayland_cursor)
+    # Resolve which GTK the themed plugin builds against.
+    set(_csd_gtk_found FALSE)
+    if (WAYLAND_CXX_CSD_GTK STREQUAL "gtk4")
+        message(FATAL_ERROR
+            "WAYLAND_CXX_CSD_GTK=gtk4: the GTK 4 backend is not implemented. "
+            "GTK 4 removed the offscreen widget-draw path this plugin renders "
+            "through, so it needs a backend of its own. Use gtk3 or auto.")
+    elseif (WAYLAND_CXX_CSD_GTK STREQUAL "gtk3")
+        if (NOT TARGET PkgConfig::gtk3)
+            message(FATAL_ERROR "WAYLAND_CXX_CSD_GTK=gtk3: gtk+-3.0 not found.")
+        endif ()
+        set(_csd_gtk_found TRUE)
+    elseif (WAYLAND_CXX_CSD_GTK STREQUAL "auto")
+        if (TARGET PkgConfig::gtk3)
+            set(_csd_gtk_found TRUE)
+        endif ()
+    endif ()
+
+    set(_csd_cairo_found FALSE)
+    if (TARGET PkgConfig::cairo AND TARGET PkgConfig::pangocairo)
+        set(_csd_cairo_found TRUE)
+    endif ()
+
+    # Resolve 'auto' to the highest-fidelity plugin available.
+    set(_csd_choice "${WAYLAND_CXX_CSD}")
+    if (_csd_choice STREQUAL "auto")
+        if (_csd_gtk_found)
+            set(_csd_choice gtk)
+        elseif (_csd_cairo_found)
+            set(_csd_choice cairo)
+        else ()
+            set(_csd_choice fallback)
+        endif ()
+    endif ()
+
     set(_csd_src   "")
     set(_csd_deps  "")
     set(_csd_defs  "")
-    if (TARGET PkgConfig::gtk3)
+    if (_csd_choice STREQUAL "gtk")
+        if (NOT _csd_gtk_found)
+            if (WAYLAND_CXX_CSD_GTK STREQUAL "disabled")
+                message(FATAL_ERROR
+                    "WAYLAND_CXX_CSD=gtk conflicts with WAYLAND_CXX_CSD_GTK="
+                    "disabled: the GTK plugin was asked for and gated off at "
+                    "the same time.")
+            endif ()
+            message(FATAL_ERROR
+                "WAYLAND_CXX_CSD=gtk: gtk+-3.0 not found. Install it, or pick "
+                "another plugin with WAYLAND_CXX_CSD=cairo / fallback.")
+        endif ()
         set(_csd_src  xdg-csd/csd_gtk.cpp)
         set(_csd_deps PkgConfig::gtk3)
         set(_csd_defs USE_GTK_CSD)
-        message(STATUS "xdg-csd: GTK 3 → GTK CSD plugin")
-    elseif (TARGET PkgConfig::cairo AND TARGET PkgConfig::pangocairo)
+    elseif (_csd_choice STREQUAL "cairo")
+        if (NOT _csd_cairo_found)
+            message(FATAL_ERROR
+                "WAYLAND_CXX_CSD=cairo: cairo and pangocairo are both required.")
+        endif ()
         set(_csd_src  xdg-csd/csd_cairo.cpp)
         set(_csd_deps PkgConfig::cairo PkgConfig::pangocairo)
         set(_csd_defs USE_CAIRO_CSD)
-        message(STATUS "xdg-csd: Cairo + Pango → Cairo CSD plugin")
-    else ()
-        message(STATUS "xdg-csd: no Cairo/GTK → fallback CSD plugin")
     endif ()
+    # 'fallback' adds no source: the plugin is header-only.
+    message(STATUS "xdg-csd: CSD plugin '${_csd_choice}' "
+                   "(WAYLAND_CXX_CSD=${WAYLAND_CXX_CSD}, "
+                   "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK})")
     wlcxx_example(xdg_csd xdg-csd/main.cpp ${_csd_src})
     target_link_libraries(xdg_csd PRIVATE PkgConfig::wayland_client PkgConfig::wayland_cursor PkgConfig::xkbcommon ${_csd_deps})
     if (_csd_defs)

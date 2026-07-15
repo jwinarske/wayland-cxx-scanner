@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 wayland-cxx-scanner contributors
 #
-# xdg-csd: C++23 client-side decoration example
+# xdg-csd: client-side decoration example
 #
 # Demonstrates the zxdg_decoration_manager_v1 protocol for negotiating
 # CSD vs SSD with the compositor, and renders client-side decorations
 # (title bar with window buttons, resize borders) using a CSD plugin.
 #
-# Plugin selection follows the libdecor pattern (highest-fidelity wins):
-#   • If GTK 3 is found  → GTK-themed CSD plugin (GTK + Cairo + Pango)
-#   • Elif Cairo is found → Cairo CSD plugin (Cairo + Pango, libdecor style)
-#   • Otherwise           → fallback flat-color CSD plugin (no deps)
+# Which plugin is built is controlled by the csd / csd_gtk options; with both
+# left at 'auto' the highest-fidelity available one wins:
+#   • GTK 3 present      → GTK-themed CSD plugin (GTK + Cairo + Pango)
+#   • else Cairo present → Cairo CSD plugin (Cairo + Pango)
+#   • otherwise          → fallback flat-color CSD plugin (no deps)
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 
@@ -24,11 +25,39 @@ if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found()
     subdir_done()
 endif
 
-# ── Optional plugin dependency detection ─────────────────────────────────────
+# ── Plugin dependency resolution ─────────────────────────────────────────────
+#
+# Two options decide what gets built and what gets used:
+#   csd_gtk — which GTK the themed plugin is built against (or none at all)
+#   csd     — which plugin the example links
+#
+# Naming either explicitly is a hard requirement: an unbuildable choice fails at
+# configure time instead of quietly degrading to a lesser plugin.
 
-gtk_dep       = dependency('gtk+-3.0',   required: false)
-cairo_dep     = dependency('cairo',      required: false)
-pangocairo_dep = dependency('pangocairo', required: false)
+csd_gtk_opt = get_option('csd_gtk')
+csd_opt     = get_option('csd')
+
+gtk_dep   = []
+gtk_found = false
+
+if csd_gtk_opt == 'gtk4'
+    error('csd_gtk=gtk4: the GTK 4 backend is not implemented. GTK 4 removed ' +
+          'the offscreen widget-draw path this plugin renders through, so it ' +
+          'needs a backend of its own. Use csd_gtk=gtk3 or csd_gtk=auto.')
+elif csd_gtk_opt == 'gtk3'
+    gtk_dep   = dependency('gtk+-3.0', required: true)
+    gtk_found = true
+elif csd_gtk_opt == 'auto'
+    _gtk      = dependency('gtk+-3.0', required: false)
+    gtk_found = _gtk.found()
+    if gtk_found
+        gtk_dep = _gtk
+    endif
+endif
+
+cairo_dep      = dependency('cairo',      required: csd_opt == 'cairo')
+pangocairo_dep = dependency('pangocairo', required: csd_opt == 'cairo')
+cairo_found    = cairo_dep.found() and pangocairo_dep.found()
 
 # ── Locate system protocol XMLs ───────────────────────────────────────────────
 
@@ -76,19 +105,44 @@ xdg_csd_sources = [
 xdg_csd_deps = [wayland_client_dep, xkbcommon_dep, wl_cursor_dep]
 xdg_csd_args = ['-Wno-unused-parameter']
 
-if gtk_dep.found()
+# ── Plugin selection ─────────────────────────────────────────────────────────
+
+csd_choice = csd_opt
+if csd_choice == 'auto'
+    # Highest fidelity available.
+    if gtk_found
+        csd_choice = 'gtk'
+    elif cairo_found
+        csd_choice = 'cairo'
+    else
+        csd_choice = 'fallback'
+    endif
+endif
+
+if csd_choice == 'gtk'
+    if not gtk_found
+        if csd_gtk_opt == 'disabled'
+            error('csd=gtk conflicts with csd_gtk=disabled: the GTK plugin was ' +
+                  'asked for and gated off at the same time.')
+        endif
+        error('csd=gtk: gtk+-3.0 not found. Install it, or pick another plugin ' +
+              'with csd=cairo / csd=fallback.')
+    endif
     xdg_csd_sources += 'csd_gtk.cpp'
     xdg_csd_deps    += gtk_dep
     xdg_csd_args    += '-DUSE_GTK_CSD'
-    message('xdg-csd: GTK 3 found → building with GTK CSD plugin')
-elif cairo_dep.found() and pangocairo_dep.found()
+elif csd_choice == 'cairo'
+    if not cairo_found
+        error('csd=cairo: cairo and pangocairo are both required.')
+    endif
     xdg_csd_sources += 'csd_cairo.cpp'
     xdg_csd_deps    += [cairo_dep, pangocairo_dep]
     xdg_csd_args    += '-DUSE_CAIRO_CSD'
-    message('xdg-csd: Cairo + Pango found → building with Cairo CSD plugin')
-else
-    message('xdg-csd: no Cairo/GTK → building with fallback CSD plugin')
 endif
+# 'fallback' adds no source: the plugin is header-only.
+
+message('xdg-csd: CSD plugin "' + csd_choice + '" (csd=' + csd_opt +
+        ', csd_gtk=' + csd_gtk_opt + ')')
 
 # ── Executable ────────────────────────────────────────────────────────────────
 

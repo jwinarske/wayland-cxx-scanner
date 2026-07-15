@@ -20,3 +20,17 @@ option('skia_prefix', type: 'string', value: '',
 # and examples=true alone must never do that.
 option('imgui_examples', type: 'feature', value: 'disabled',
     description: 'Build the Dear ImGui platform-backend example (fetches Dear ImGui via subprojects/imgui.wrap unless a system imgui is found)')
+# Which GTK the themed CSD plugin is built against. 'auto' resolves to gtk3 when
+# gtk+-3.0 is present and skips the plugin otherwise; an explicit 'gtk3' is a
+# hard requirement. 'gtk4' is accepted but not yet implemented, and says so
+# rather than silently building nothing.
+option('csd_gtk', type: 'combo', choices: ['auto', 'gtk3', 'gtk4', 'disabled'],
+    value: 'auto',
+    description: 'GTK version the themed CSD plugin is built against. Implemented: gtk3.')
+# Which CSD plugin the xdg-csd example uses. 'auto' takes the highest-fidelity
+# one available; naming a plugin that cannot be built is a configure error
+# rather than a silent downgrade, which is what lets CI pin a plugin and build
+# the ones 'auto' would otherwise hide.
+option('csd', type: 'combo', choices: ['auto', 'gtk', 'cairo', 'fallback'],
+    value: 'auto',
+    description: 'CSD plugin the xdg-csd example uses (auto = highest fidelity available)')

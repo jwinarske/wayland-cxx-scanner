@@ -111,6 +111,42 @@ jobs:
       - name: Run the roundtrip example test
         run: ctest --test-dir build --output-on-failure
 
+  csd-plugins:
+    name: CMake CSD plugin (${{ matrix.csd }})
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      # The examples job leaves WAYLAND_CXX_CSD at 'auto', which resolves to the
+      # GTK plugin whenever GTK is installed — so the Cairo and fallback plugins
+      # would otherwise never be compiled by CI at all. Pin each one explicitly.
+      matrix:
+        csd: [gtk, cairo, fallback]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            cmake ninja-build g++ \
+            libwayland-dev wayland-protocols libpugixml-dev \
+            libxkbcommon-dev \
+            libgtk-3-dev libcairo2-dev libpango1.0-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON \
+            -DWAYLAND_CXX_CSD=${{ matrix.csd }}
+
+      # Build only the CSD example: the point is plugin coverage, and the rest
+      # of the example surface is already built by the examples job.
+      - name: Build
+        run: cmake --build build --target xdg_csd
+
   ime-backends:
     name: CMake IME backend (${{ matrix.ime_backend }})
     runs-on: ubuntu-24.04
