@@ -18,6 +18,7 @@
 //                                        reused as-is from the framework
 //   wl::TouchHandler<Data>               single-touch mouse emulation hooks
 //   wl::CursorManager                    theme loading + animated cursors
+//   wl::DataDevice<Data>                 clipboard: selection in, source out
 //
 // All events funnel into ImGuiIO through the 1.87+ event API
 // (AddKeyEvent / AddMousePosEvent / ...), matching upstream backends.
@@ -31,7 +32,10 @@
 // ── System headers ───────────────────────────────────────────────────────────
 extern "C" {
 #include <linux/input-event-codes.h>
+#include <poll.h>    // poll (bounded paste read)
+#include <signal.h>  // pthread_sigmask / sigtimedwait (SIGPIPE containment)
 #include <time.h>
+#include <unistd.h>                   // read, write
 #include <wayland-client-protocol.h>  // WL_* enums + wl_*_interface symbols
 #include <wayland-util.h>             // wl_fixed_to_double
 }
@@ -40,6 +44,7 @@ extern "C" {
 // ── Framework headers ────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>  // wl::BindHandler / wl::SetupHandler
 #include <wl/cursor.hpp>          // wl::CursorManager
+#include <wl/data_device.hpp>     // wl::DataDevice, wl::MimeSet
 #include <wl/display.hpp>         // wl::RoundtripWithTimeout
 #include <wl/keyboard.hpp>        // wl::KeyboardHandler, wl::KeyEvent
 #include <wl/registry.hpp>        // wl::CRegistry
@@ -61,6 +66,7 @@ extern "C" {
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // wl_iface() definitions
@@ -68,15 +74,28 @@ extern "C" {
 // The generated traits declare wl_iface() out-of-line;
 // <wayland-client-protocol.h> provides the extern wl_interface tables.
 // <wl/seat.hpp> defines them inline for every interface SeatManager binds —
-// wl_seat, wl_keyboard, wl_pointer and wl_touch — so the backend supplies only
-// wl_shm, which it binds itself for the cursor.  Applications linking this
-// backend must not define wl_shm again.
+// wl_seat, wl_keyboard, wl_pointer and wl_touch — so the backend supplies the
+// rest of what it binds itself: wl_shm for the cursor, and the wl_data_device
+// family for the clipboard.  Applications linking this backend must not define
+// these again.
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wayland::client {
 
 const wl_interface& wl_shm_traits::wl_iface() noexcept {
   return wl_shm_interface;
+}
+const wl_interface& wl_data_device_manager_traits::wl_iface() noexcept {
+  return wl_data_device_manager_interface;
+}
+const wl_interface& wl_data_device_traits::wl_iface() noexcept {
+  return wl_data_device_interface;
+}
+const wl_interface& wl_data_offer_traits::wl_iface() noexcept {
+  return wl_data_offer_interface;
+}
+const wl_interface& wl_data_source_traits::wl_iface() noexcept {
+  return wl_data_source_interface;
 }
 
 }  // namespace wayland::client
@@ -116,6 +135,10 @@ struct ImGui_ImplWaylandCxx_Data
   wl::WlPtr<wl::TouchHandler<ImGui_ImplWaylandCxx_Data>> touch;
   wl::CursorManager cursor;
 
+  // Clipboard.  Declared after seat so it is destroyed first: the data device
+  // is created from the seat proxy.
+  wl::DataDevice<ImGui_ImplWaylandCxx_Data> data_device;
+
   // Registry scan results.
   uint32_t seat_name = 0, seat_ver_adv = 0, seat_ver = 0;
   uint32_t shm_name = 0, shm_ver_adv = 0;
@@ -142,6 +165,38 @@ struct ImGui_ImplWaylandCxx_Data
   bool shift_l = false, shift_r = false;
   bool alt_l = false, alt_r = false;
   bool super_l = false, super_r = false;
+
+  // ── Clipboard ─────────────────────────────────────────────────────────────
+  uint32_t dd_name = 0, dd_ver_adv = 0;
+
+  // wl_data_device.set_selection is serial-gated: the compositor rejects a
+  // request that does not name a real input event, which is how it stops a
+  // client from taking the clipboard while unfocused.  Ctrl-C reaches ImGui as
+  // a key, so the latest key or button serial is the one to quote.
+  uint32_t last_input_serial = 0;
+
+  // The text we published, kept because OnSend serves it on demand — possibly
+  // long after the copy — and because a paste while we still own the selection
+  // is answered from here.
+  std::string clipboard_owned;
+  bool own_selection = false;
+
+  // MIME types the current foreign selection offers, cached from OnSelection so
+  // that a paste can pick a flavor without a round trip.
+  wl::MimeSet peer_mimes;
+
+  // Scratch for the string handed back to ImGui.  Platform_GetClipboardTextFn
+  // returns a borrowed pointer, so it has to outlive the call; ImGui copies it
+  // before the next one.
+  std::string clipboard_pasted;
+
+  // ── Hooks detected by wl::DataDevice<Data> via SFINAE ─────────────────────
+  void OnSelection(const wl::MimeSet& mimes);
+  void OnSend(const char* mime, wl::FdHandle fd);
+  void OnCancelled();
+
+  const char* GetClipboardText();
+  void SetClipboardText(const char* text);
 
 #ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
   // ── IME (text-input) ──────────────────────────────────────────────────────
@@ -482,6 +537,7 @@ void ImGui_ImplWaylandCxx_Data::OnPointerMotion(const wl::PointerEvent& ev) {
 
 void ImGui_ImplWaylandCxx_Data::OnPointerButton(
     const wl::PointerButtonEvent& ev) {
+  last_input_serial = ev.serial;
   if (!pointer_inside)
     return;
   int mouse_button = -1;
@@ -571,6 +627,13 @@ void ImGui_ImplWaylandCxx_Data::UpdateModifier(uint32_t evdev_key,
 void ImGui_ImplWaylandCxx_Data::OnKey(const wl::KeyEvent& ev) {
   ImGuiIO& io = ImGui::GetIO();
   const bool down = ev.state == WL_KEYBOARD_KEY_STATE_PRESSED;
+
+  // Remember the serial for set_selection.  A repeat tick carries the serial of
+  // the press it came from, which the compositor has already seen, so it is
+  // usable -- but it is not new input, and preferring the genuine press keeps
+  // the freshest real serial.
+  if (!ev.repeat)
+    last_input_serial = ev.serial;
 
   // Regain focus lazily: wl_keyboard has no enter hook exposed, but a key
   // event implies our surface holds keyboard focus.
@@ -792,6 +855,155 @@ void ImGui_ImplWaylandCxx_Data::OnTouchCancel() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Clipboard (delivered by wl::DataDevice<Data>)
+//
+// Wayland has no clipboard storage: the copying client keeps the data and
+// serves it, per paste, over a pipe the compositor brokers.  ImGui's clipboard
+// API is synchronous on both sides, so a paste has to read that pipe inside
+// Platform_GetClipboardTextFn while the frame waits.
+// ══════════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+// Offered on copy and searched on paste, best flavor first.  The first three
+// are what every Wayland client agrees on; the X11 spellings trail them for
+// XWayland peers, which offer nothing else.
+constexpr const char* kTextMimes[] = {
+    "text/plain;charset=utf-8", "text/plain", "UTF8_STRING", "STRING", "TEXT",
+};
+
+const char* PickTextMime(const wl::MimeSet& mimes) noexcept {
+  for (const char* m : kTextMimes)
+    if (mimes.Contains(m))
+      return m;
+  return nullptr;
+}
+
+// A well-behaved peer answers a paste at once, but nothing forces it to: the
+// pipe is written by another process, and the compositor does not police it.
+// Cap the wait so a wedged source stalls one paste instead of the UI thread.
+constexpr int kPasteReadTimeoutMs = 500;
+constexpr std::size_t kPasteReadCap = 1u << 20;  // 1 MiB
+
+}  // namespace
+
+void ImGui_ImplWaylandCxx_Data::OnSelection(const wl::MimeSet& mimes) {
+  // Always describes the current selection, including our own offered straight
+  // back to us after a copy.  Recorded unconditionally: when another client
+  // takes the clipboard we are told twice -- cancelled for our source, and this
+  // -- and nothing orders the two, so skipping this while own_selection still
+  // looked true would drop the new owner's flavors and strand every paste until
+  // the selection changed again.  Ownership decides whether the offer is read,
+  // not whether it is recorded; see GetClipboardText.
+  peer_mimes = mimes;
+}
+
+void ImGui_ImplWaylandCxx_Data::OnCancelled() {
+  // Another client took the clipboard; our source is dead and its text is no
+  // longer what a paste should return.
+  own_selection = false;
+  clipboard_owned.clear();
+}
+
+void ImGui_ImplWaylandCxx_Data::OnSend(const char* /*mime*/, wl::FdHandle fd) {
+  // A peer is pasting what we published.  Every flavor we offer is the same
+  // UTF-8 bytes, so the requested MIME does not change the answer.
+  //
+  // Writing to a pipe whose reader has gone raises SIGPIPE, and the default
+  // disposition kills the process.  A backend cannot fix that the way an
+  // application does -- installing a process-wide SIG_IGN would silently
+  // rewrite behavior its host never asked for -- so block the signal for the
+  // duration of the write and consume any instance it raised, leaving the
+  // application's own disposition untouched.
+  sigset_t pipe_set;
+  sigemptyset(&pipe_set);
+  sigaddset(&pipe_set, SIGPIPE);
+  sigset_t saved;
+  const bool masked = pthread_sigmask(SIG_BLOCK, &pipe_set, &saved) == 0;
+
+  // A pipe write is short whenever the payload exceeds the pipe buffer, so it
+  // has to be driven to completion rather than issued once.
+  std::string_view rest{clipboard_owned};
+  bool epipe = false;
+  while (!rest.empty()) {
+    const ssize_t n = write(fd.Get(), rest.data(), rest.size());
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      epipe = errno == EPIPE;
+      break;  // reader went away, or the pipe broke
+    }
+    rest.remove_prefix(static_cast<std::size_t>(n));
+  }
+
+  if (masked) {
+    // Drain only what our own write raised: SIGPIPE is directed at the thread
+    // that wrote, so a pending one here is ours.  Skipping this would leave it
+    // to fire the moment the mask is lifted.
+    if (epipe) {
+      const timespec zero{0, 0};
+      while (sigtimedwait(&pipe_set, nullptr, &zero) < 0 && errno == EINTR) {
+      }
+    }
+    pthread_sigmask(SIG_SETMASK, &saved, nullptr);
+  }
+  // fd closes with the FdHandle, which is what gives the reader its EOF.
+}
+
+void ImGui_ImplWaylandCxx_Data::SetClipboardText(const char* text) {
+  clipboard_owned = text != nullptr ? text : "";
+
+  // No serial means no key or button has reached us yet, so the compositor
+  // would reject set_selection.  Nothing is published and own_selection stays
+  // clear -- a paste keeps reporting whatever the real selection holds rather
+  // than text this client never managed to put on the clipboard.  ImGui only
+  // copies in response to input, so in practice a serial is always in hand.
+  if (last_input_serial == 0)
+    return;
+
+  wl::MimeSet mimes;
+  for (const char* m : kTextMimes)
+    mimes.Add(m);
+  data_device.Offer(mimes, last_input_serial);
+  own_selection = true;
+  peer_mimes.Clear();
+}
+
+const char* ImGui_ImplWaylandCxx_Data::GetClipboardText() {
+  // Our own selection is never read back through the pipe.  The compositor
+  // offers it to us like any other, but the client writing that pipe is this
+  // one: OnSend runs on this thread, and this thread would be parked in the
+  // read below waiting for it -- a deadlock with no timeout to escape it, since
+  // the write that would satisfy the poll can never be dispatched.
+  if (own_selection)
+    return clipboard_owned.c_str();
+
+  const char* mime = PickTextMime(peer_mimes);
+  if (mime == nullptr)
+    return nullptr;  // no selection, or it holds something that is not text
+
+  wl::FdHandle fd = data_device.Receive(mime);
+  if (fd.Get() < 0)
+    return nullptr;
+
+  clipboard_pasted.clear();
+  std::array<char, 4096> buf{};
+  for (;;) {
+    pollfd pfd{fd.Get(), POLLIN, 0};
+    const int pr = poll(&pfd, 1, kPasteReadTimeoutMs);
+    if (pr <= 0)
+      break;  // timed out or failed; return what arrived
+    const ssize_t n = read(fd.Get(), buf.data(), buf.size());
+    if (n <= 0)
+      break;  // EOF or error
+    clipboard_pasted.append(buf.data(), static_cast<std::size_t>(n));
+    if (clipboard_pasted.size() >= kPasteReadCap)
+      break;
+  }
+  return clipboard_pasted.c_str();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Mouse cursor shapes
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -884,6 +1096,9 @@ bool ImGui_ImplWaylandCxx_Init(wl_display* display,
     } else if (iface == wl_shm_traits::interface_name) {
       bd->shm_name = name;
       bd->shm_ver_adv = ver;
+    } else if (iface == wl_data_device_manager_traits::interface_name) {
+      bd->dd_name = name;
+      bd->dd_ver_adv = ver;
     }
 #ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
     else if (iface == ti_mgr::interface_name) {
@@ -913,6 +1128,26 @@ bool ImGui_ImplWaylandCxx_Init(wl_display* display,
     // pointer works fine without it.
     (void)wl::BindHandler<wl_shm_traits>(bd->registry, bd->shm, bd->shm_name,
                                          bd->shm_ver_adv);
+  }
+
+  // Clipboard is best-effort and needs the seat, which owns the data device.
+  // Without it every clipboard call is a no-op and Ctrl-C/V simply do nothing,
+  // which is what a compositor that withholds wl_data_device_manager intends.
+  if (bd->dd_name != 0 && !bd->seat.IsNull()) {
+    bd->data_device.Record(bd->dd_name, bd->dd_ver_adv);
+    if (bd->data_device.Bind(bd->registry, bd)) {
+      bd->data_device.Start(display, bd->seat.Get()->GetProxy());
+      ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+      pio.Platform_SetClipboardTextFn = [](ImGuiContext*, const char* text) {
+        if (ImGui_ImplWaylandCxx_Data* b =
+                ImGui_ImplWaylandCxx_GetBackendData())
+          b->SetClipboardText(text);
+      };
+      pio.Platform_GetClipboardTextFn = [](ImGuiContext*) -> const char* {
+        ImGui_ImplWaylandCxx_Data* b = ImGui_ImplWaylandCxx_GetBackendData();
+        return b != nullptr ? b->GetClipboardText() : nullptr;
+      };
+    }
   }
 
 #ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
@@ -963,6 +1198,16 @@ void ImGui_ImplWaylandCxx_Shutdown() {
   ImGuiIO& io = ImGui::GetIO();
 
   bd->cursor.Release();
+
+  // Drop the ImGui hooks before the device they call into; the device's proxies
+  // come from the seat, so it is released ahead of that too.
+  if (ImGui::GetCurrentContext() != nullptr) {
+    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    pio.Platform_SetClipboardTextFn = nullptr;
+    pio.Platform_GetClipboardTextFn = nullptr;
+  }
+  bd->data_device.Release();
+
 #ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
   // Drop the ImGui hook before the receiver it calls into, then the text_input
   // and manager proxies — they are created from the seat, so they go first.
