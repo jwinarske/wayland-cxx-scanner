@@ -275,12 +275,14 @@ struct BufferPool {
 
   [[nodiscard]] bool Create(int w, int h, wl_proxy* shm_raw) noexcept;
 
-  void Recreate(int w, int h, wl_proxy* shm_raw) noexcept {
-    for (auto& b : bufs)
-      b.Reset();
-    mem.Reset();
-    next = 0;
-    static_cast<void>(Create(w, h, shm_raw));
+  // True once the compositor has handed every buffer back, so the pool can be
+  // torn down without pulling a buffer out from under the surface.
+  [[nodiscard]] bool AllReleased() const noexcept {
+    for (const auto& b : bufs) {
+      if (!b.IsNull() && b.Get()->busy)
+        return false;
+    }
+    return true;
   }
 
   [[nodiscard]] void* PixelData(int i) const noexcept {
@@ -413,6 +415,8 @@ class App {
         content_h_(content_h),
         title_(title),
         csd_plugin_(std::move(plugin)) {
+    restore_w_ = content_w;
+    restore_h_ = content_h;
     use_csd_ = csd_plugin_ != nullptr;
     if (csd_plugin_)
       csd_plugin_->SetTitle(title);
@@ -441,6 +445,13 @@ class App {
   int content_w_;
   int content_h_;
   const char* title_;
+
+  // The size to return to when the compositor stops imposing one. Tracked
+  // rather than remembered at the moment of maximizing, because an interactive
+  // resize changes it too.
+  int restore_w_ = 0;
+  int restore_h_ = 0;
+  bool fullscreen_ = false;
 
   // ── Decoration state ──────────────────────────────────────────────────────
   // Default when the compositor offers no decoration manager: draw our own
@@ -499,7 +510,15 @@ class App {
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
   wl::WlPtr<WlCallbackHandler> frame_cb_;
-  BufferPool pool_;
+  // Held by pointer so a resize can hand the old pool aside intact rather than
+  // tearing it down underneath the compositor.
+  std::unique_ptr<BufferPool> pool_ = std::make_unique<BufferPool>();
+  // The pool from before the last resize, kept alive until the compositor has
+  // released its buffers.  Destroying a wl_buffer that is still attached
+  // leaves the surface contents undefined -- the compositor is entitled to
+  // draw whatever it likes, and a compositor that holds buffers across a
+  // resize will show exactly that.
+  std::unique_ptr<BufferPool> retired_;
 
   // ── Application state ─────────────────────────────────────────────────────
   bool running_ = true;
@@ -551,6 +570,10 @@ class App {
 
   // Last opaque region submitted, to avoid re-sending it every frame.
   int opaque_x_ = -1, opaque_y_ = -1, opaque_w_ = -1, opaque_h_ = -1;
+
+  // Last window geometry submitted, likewise. Both are double-buffered state
+  // that only needs re-declaring when it actually changes.
+  int geometry_w_ = -1, geometry_h_ = -1;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -789,7 +812,7 @@ bool App::CreateWindow() {
 // ── CreateBuffers ───────────────────────────────────────────────────────────
 
 bool App::CreateBuffers() {
-  return pool_.Create(SurfaceWidth(), SurfaceHeight(), shm_.Get()->GetProxy());
+  return pool_->Create(SurfaceWidth(), SurfaceHeight(), shm_.Get()->GetProxy());
 }
 
 // ── Hit testing ─────────────────────────────────────────────────────────────
@@ -810,6 +833,8 @@ void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
 }
 
 void App::OnToplevelConfigure(int32_t width, int32_t height) {
+  static constexpr int kMaxDim = 16384;
+
   if (width > 0 && height > 0) {
     // width/height are the size of the window geometry rectangle, so this must
     // stay the exact inverse of the SetWindowGeometry() call in CommitFrame().
@@ -824,11 +849,34 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) {
       content_w_ = width;
       content_h_ = height;
     }
-    static constexpr int kMaxDim = 16384;
-    content_w_ = std::clamp(content_w_, 1, kMaxDim);
-    content_h_ = std::clamp(content_h_, 1, kMaxDim);
-    need_redraw_ = true;
+  } else {
+    // A zero dimension means the compositor has no opinion and the size is
+    // ours to pick. It is how a compositor says "go back to whatever you
+    // were", so this is the path an un-maximize takes -- and ignoring it left
+    // the window holding its maximized buffer, still looking maximized while
+    // the compositor believed it had been restored. The compositor then had
+    // nothing to change on the next maximize, so it stayed silent and the
+    // window was stuck for good.
+    //
+    // Only the zero axes are ours to choose; the other still binds.
+    if (width <= 0)
+      content_w_ = restore_w_;
+    if (height <= 0)
+      content_h_ = restore_h_;
   }
+
+  content_w_ = std::clamp(content_w_, 1, kMaxDim);
+  content_h_ = std::clamp(content_h_, 1, kMaxDim);
+
+  // Remember the size to come back to, but only while the compositor is not
+  // imposing one: a maximized or fullscreen size is the compositor's, not a
+  // size we would ever choose to return to.
+  if (!maximized_ && !fullscreen_) {
+    restore_w_ = content_w_;
+    restore_h_ = content_h_;
+  }
+
+  need_redraw_ = true;
 }
 
 // The compositor is the authority on both of these. Tracking them from our own
@@ -837,6 +885,7 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) {
 void App::OnToplevelStates(const wl::ToplevelStates& states) {
   focused_ = states.activated;
   maximized_ = states.maximized;
+  fullscreen_ = states.fullscreen;
 }
 
 void App::OnToplevelClose() {
@@ -1075,18 +1124,36 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
   const int sw = SurfaceWidth();
   const int sh = SurfaceHeight();
 
-  // Recreate buffers if size changed.
-  if (pool_.width != sw || pool_.height != sh) {
-    pool_.Recreate(sw, sh, shm_.Get()->GetProxy());
+  // The compositor may still be displaying buffers from the current pool, so a
+  // resize retires it rather than freeing it, and a fresh pool takes over.
+  if (pool_->width != sw || pool_->height != sh) {
+    if (!retired_ || retired_->AllReleased())
+      retired_ = std::move(pool_);  // Drops any older pool, now safely idle.
+    pool_ = std::make_unique<BufferPool>();
+    if (!pool_->Create(sw, sh, shm_.Get()->GetProxy())) {
+      std::fprintf(stderr, "xdg-csd: buffer pool %dx%d failed\n", sw, sh);
+      return;
+    }
   }
 
-  const int idx = pool_.NextFree();
+  // Free the retired pool as soon as its buffers come back.
+  if (retired_ && retired_->AllReleased())
+    retired_.reset();
+
+  const int idx = pool_->NextFree();
   if (idx < 0) {
-    std::fprintf(stderr, "xdg-csd: all buffers busy — skipping frame\n");
+    // No free buffer: the compositor still holds every one. Skip the paint —
+    // but commit anyway, because the frame callback requested for the next
+    // frame is double-buffered state and only takes effect on a commit.
+    // Returning without one leaves it unarmed, so no further frame callback
+    // ever arrives and the render loop stops for good: the window freezes on
+    // whatever was last displayed and never redraws again, however much the
+    // compositor reconfigures it.
+    surface_.Get()->Commit();
     return;
   }
 
-  auto* pixels = static_cast<uint32_t*>(pool_.PixelData(idx));
+  auto* pixels = static_cast<uint32_t*>(pool_->PixelData(idx));
   const std::size_t npixels =
       static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh);
 
@@ -1121,7 +1188,16 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
     //
     // Once the borders become an invisible shadow they must come back out of
     // this rectangle, and the configure math has to move with it.
-    xdg_surface_.Get()->SetWindowGeometry(0, 0, sw, sh);
+    //
+    // Sent only when it changes. It is double-buffered state, so re-sending it
+    // on every frame is legal but means every commit re-declares the geometry —
+    // and a compositor is entitled to treat that as the client having a say
+    // about its size mid-negotiation.
+    if (sw != geometry_w_ || sh != geometry_h_) {
+      xdg_surface_.Get()->SetWindowGeometry(0, 0, sw, sh);
+      geometry_w_ = sw;
+      geometry_h_ = sh;
+    }
 
     // Everything below the title bar is opaque, but the title bar itself is
     // not: a themed decoration rounds its top corners, leaving those pixels
@@ -1135,10 +1211,10 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
   }
 
   surface_.Get()->Attach(
-      pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
+      pool_->bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
   surface_.Get()->Damage(0, 0, sw, sh);
   surface_.Get()->Commit();
-  pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->busy = true;
+  pool_->bufs.at(static_cast<std::size_t>(idx)).Get()->busy = true;
 }
 
 // ── MainLoop ────────────────────────────────────────────────────────────────
