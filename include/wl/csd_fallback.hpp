@@ -7,8 +7,7 @@
 // This is the "regular" decoration plugin that requires no external
 // dependencies.  It draws a dark title bar with close/maximize/minimize
 // buttons (solid-color rectangles) and thin resize borders around the
-// content area — the same decoration style previously hard-coded in the
-// xdg-csd example.
+// content area.
 //
 // ── Include order
 // ───────────────────────────────────────────────────────────── Include
@@ -19,9 +18,8 @@
 #pragma once
 
 #include <wl/csd_plugin.hpp>
+#include <wl/scale_policy.hpp>
 
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -36,7 +34,7 @@ namespace wl::csd {
 /// borders.  No external rendering library is needed.
 class FallbackCsdPlugin final : public CsdPlugin {
  public:
-  // ── Default color theme (XRGB8888) ────────────────────────────────────
+  // ── Default color theme (ARGB8888, premultiplied — all opaque) ─────────
   static constexpr uint32_t kColorTitleBar = 0xFF3C3C3C;
   static constexpr uint32_t kColorTitleBarUnfocused = 0xFF505050;
   static constexpr uint32_t kColorBorder = 0xFF505050;
@@ -51,57 +49,58 @@ class FallbackCsdPlugin final : public CsdPlugin {
 
   // ── CsdPlugin interface ────────────────────────────────────────────────
 
-  [[nodiscard]] int BorderWidth() const noexcept override {
-    return kBorderWidth;
-  }
-
-  [[nodiscard]] int TitleBarHeight() const noexcept override {
-    return kTitleBarHeight;
+  [[nodiscard]] Margins DecorationMargins() const override {
+    return {kBorderWidth, kBorderWidth, kTitleBarHeight, kBorderWidth};
   }
 
   void SetTitle(std::string_view title) override { title_ = title; }
 
-  void SetState(bool focused, bool maximized) override {
-    focused_ = focused;
-    maximized_ = maximized;
-  }
+  void SetInputState(const InputState& state) override { state_ = state; }
 
-  void RenderFrame(uint32_t* buffer,
-                   int surface_w,
-                   int surface_h,
-                   int content_w,
-                   int content_h,
-                   uint32_t time) override {
-    // Fill entire surface with border color.
-    FillRect(buffer, surface_w, 0, 0, surface_w, surface_h, kColorBorder);
+  void SetScale(int scale_120) override { scale_120_ = scale_120; }
+
+  void RenderDecoration(uint32_t* buffer,
+                        int stride_px,
+                        int surface_w,
+                        int surface_h,
+                        int content_w,
+                        int /*content_h*/) override {
+    // Everything arrives logical and the buffer is physical, so every
+    // dimension is scaled on the way in. Flat color has no detail to gain
+    // from the extra pixels, but it still has to fill them: drawn at logical
+    // size it would occupy a corner of the buffer.
+    const int bw = S(kBorderWidth);
+    const int tbh = S(kTitleBarHeight);
+    const int btn = S(kButtonSize);
+    const int pad = S(kButtonPadding);
+    const int sw = S(surface_w);
+    const int sh = S(surface_h);
+    const int cw = S(content_w);
+
+    // Borders — the four bands around the content rect.  The content area is
+    // left untouched for the application to paint.
+    FillRect(buffer, stride_px, 0, 0, sw, tbh, kColorBorder);
+    FillRect(buffer, stride_px, 0, sh - bw, sw, bw, kColorBorder);
+    FillRect(buffer, stride_px, 0, tbh, bw, sh - tbh - bw, kColorBorder);
+    FillRect(buffer, stride_px, sw - bw, tbh, bw, sh - tbh - bw, kColorBorder);
 
     // Title bar.
     const uint32_t tb_color =
-        focused_ ? kColorTitleBar : kColorTitleBarUnfocused;
-    FillRect(buffer, surface_w, kBorderWidth, kBorderWidth, content_w,
-             kTitleBarHeight - kBorderWidth, tb_color);
+        state_.focused ? kColorTitleBar : kColorTitleBarUnfocused;
+    FillRect(buffer, stride_px, bw, bw, cw, tbh - bw, tb_color);
 
     // Close button (top-right of title bar).
-    const int btn_y =
-        kBorderWidth + (kTitleBarHeight - kBorderWidth - kButtonSize) / 2;
-    int btn_x = kBorderWidth + content_w - kButtonPadding - kButtonSize;
-    FillRect(buffer, surface_w, btn_x, btn_y, kButtonSize, kButtonSize,
-             kColorCloseBtn);
+    const int btn_y = bw + (tbh - bw - btn) / 2;
+    int btn_x = bw + cw - pad - btn;
+    FillRect(buffer, stride_px, btn_x, btn_y, btn, btn, kColorCloseBtn);
 
     // Maximize button.
-    btn_x -= (kButtonSize + kButtonPadding);
-    FillRect(buffer, surface_w, btn_x, btn_y, kButtonSize, kButtonSize,
-             kColorMaxBtn);
+    btn_x -= (btn + pad);
+    FillRect(buffer, stride_px, btn_x, btn_y, btn, btn, kColorMaxBtn);
 
     // Minimize button.
-    btn_x -= (kButtonSize + kButtonPadding);
-    FillRect(buffer, surface_w, btn_x, btn_y, kButtonSize, kButtonSize,
-             kColorMinBtn);
-
-    // Content area — animated ring pattern.
-    uint32_t* content_start =
-        buffer + kTitleBarHeight * surface_w + kBorderWidth;
-    PaintContent(content_start, content_w, content_h, surface_w, time);
+    btn_x -= (btn + pad);
+    FillRect(buffer, stride_px, btn_x, btn_y, btn, btn, kColorMinBtn);
   }
 
   [[nodiscard]] HitZone HitTest(int x,
@@ -158,8 +157,13 @@ class FallbackCsdPlugin final : public CsdPlugin {
 
  private:
   std::string title_;
-  bool focused_ = true;
-  bool maximized_ = false;
+  InputState state_;
+  int scale_120_ = ScalePolicy::kUnityScale120;
+
+  /// Logical to physical, using the project's normative rounding.
+  [[nodiscard]] int S(int logical) const noexcept {
+    return ScalePolicy::ScaledDim(logical, scale_120_);
+  }
 
   // ── Pixel helpers ─────────────────────────────────────────────────────
 
@@ -173,37 +177,6 @@ class FallbackCsdPlugin final : public CsdPlugin {
     for (int row = y; row < y + h; ++row)
       for (int col = x; col < x + w; ++col)
         buf[row * buf_w + col] = color;
-  }
-
-  static void PaintContent(uint32_t* pixels,
-                           int width,
-                           int height,
-                           int stride,
-                           uint32_t time) noexcept {
-    const int halfh = height / 2;
-    const int halfw = width / 2;
-    int outer_r = (halfw < halfh ? halfw : halfh) - 8;
-    const int inner_r = outer_r - 32;
-    outer_r *= outer_r;
-    const int inner_r2 = inner_r * inner_r;
-
-    for (int y = 0; y < height; ++y) {
-      const int y2 = (y - halfh) * (y - halfh);
-      for (int x = 0; x < width; ++x) {
-        uint32_t v;
-        const int r2 = (x - halfw) * (x - halfw) + y2;
-        if (r2 < inner_r2)
-          v = (static_cast<uint32_t>(r2 / 32) + time / 64) * 0x0080401u;
-        else if (r2 < outer_r)
-          v = (static_cast<uint32_t>(y) + time / 32) * 0x0080401u;
-        else
-          v = (static_cast<uint32_t>(x) + time / 16) * 0x0080401u;
-        v &= 0x00FFFFFFu;
-        if (std::abs(x - y) > 6 && std::abs(x + y - height) > 6)
-          v |= 0xFF000000u;
-        pixels[y * stride + x] = v;
-      }
-    }
   }
 };
 

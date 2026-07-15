@@ -65,6 +65,44 @@ option(WAYLAND_CXX_SCANNER_INSTALL_TOOL "Install the scanner executable" ON)
 option(WAYLAND_CXX_SCANNER_BUILD_TESTS    "Build unit/integration tests" OFF)
 option(WAYLAND_CXX_SCANNER_BUILD_EXAMPLES "Build example applications"   OFF)
 
+# CSD plugin selection for the xdg-csd example. Mirrors the Meson `csd_gtk` and
+# `csd` combos; keep the two in lock-step.
+#
+# Naming a plugin or a GTK version explicitly is a hard requirement: an
+# unbuildable choice fails at configure time rather than degrading silently to a
+# lesser plugin. That is what lets CI pin a plugin and build the ones 'auto'
+# would otherwise never reach.
+
+set(WAYLAND_CXX_CSD_GTK "auto" CACHE STRING
+    "GTK version the themed CSD plugin is built against (implemented: gtk3)")
+set(_wlcxx_csd_gtk_choices auto gtk3 gtk4 disabled)
+set_property(CACHE WAYLAND_CXX_CSD_GTK PROPERTY STRINGS ${_wlcxx_csd_gtk_choices})
+if (NOT WAYLAND_CXX_CSD_GTK IN_LIST _wlcxx_csd_gtk_choices)
+    string(REPLACE ";" ", " _wlcxx_csd_gtk_list "${_wlcxx_csd_gtk_choices}")
+    message(FATAL_ERROR
+        "WAYLAND_CXX_CSD_GTK='${WAYLAND_CXX_CSD_GTK}' is not one of: "
+        "${_wlcxx_csd_gtk_list}")
+endif ()
+
+# How the xdg-csd example is decorated. Defaults to 'ssd': no plugin compiled,
+# the example asks the compositor to decorate, and the binary carries no toolkit
+# dependency. Same reasoning as the Skia and ImGui examples — building the
+# examples must never drag in a toolkit. 'auto' compiles the best plugin but
+# still prefers the compositor at run time; naming a plugin forces client-side.
+# 'ssd' outranks WAYLAND_CXX_CSD_GTK.
+set(WAYLAND_CXX_CSD "ssd" CACHE STRING
+    "How the xdg-csd example is decorated (ssd = compositor only, no toolkit dependency; auto = prefer compositor, fall back to best plugin; naming a plugin forces client-side)")
+set(_wlcxx_csd_choices ssd auto gtk cairo fallback)
+set_property(CACHE WAYLAND_CXX_CSD PROPERTY STRINGS ${_wlcxx_csd_choices})
+if (NOT WAYLAND_CXX_CSD IN_LIST _wlcxx_csd_choices)
+    string(REPLACE ";" ", " _wlcxx_csd_list "${_wlcxx_csd_choices}")
+    message(FATAL_ERROR
+        "WAYLAND_CXX_CSD='${WAYLAND_CXX_CSD}' is not one of: ${_wlcxx_csd_list}")
+endif ()
+
+unset(_wlcxx_csd_gtk_choices)
+unset(_wlcxx_csd_choices)
+
 # Build the test tier under AddressSanitizer + UndefinedBehaviorSanitizer, so
 # CTest can run the socket-pair roundtrip integration tier under sanitizers.
 option(WAYLAND_CXX_SCANNER_SANITIZE "Build tests with ASan + UBSan" OFF)

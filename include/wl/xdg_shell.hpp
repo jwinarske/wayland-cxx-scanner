@@ -32,6 +32,10 @@
 //     void OnXdgSurfaceConfigure(uint32_t serial);
 //     void OnToplevelConfigure(int32_t w, int32_t h);  // no-op if fixed size
 //     void OnToplevelClose();
+//   App may optionally expose:
+//     void OnToplevelStates(const wl::ToplevelStates&);  // decoded configure
+//                                                        // states; detected
+//                                                        // via SFINAE
 #pragma once
 
 #include <wl/wl_ptr.hpp>
@@ -40,7 +44,10 @@ extern "C" {
 #include <wayland-client-protocol.h>
 }
 
+#include <cstddef>   // std::size_t
+#include <cstdint>   // uint32_t
 #include <iterator>  // std::data
+#include <utility>   // std::declval
 
 // ══════════════════════════════════════════════════════════════════════════════
 // xdg-shell wl_interface definitions (version 7)
@@ -289,24 +296,108 @@ class XdgSurfaceHandler
   }
 };
 
+/// Decoded xdg_toplevel.configure `states` array.
+///
+/// The wire form is an array of enum values; this is that array answered as
+/// questions, so a consumer neither walks a wl_array nor repeats the decode.
+///
+/// Only the states from xdg-shell v1 and v2 are decoded.  Later additions
+/// (suspended, constrained_*) are deliberately absent: naming them here would
+/// make this header require a newer wayland-protocols than the project builds
+/// against, and nothing here needs them.  Unknown states are ignored.
+struct ToplevelStates {
+  bool maximized = false;    ///< Compositor has maximized the window.
+  bool fullscreen = false;   ///< Compositor has made the window fullscreen.
+  bool resizing = false;     ///< An interactive resize is in progress.
+  bool activated = false;    ///< Window is the active one.  This — not keyboard
+                             ///< focus — is what drives active vs backdrop
+                             ///< styling.
+  bool tiled_left = false;   ///< Edge is tiled against something.
+  bool tiled_right = false;  ///< Edge is tiled against something.
+  bool tiled_top = false;    ///< Edge is tiled against something.
+  bool tiled_bottom = false;  ///< Edge is tiled against something.
+};
+
 /// XDG toplevel handler — delegates configure and close to App; ignores bounds
 /// and wm_capabilities (suitable for most simple applications).
 ///
 /// @tparam App  Application class providing OnToplevelConfigure(int32_t,
 /// int32_t)
-///              and OnToplevelClose().
+///              and OnToplevelClose().  May optionally provide
+///              OnToplevelStates(const wl::ToplevelStates&), which is called
+///              before OnToplevelConfigure so the size can be interpreted in
+///              light of the new state.
 template <typename App>
 class XdgToplevelHandler
     : public xdg_shell::client::CXdgToplevel<XdgToplevelHandler<App>> {
  public:
   App* app_ = nullptr;
 
-  void OnConfigure(int32_t w, int32_t h, wl_array* /*states*/) override {
+  void OnConfigure(int32_t w, int32_t h, wl_array* states) override {
+    CallOnToplevelStates(DecodeStates(states), 0);
     app_->OnToplevelConfigure(w, h);
   }
   void OnClose() override { app_->OnToplevelClose(); }
   void OnConfigureBounds(int32_t /*w*/, int32_t /*h*/) override {}
   void OnWmCapabilities(wl_array* /*caps*/) override {}
+
+ private:
+  /// Decode the wl_array of xdg_toplevel_state values.
+  [[nodiscard]] static ToplevelStates DecodeStates(wl_array* states) noexcept {
+    using St = xdg_shell::client::XdgToplevelState;
+    ToplevelStates out;
+    if (states == nullptr || states->data == nullptr)
+      return out;
+
+    const auto* first = static_cast<const uint32_t*>(states->data);
+    const std::size_t count = states->size / sizeof(uint32_t);
+    for (std::size_t i = 0; i < count; ++i) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      switch (static_cast<St>(first[i])) {
+        case St::Maximized:
+          out.maximized = true;
+          break;
+        case St::Fullscreen:
+          out.fullscreen = true;
+          break;
+        case St::Resizing:
+          out.resizing = true;
+          break;
+        case St::Activated:
+          out.activated = true;
+          break;
+        case St::TiledLeft:
+          out.tiled_left = true;
+          break;
+        case St::TiledRight:
+          out.tiled_right = true;
+          break;
+        case St::TiledTop:
+          out.tiled_top = true;
+          break;
+        case St::TiledBottom:
+          out.tiled_bottom = true;
+          break;
+        default:
+          break;  // A state this build does not decode.
+      }
+    }
+    return out;
+  }
+
+  // ── SFINAE optional toplevel-states hook ─────────────────────────────────
+
+  // Call app_->OnToplevelStates(states) if the method exists.  An int/long
+  // priority tag disambiguates rather than an ellipsis fallback: passing a
+  // class type through `...` is only conditionally supported.
+  template <typename A = App>
+  auto CallOnToplevelStates(const ToplevelStates& states, int)
+      -> decltype(std::declval<A&>().OnToplevelStates(states), void()) {
+    app_->OnToplevelStates(states);
+  }
+  // Fallback: OnToplevelStates not present — do nothing.
+  template <typename A = App>
+  void CallOnToplevelStates(const ToplevelStates& /*states*/, long) noexcept {}
 };
 
 }  // namespace wl

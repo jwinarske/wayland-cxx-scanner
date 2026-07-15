@@ -20,3 +20,36 @@ option('skia_prefix', type: 'string', value: '',
 # and examples=true alone must never do that.
 option('imgui_examples', type: 'feature', value: 'disabled',
     description: 'Build the Dear ImGui platform-backend example (fetches Dear ImGui via subprojects/imgui.wrap unless a system imgui is found)')
+# Which GTK the themed CSD plugin is built against. 'auto' resolves to gtk3 when
+# gtk+-3.0 is present and skips the plugin otherwise; an explicit 'gtk3' is a
+# hard requirement. 'gtk4' is accepted but not yet implemented, and says so
+# rather than silently building nothing.
+option('csd_gtk', type: 'combo', choices: ['auto', 'gtk3', 'gtk4', 'disabled'],
+    value: 'auto',
+    description: 'GTK version the themed CSD plugin is built against. Implemented: gtk3.')
+# How the xdg-csd example gets its window decorations.
+#
+#   ssd       no plugin is compiled at all; the example asks the compositor for
+#             server-side decorations and draws none itself. The binary carries
+#             no toolkit dependency of any kind.
+#   auto      compile the highest-fidelity plugin available, but still ask for
+#             server-side decorations first and only draw our own if the
+#             compositor refuses. What a well-behaved client wants.
+#   gtk       |
+#   cairo     | compile that plugin and ask for client-side decorations, even
+#   fallback  | where the compositor offers to do it. Naming a plugin means
+#             | wanting to see it.
+#
+# Defaults to 'ssd', so a decoration plugin is only ever built when asked for by
+# name. Same reasoning as skia_examples and imgui_examples above: examples=true
+# alone must never drag in a toolkit, and anything else would pull GTK in on any
+# machine that happens to have it.
+#
+# 'ssd' outranks csd_gtk, which has nothing to select when no plugin is built.
+# Naming a plugin that cannot be built is a configure error rather than a silent
+# downgrade, which is what lets CI pin one and build the ones that would
+# otherwise never be reached.
+option('csd', type: 'combo',
+    choices: ['ssd', 'auto', 'gtk', 'cairo', 'fallback'],
+    value: 'ssd',
+    description: 'How the xdg-csd example is decorated (ssd = compositor only, no toolkit dependency; auto = prefer the compositor, fall back to the best plugin; naming a plugin forces client-side)')

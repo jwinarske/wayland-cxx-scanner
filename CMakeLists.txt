@@ -166,10 +166,8 @@ if (NOT WAYLAND_CXX_SCANNER_TOOL_ONLY)
     # (e.g. agl_shell.hpp). Keep in lock-step with Meson (§8).
     install(FILES
         include/wl/client_helpers.hpp
-        include/wl/csd_cairo.hpp
         include/wl/csd_common.hpp
         include/wl/csd_fallback.hpp
-        include/wl/csd_gtk.hpp
         include/wl/csd_plugin.hpp
         include/wl/data_device.hpp
         include/wl/display.hpp

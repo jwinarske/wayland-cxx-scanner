@@ -9,6 +9,7 @@
 #   2. the installed wayland-cxx.pc,
 #   3. both install the scanner executable (tool-install parity),
 #   4. each ime_backend maps to the SAME WL_IME_BACKEND_* compile define,
+#   4b. each csd plugin choice maps to the SAME USE_*_CSD compile define,
 #   5. every protocol header both builds generate is generated with the SAME
 #      scanner flags.
 #
@@ -80,6 +81,56 @@ for bk in none text-input-v1 text-input-v3 input-method-v1 input-method-v2 virtu
     [ -n "$mdef" ] || fail "could not extract Meson IME define for $bk"
     [ "$cdef" = "$mdef" ] || fail "ime_backend=$bk → Meson=$mdef CMake=$cdef"
     echo "OK: ime_backend=$bk → $cdef (both)"
+done
+
+# ── 4b. CSD plugin parity across every plugin choice ─────────────────────────
+# Both builds select the xdg-csd decoration plugin by compile define, and the
+# define decides which plugin is linked. The default is 'none', so every plugin
+# has to be pinned explicitly here or none of them would be configured by either
+# build, in this gate or in CI.
+#
+# 'ssd' is the one identified by the ABSENCE of a define, so its expected value
+# is empty: it compiles no plugin at all. Every other choice names itself,
+# fallback included -- otherwise 'ssd' and 'fallback' would be indistinguishable
+# to the example. 'auto' additionally carries CSD_PREFER_SSD, and which plugin
+# it resolves to depends on what is installed, so it is checked for parity
+# between the two builds rather than against a fixed value.
+for pl in gtk cairo fallback ssd auto; do
+    case "$pl" in
+        gtk)      want=USE_GTK_CSD ;;
+        cairo)    want=USE_CAIRO_CSD ;;
+        fallback) want=USE_FALLBACK_CSD ;;
+        ssd)      want= ;;
+        auto)     want=@parity-only@ ;;
+    esac
+
+    # CMake needs to be asked for compile_commands.json; Meson always writes it.
+    # grep matching nothing is the expected result for 'ssd', so neither
+    # extraction may trip pipefail.
+    cmake -S "$ROOT" -B "$WORK/csdc" -G Ninja \
+        -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DWAYLAND_CXX_CSD="$pl" >/dev/null 2>&1 \
+        || fail "CMake configure failed for csd=$pl"
+    test -e "$WORK/csdc/compile_commands.json" \
+        || fail "CMake wrote no compile_commands.json for csd=$pl"
+    cdef="$(grep -ohE 'USE_(GTK|CAIRO|FALLBACK)_CSD|CSD_PREFER_SSD' "$WORK/csdc/compile_commands.json" | sort -u | tr '\n' ',' || true)"
+    rm -rf "$WORK/csdc"
+
+    meson setup "$WORK/csdm" "$ROOT" -Dcsd="$pl" -Dtests=false -Dexamples=true >/dev/null 2>&1 \
+        || fail "Meson configure failed for csd=$pl"
+    mdef="$(grep -ohE 'USE_(GTK|CAIRO|FALLBACK)_CSD|CSD_PREFER_SSD' "$WORK/csdm/compile_commands.json" | sort -u | tr '\n' ',' || true)"
+    rm -rf "$WORK/csdm"
+
+    if [ "$want" = "@parity-only@" ]; then
+        [ "$cdef" = "$mdef" ] || fail "csd=$pl → Meson '$mdef' vs CMake '$cdef'"
+        echo "OK: csd=$pl → ${cdef:-(no defines)} (both agree)"
+    else
+        [ -z "$want" ] || want="$want,"
+        [ "$cdef" = "$want" ] || fail "csd=$pl → CMake defines '$cdef', expected '$want'"
+        [ "$mdef" = "$want" ] || fail "csd=$pl → Meson defines '$mdef', expected '$want'"
+        echo "OK: csd=$pl → ${want:-(no defines; no plugin compiled)} (both)"
+    fi
 done
 
 # ── 5. Scanner invocation parity ─────────────────────────────────────────────

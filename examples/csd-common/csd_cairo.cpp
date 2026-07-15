@@ -16,12 +16,11 @@
 //             cppcoreguidelines-pro-bounds-pointer-arithmetic,
 //             cppcoreguidelines-avoid-non-const-global-variables)
 
-#include <wl/csd_cairo.hpp>
+#include "csd_cairo.hpp"
 #include <wl/csd_common.hpp>
+#include <wl/scale_policy.hpp>
 
 #include <algorithm>
-#include <cmath>
-#include <cstring>
 #include <string>
 
 #include <cairo/cairo.h>
@@ -35,8 +34,8 @@ namespace wl::csd {
 
 struct CairoCsdPlugin::Impl {
   std::string title;
-  bool focused = true;
-  bool maximized = false;
+  InputState state;
+  int scale_120 = ScalePolicy::kUnityScale120;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -50,68 +49,20 @@ CairoCsdPlugin::~CairoCsdPlugin() = default;
 CairoCsdPlugin::CairoCsdPlugin(CairoCsdPlugin&&) noexcept = default;
 CairoCsdPlugin& CairoCsdPlugin::operator=(CairoCsdPlugin&&) noexcept = default;
 
-int CairoCsdPlugin::BorderWidth() const noexcept {
-  return 1;
-}
-
-int CairoCsdPlugin::TitleBarHeight() const noexcept {
-  return kTitleHeight;
+Margins CairoCsdPlugin::DecorationMargins() const {
+  return {kBorderWidth, kBorderWidth, kTitleHeight, kBorderWidth};
 }
 
 void CairoCsdPlugin::SetTitle(std::string_view title) {
   impl_->title = title;
 }
 
-void CairoCsdPlugin::SetState(bool focused, bool maximized) {
-  impl_->focused = focused;
-  impl_->maximized = maximized;
+void CairoCsdPlugin::SetInputState(const InputState& state) {
+  impl_->state = state;
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Pixel helpers
-// ══════════════════════════════════════════════════════════════════════════════
-
-static void FillRect(uint32_t* buf,
-                     int buf_w,
-                     int x,
-                     int y,
-                     int w,
-                     int h,
-                     uint32_t color) noexcept {
-  for (int row = y; row < y + h; ++row)
-    for (int col = x; col < x + w; ++col)
-      buf[row * buf_w + col] = color;
-}
-
-static void PaintContent(uint32_t* pixels,
-                         int width,
-                         int height,
-                         int stride,
-                         uint32_t time) noexcept {
-  const int halfh = height / 2;
-  const int halfw = width / 2;
-  int outer_r = (halfw < halfh ? halfw : halfh) - 8;
-  const int inner_r = outer_r - 32;
-  outer_r *= outer_r;
-  const int inner_r2 = inner_r * inner_r;
-
-  for (int y = 0; y < height; ++y) {
-    const int y2 = (y - halfh) * (y - halfh);
-    for (int x = 0; x < width; ++x) {
-      uint32_t v;
-      const int r2 = (x - halfw) * (x - halfw) + y2;
-      if (r2 < inner_r2)
-        v = (static_cast<uint32_t>(r2 / 32) + time / 64) * 0x0080401u;
-      else if (r2 < outer_r)
-        v = (static_cast<uint32_t>(y) + time / 32) * 0x0080401u;
-      else
-        v = (static_cast<uint32_t>(x) + time / 16) * 0x0080401u;
-      v &= 0x00FFFFFFu;
-      if (std::abs(x - y) > 6 && std::abs(x + y - height) > 6)
-        v |= 0xFF000000u;
-      pixels[y * stride + x] = v;
-    }
-  }
+void CairoCsdPlugin::SetScale(int scale_120) {
+  impl_->scale_120 = scale_120;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -188,14 +139,19 @@ static void DrawMinimizeSymbol(cairo_t* cr,
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Title text rendering (Pango + Cairo → XRGB8888)
+// Title text rendering (Pango + Cairo → ARGB8888)
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Render title text using Pango into the XRGB8888 buffer with alpha
+/// Render title text using Pango into the ARGB8888 buffer with alpha
 /// compositing.  The text is centered horizontally and vertically within
 /// the given rectangle.
-static void DrawTitleText(uint32_t* buf,
-                          int buf_w,
+/// Render the title with Pango straight onto @p cr, centered in the given
+/// rectangle.
+///
+/// Drawn through the caller's context rather than blitted through a scratch
+/// buffer: the context carries the device scale, so the glyphs are rasterized
+/// at the panel's resolution instead of at logical size and stretched.
+static void DrawTitleText(cairo_t* cr,
                           int x,
                           int y,
                           int max_w,
@@ -205,10 +161,9 @@ static void DrawTitleText(uint32_t* buf,
   if (title.empty() || max_w <= 0 || max_h <= 0)
     return;
 
-  // Create an ARGB32 surface for Pango rendering.
-  cairo_surface_t* surface =
-      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, max_w, max_h);
-  cairo_t* cr = cairo_create(surface);
+  cairo_save(cr);
+  cairo_rectangle(cr, x, y, max_w, max_h);
+  cairo_clip(cr);
 
   // Text color: light when focused, muted when unfocused.
   const uint32_t text_col =
@@ -216,7 +171,6 @@ static void DrawTitleText(uint32_t* buf,
   const auto [r, g, b, a] = common::Rgba32ToComponents(text_col);
   cairo_set_source_rgb(cr, r, g, b);
 
-  // Layout with Pango.
   PangoLayout* layout = pango_cairo_create_layout(cr);
   pango_layout_set_text(layout, title.c_str(), -1);
 
@@ -229,120 +183,100 @@ static void DrawTitleText(uint32_t* buf,
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
   pango_layout_set_alignment(layout, PANGO_ALIGN_CENTER);
 
-  // Center vertically.
   int text_w = 0;
   int text_h = 0;
   pango_layout_get_pixel_size(layout, &text_w, &text_h);
-  const int offset_y = std::max(0, (max_h - text_h) / 2);
-  cairo_move_to(cr, 0, offset_y);
+  cairo_move_to(cr, x, y + std::max(0, (max_h - text_h) / 2));
   pango_cairo_show_layout(cr, layout);
 
   g_object_unref(layout);
-  cairo_destroy(cr);
-
-  // Blit the ARGB32 surface into the XRGB8888 buffer.
-  cairo_surface_flush(surface);
-  const auto* src =
-      reinterpret_cast<const uint32_t*>(cairo_image_surface_get_data(surface));
-  const int src_stride = cairo_image_surface_get_stride(surface) / 4;
-
-  for (int row = 0; row < max_h; ++row) {
-    for (int col = 0; col < max_w; ++col) {
-      const uint32_t pixel = src[row * src_stride + col];
-      const uint32_t alpha = (pixel >> 24u) & 0xFFu;
-      if (alpha > 0) {
-        // Alpha-over compositing — Cairo ARGB32 uses premultiplied alpha,
-        // so the source RGB channels are already multiplied by alpha.
-        const uint32_t dst = buf[(y + row) * buf_w + (x + col)];
-        const uint32_t inv_alpha = 255u - alpha;
-        const uint32_t out_r =
-            std::min(255u, ((pixel >> 16u) & 0xFFu) +
-                               ((dst >> 16u) & 0xFFu) * inv_alpha / 255u);
-        const uint32_t out_g =
-            std::min(255u, ((pixel >> 8u) & 0xFFu) +
-                               ((dst >> 8u) & 0xFFu) * inv_alpha / 255u);
-        const uint32_t out_b =
-            std::min(255u, (pixel & 0xFFu) + (dst & 0xFFu) * inv_alpha / 255u);
-        buf[(y + row) * buf_w + (x + col)] =
-            0xFF000000u | (out_r << 16u) | (out_g << 8u) | out_b;
-      }
-    }
-  }
-
-  cairo_surface_destroy(surface);
+  cairo_restore(cr);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // RenderFrame
 // ══════════════════════════════════════════════════════════════════════════════
 
-void CairoCsdPlugin::RenderFrame(uint32_t* buffer,
-                                 int surface_w,
-                                 int surface_h,
-                                 int content_w,
-                                 int content_h,
-                                 uint32_t time) {
-  constexpr int bw = 1;  // BorderWidth()
+void CairoCsdPlugin::RenderDecoration(uint32_t* buffer,
+                                      int stride_px,
+                                      int surface_w,
+                                      int surface_h,
+                                      int content_w,
+                                      int /*content_h*/) {
+  // Drawn entirely through Cairo in logical units, with the device scale
+  // turning them into the panel's physical pixels. That keeps the line art and
+  // the title text at the panel's real resolution instead of drawn small and
+  // stretched, and it means none of the geometry below has to know the scale.
+  const int phys_w = ScalePolicy::ScaledDim(surface_w, impl_->scale_120);
+  const int phys_h = ScalePolicy::ScaledDim(surface_h, impl_->scale_120);
+  cairo_surface_t* surf = cairo_image_surface_create_for_data(
+      reinterpret_cast<unsigned char*>(buffer), CAIRO_FORMAT_ARGB32, phys_w,
+      phys_h, stride_px * 4);
+  if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+    cairo_surface_destroy(surf);
+    return;
+  }
+  const double scale = static_cast<double>(impl_->scale_120) /
+                       static_cast<double>(ScalePolicy::kUnityScale120);
+  cairo_surface_set_device_scale(surf, scale, scale);
 
-  // Fill entire surface with border color (thin black outline).
+  cairo_t* cr = cairo_create(surf);
+  constexpr int bw = kBorderWidth;
+
+  auto fill = [&](double x, double y, double w, double h, uint32_t color) {
+    common::CairoSetRgba32(cr, color);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_fill(cr);
+  };
+
+  // Borders — the four bands around the content rect (thin black outline).
+  // The content area is left untouched for the application to paint.
   constexpr uint32_t kBorderColor = 0xFF000000;
-  FillRect(buffer, surface_w, 0, 0, surface_w, surface_h, kBorderColor);
+  fill(0, 0, surface_w, kTitleHeight, kBorderColor);
+  fill(0, surface_h - bw, surface_w, bw, kBorderColor);
+  fill(0, kTitleHeight, bw, surface_h - kTitleHeight - bw, kBorderColor);
+  fill(surface_w - bw, kTitleHeight, bw, surface_h - kTitleHeight - bw,
+       kBorderColor);
 
   // Title bar background.
-  const uint32_t tb_color = impl_->focused ? kColTitle : kColTitleInact;
-  FillRect(buffer, surface_w, bw, bw, content_w, kTitleHeight - bw, tb_color);
+  const uint32_t tb_color = impl_->state.focused ? kColTitle : kColTitleInact;
+  fill(bw, bw, content_w, kTitleHeight - bw, tb_color);
 
   // ── Button backgrounds (right-aligned in title bar) ────────────────────
   const int btn_y = bw;
   const int btn_h = kTitleHeight - bw;
 
-  int close_x = bw + content_w - kButtonWidth;
-  FillRect(buffer, surface_w, close_x, btn_y, kButtonWidth, btn_h,
-           kColButtonClose);
-
-  int max_x = close_x - kButtonWidth;
-  FillRect(buffer, surface_w, max_x, btn_y, kButtonWidth, btn_h, kColButtonMax);
-
-  int min_x = max_x - kButtonWidth;
-  FillRect(buffer, surface_w, min_x, btn_y, kButtonWidth, btn_h, kColButtonMin);
+  const int close_x = bw + content_w - kButtonWidth;
+  fill(close_x, btn_y, kButtonWidth, btn_h, kColButtonClose);
+  const int max_x = close_x - kButtonWidth;
+  fill(max_x, btn_y, kButtonWidth, btn_h, kColButtonMax);
+  const int min_x = max_x - kButtonWidth;
+  fill(min_x, btn_y, kButtonWidth, btn_h, kColButtonMin);
 
   // ── Button symbols (Cairo line art) ────────────────────────────────────
-  {
-    cairo_surface_t* surf = cairo_image_surface_create_for_data(
-        reinterpret_cast<unsigned char*>(buffer), CAIRO_FORMAT_RGB24, surface_w,
-        surface_h, surface_w * 4);
-    cairo_t* cr = cairo_create(surf);
+  const uint32_t sym_col = impl_->state.focused ? kColSym : kColSymInact;
+  const int sym_ox = (kButtonWidth - kSymDim) / 2;
+  const int sym_oy = (btn_h - kSymDim) / 2;
 
-    const uint32_t sym_col = impl_->focused ? kColSym : kColSymInact;
-    const int sym_ox = (kButtonWidth - kSymDim) / 2;
-    const int sym_oy = (btn_h - kSymDim) / 2;
-
-    DrawCloseSymbol(cr, static_cast<double>(close_x + sym_ox),
-                    static_cast<double>(btn_y + sym_oy), kSymDim, sym_col);
-    DrawMaximizeSymbol(cr, static_cast<double>(max_x + sym_ox),
-                       static_cast<double>(btn_y + sym_oy), kSymDim, sym_col,
-                       impl_->maximized);
-    DrawMinimizeSymbol(cr, static_cast<double>(min_x + sym_ox),
-                       static_cast<double>(btn_y + sym_oy), kSymDim, sym_col);
-
-    cairo_destroy(cr);
-    cairo_surface_destroy(surf);
-  }
+  DrawCloseSymbol(cr, static_cast<double>(close_x + sym_ox),
+                  static_cast<double>(btn_y + sym_oy), kSymDim, sym_col);
+  DrawMaximizeSymbol(cr, static_cast<double>(max_x + sym_ox),
+                     static_cast<double>(btn_y + sym_oy), kSymDim, sym_col,
+                     impl_->state.maximized);
+  DrawMinimizeSymbol(cr, static_cast<double>(min_x + sym_ox),
+                     static_cast<double>(btn_y + sym_oy), kSymDim, sym_col);
 
   // ── Title text (Pango, centered) ────────────────────────────────────────
   constexpr int kTextPad = 8;
-  const int text_x = bw + kTextPad;
-  const int text_y = bw;
   const int text_max_w = content_w - 3 * kButtonWidth - 2 * kTextPad;
-  const int text_max_h = kTitleHeight - bw;
   if (text_max_w > 0) {
-    DrawTitleText(buffer, surface_w, text_x, text_y, text_max_w, text_max_h,
-                  impl_->title, impl_->focused);
+    DrawTitleText(cr, bw + kTextPad, bw, text_max_w, kTitleHeight - bw,
+                  impl_->title, impl_->state.focused);
   }
 
-  // ── Content area — animated ring pattern ───────────────────────────────
-  uint32_t* content_start = buffer + kTitleHeight * surface_w + bw;
-  PaintContent(content_start, content_w, content_h, surface_w, time);
+  cairo_destroy(cr);
+  cairo_surface_flush(surf);
+  cairo_surface_destroy(surf);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
