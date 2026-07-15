@@ -161,12 +161,34 @@ class CsdPlugin {
 
   // ── Decoration metrics ──────────────────────────────────────────────────
 
-  /// Decoration thickness on each edge of the content area.
+  /// Total decoration thickness on each edge of the content area — every
+  /// pixel of surface the plugin needs, visible or not.
   ///
   /// Not `noexcept` and not cached by the caller: a themed plugin measures
   /// this from its theme, and the answer changes when the theme does.  Query
   /// it per redraw rather than storing it.
   [[nodiscard]] virtual Margins DecorationMargins() const = 0;
+
+  /// The part of DecorationMargins() that is not the window.
+  ///
+  /// A drop shadow is drawn outside the window's visible bounds, and is
+  /// grabbable but not part of the window: it must be excluded from
+  /// xdg_surface.set_window_geometry, or the compositor will align and
+  /// constrain the window as though the shadow were part of it.
+  ///
+  /// Must not exceed DecorationMargins() on any edge.  Zero means every pixel
+  /// of the decoration is visible window.
+  [[nodiscard]] virtual Margins ShadowMargins() const { return {}; }
+
+  /// The decoration that is part of the window: DecorationMargins() minus
+  /// ShadowMargins().  This is what a configure's size has to be read against,
+  /// because the compositor sizes the window geometry, not the surface.
+  [[nodiscard]] Margins VisibleMargins() const {
+    const Margins m = DecorationMargins();
+    const Margins s = ShadowMargins();
+    return {m.left - s.left, m.right - s.right, m.top - s.top,
+            m.bottom - s.bottom};
+  }
 
   /// Total surface width required for a content area of @p content_w.
   [[nodiscard]] int SurfaceWidth(int content_w) const {

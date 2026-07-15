@@ -573,7 +573,7 @@ class App {
 
   // Last window geometry submitted, likewise. Both are double-buffered state
   // that only needs re-declaring when it actually changes.
-  int geometry_w_ = -1, geometry_h_ = -1;
+  int geometry_x_ = -1, geometry_y_ = -1, geometry_w_ = -1, geometry_h_ = -1;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -842,9 +842,12 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) {
     // get the content area.  If the two ever disagree the window resizes itself
     // by the difference on every configure.
     if (use_csd_ && csd_plugin_) {
-      const wl::csd::Margins m = csd_plugin_->DecorationMargins();
-      content_w_ = width - m.left - m.right;
-      content_h_ = height - m.top - m.bottom;
+      // Only the decoration that is part of the window: a shadow lies outside
+      // the window geometry the compositor just sized, so subtracting it here
+      // would shrink the content by the shadow on every configure.
+      const wl::csd::Margins v = csd_plugin_->VisibleMargins();
+      content_w_ = width - v.left - v.right;
+      content_h_ = height - v.top - v.bottom;
     } else {
       content_w_ = width;
       content_h_ = height;
@@ -1176,35 +1179,37 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
     paint_content({pixels, npixels}, m.left, m.top, content_w_, content_h_, sw,
                   time_ms);
 
-    // Window geometry is the window's visible bounds. Every pixel of this
-    // surface is visible decoration — the title bar and the flat resize
-    // borders — so the geometry is the whole surface.
+    // Window geometry is the window's visible bounds: the surface inset by
+    // whatever part of the decoration is not window, which is the shadow.
     //
-    // It must agree with how OnToplevelConfigure reads the size back: the
-    // compositor's configure carries the size of *this* rectangle, so
-    // declaring a content-sized geometry while subtracting the decoration from
-    // the configure would shrink the window by the margins on every configure,
-    // and a drag-resize sends them continuously.
-    //
-    // Once the borders become an invisible shadow they must come back out of
-    // this rectangle, and the configure math has to move with it.
+    // It must stay the exact inverse of how OnToplevelConfigure reads the size
+    // back — the compositor's configure carries the size of *this* rectangle.
+    // If the two disagree the window resizes itself by the difference on every
+    // configure, and a drag-resize sends them continuously.
     //
     // Sent only when it changes. It is double-buffered state, so re-sending it
     // on every frame is legal but means every commit re-declares the geometry —
     // and a compositor is entitled to treat that as the client having a say
     // about its size mid-negotiation.
-    if (sw != geometry_w_ || sh != geometry_h_) {
-      xdg_surface_.Get()->SetWindowGeometry(0, 0, sw, sh);
-      geometry_w_ = sw;
-      geometry_h_ = sh;
+    const wl::csd::Margins sm = csd_plugin_->ShadowMargins();
+    const int gx = sm.left;
+    const int gy = sm.top;
+    const int gw = sw - sm.left - sm.right;
+    const int gh = sh - sm.top - sm.bottom;
+    if (gx != geometry_x_ || gy != geometry_y_ || gw != geometry_w_ ||
+        gh != geometry_h_) {
+      xdg_surface_.Get()->SetWindowGeometry(gx, gy, gw, gh);
+      geometry_x_ = gx;
+      geometry_y_ = gy;
+      geometry_w_ = gw;
+      geometry_h_ = gh;
     }
 
-    // Everything below the title bar is opaque, but the title bar itself is
-    // not: a themed decoration rounds its top corners, leaving those pixels
-    // transparent.  Claiming they are opaque would stop the compositor
-    // blending them and the rounding would come out as black corners, so the
-    // region stops below the title bar and that band is left to blend.
-    UpdateOpaqueRegion(0, m.top, sw, sh - m.top);
+    // Only the content rect is guaranteed opaque. The title bar rounds its top
+    // corners and a shadow is translucent by definition, so both are left to
+    // blend: claiming they are opaque would stop the compositor blending them
+    // and the rounding would come out as black corners.
+    UpdateOpaqueRegion(m.left, m.top, content_w_, content_h_);
   } else {
     paint_content({pixels, npixels}, 0, 0, sw, sh, sw, time_ms);
     UpdateOpaqueRegion(0, 0, sw, sh);

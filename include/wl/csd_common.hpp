@@ -192,8 +192,12 @@ inline void RenderShadow(cairo_t* cr,
   const int inner_w = tw - 2 * margin;
   const int inner_h = th - top_margin - margin;
 
-  // Helper: paint a (possibly stretched) region of the tile as both
-  // source and mask so the alpha channel composites correctly.
+  // Helper: paint a (possibly stretched) region of the tile.
+  //
+  // Painted, not masked with itself. The tile already carries the shadow's
+  // alpha, so using it as its own mask squares that alpha — and a blurred
+  // falloff of ~0.13 becomes ~0.02, which is to say invisible. Painting it
+  // composites the alpha the tile actually has.
   auto paint_region = [&](double dst_x, double dst_y, double dst_w,
                           double dst_h, double src_x, double src_y,
                           double src_w, double src_h) {
@@ -211,9 +215,12 @@ inline void RenderShadow(cairo_t* cr,
     cairo_matrix_init(&mat, sx, 0, 0, sy, src_x - sx * dst_x,
                       src_y - sy * dst_y);
     cairo_pattern_set_matrix(pat, &mat);
+    // The edges stretch a one-pixel-wide slice of the tile; without PAD the
+    // sampler reaches past it and fades the shadow out along its own length.
+    cairo_pattern_set_extend(pat, CAIRO_EXTEND_PAD);
 
     cairo_set_source(cr, pat);
-    cairo_mask(cr, pat);
+    cairo_paint(cr);
     cairo_pattern_destroy(pat);
     cairo_restore(cr);
   };

@@ -34,9 +34,11 @@ struct GtkCsdPlugin::Impl {
   std::unique_ptr<detail::GtkThemeBackend> backend;
   InputState state;
 
-  // Cached header height, refreshed per redraw.  DecorationMargins() is
-  // const, and the geometry must not silently disagree with what was drawn.
+  // Cached header height and shadow margin, refreshed per redraw.  Both are
+  // the theme's answers and change with it; DecorationMargins() is const, and
+  // the geometry must not silently disagree with what was drawn.
   int header_height = 0;
+  Margins shadow;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -64,13 +66,29 @@ std::unique_ptr<GtkCsdPlugin> GtkCsdPlugin::TryCreate() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 Margins GtkCsdPlugin::DecorationMargins() const {
-  // Height comes from the theme, so it is re-measured rather than fixed.  The
-  // side and bottom borders stay flat for now; they become the shadow once the
-  // decoration grows one.
-  if (impl_->backend)
+  // Both numbers are the theme's, so both are re-measured rather than fixed.
+  // The shadow surrounds the whole window — title bar included — so it adds its
+  // margin to every edge, and to the top on top of the title bar.
+  if (impl_->backend) {
     impl_->header_height = impl_->backend->HeaderHeight();
-  return {kBorderWidth, kBorderWidth, std::max(impl_->header_height, 1),
-          kBorderWidth};
+    impl_->shadow = impl_->backend->ShadowMargin();
+  }
+  const Margins& sm = impl_->shadow;
+  return {sm.left, sm.right, sm.top + std::max(impl_->header_height, 1),
+          sm.bottom};
+}
+
+Margins GtkCsdPlugin::ShadowMargins() const {
+  // The shadow is drawn outside the window and is grabbable, but it is not the
+  // window: it must stay out of the window geometry, or the compositor aligns
+  // and constrains the window as though the shadow were part of it.
+  //
+  // Zero when the theme drops the shadow, which it does for a maximized window
+  // — and then the window geometry is the whole surface, with nothing to
+  // subtract.
+  if (impl_->backend)
+    impl_->shadow = impl_->backend->ShadowMargin();
+  return impl_->shadow;
 }
 
 void GtkCsdPlugin::SetTitle(std::string_view title) {
@@ -80,10 +98,21 @@ void GtkCsdPlugin::SetTitle(std::string_view title) {
 
 void GtkCsdPlugin::SetInputState(const InputState& state) {
   impl_->state = state;
-  // The header spans the full surface width and starts at y=0, so surface-local
-  // pointer coordinates are already header-local.
-  if (impl_->backend)
-    impl_->backend->SetInputState(state);
+  if (!impl_->backend)
+    return;
+  // The backend needs the raw state first: the shadow margin it reports
+  // depends on whether the window is maximized.
+  impl_->backend->SetInputState(state);
+  impl_->shadow = impl_->backend->ShadowMargin();
+
+  // The header sits inside the shadow margin, so the pointer has to be moved
+  // into header-local coordinates before the theme is asked about it.
+  InputState local = state;
+  if (state.pointer_x >= 0 && state.pointer_y >= 0) {
+    local.pointer_x = state.pointer_x - impl_->shadow.left;
+    local.pointer_y = state.pointer_y - impl_->shadow.top;
+  }
+  impl_->backend->SetInputState(local);
 }
 
 int GtkCsdPlugin::DoubleClickTimeMs() const {
@@ -101,66 +130,60 @@ void GtkCsdPlugin::Dispatch() {
 
 // ── Rendering ───────────────────────────────────────────────────────────────
 
-namespace {
-
-void FillRect(uint32_t* buf,
-              int buf_w,
-              int x,
-              int y,
-              int w,
-              int h,
-              uint32_t color) noexcept {
-  for (int row = y; row < y + h; ++row)
-    for (int col = x; col < x + w; ++col)
-      buf[row * buf_w + col] = color;
-}
-
-}  // namespace
-
 void GtkCsdPlugin::RenderDecoration(uint32_t* buffer,
                                     int surface_w,
                                     int surface_h,
                                     int content_w,
-                                    int /*content_h*/) {
+                                    int content_h) {
   const Margins m = DecorationMargins();
+  const Margins& sm = impl_->shadow;
 
-  // Borders — the bands left, right and below the content rect.  The content
-  // area itself is the application's to paint.
-  FillRect(buffer, surface_w, 0, surface_h - m.bottom, surface_w, m.bottom,
-           kBorderColor);
-  FillRect(buffer, surface_w, 0, m.top, m.left, surface_h - m.top - m.bottom,
-           kBorderColor);
-  FillRect(buffer, surface_w, surface_w - m.right, m.top, m.right,
-           surface_h - m.top - m.bottom, kBorderColor);
+  // The window — title bar plus content — sits inside the shadow margin.
+  const int win_x = sm.left;
+  const int win_y = sm.top;
+  const int win_w = content_w;
+  const int win_h = (m.top - sm.top) + content_h;
 
-  if (!impl_->backend) {
-    FillRect(buffer, surface_w, 0, 0, surface_w, m.top, kBorderColor);
-    return;
-  }
-
-  // Hand the backend an ARGB32 surface over the title-bar band and let it draw
-  // the header there.  cairo_image_surface_create_for_data writes straight into
-  // the wl_shm buffer, so there is no intermediate copy -- the band is the full
-  // surface width at y=0, so it starts at a row boundary.
+  // One Cairo pass over the whole surface: the shadow is translucent and the
+  // theme rounds the title bar's corners, so this composites rather than fills.
+  // Writing straight into the wl_shm buffer keeps it to a single pass.
   cairo_surface_t* surface = cairo_image_surface_create_for_data(
       reinterpret_cast<unsigned char*>(buffer), CAIRO_FORMAT_ARGB32, surface_w,
-      m.top, surface_w * 4);
+      surface_h, surface_w * 4);
   if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
     cairo_surface_destroy(surface);
-    FillRect(buffer, surface_w, 0, 0, surface_w, m.top, kBorderColor);
     return;
   }
 
-  // Clear to transparent first.  The theme rounds the header's top corners and
-  // leaves those pixels alone, and the buffer is recycled between frames, so
-  // whatever was there before would otherwise show through the curve.
-  FillRect(buffer, surface_w, 0, 0, surface_w, m.top, 0x00000000u);
+  // Clear the decoration to transparent, leaving the content rect alone: it is
+  // the application's, painted after this returns. The buffer is recycled, so
+  // anything left behind shows through the shadow and the rounded corners.
+  cairo_t* cr = cairo_create(surface);
+  cairo_save(cr);
+  cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.0);
+  cairo_rectangle(cr, 0, 0, surface_w, surface_h);
+  cairo_rectangle(cr, m.left, m.top, content_w, content_h);
+  cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);  // everything but content
+  cairo_fill(cr);
+  cairo_restore(cr);
+  cairo_destroy(cr);
 
-  // The header spans the full surface width rather than being inset by the
-  // border, so the corners the theme rounds are the window's own corners.  A
-  // flat border strip beside them would frame the rounding in a square edge and
-  // defeat the point.
-  impl_->backend->DrawHeader(surface, surface_w);
+  if (impl_->backend == nullptr)
+    return;
+
+  // The theme draws the decoration — drop shadow, corner radius, hairline —
+  // for the whole window rect. Nothing here decides what a shadow looks like,
+  // so it follows focus, and vanishes when maximized, on its own.
+  impl_->backend->DrawDecoration(surface, win_x, win_y, win_w, win_h);
+
+  // Then the header, over the decoration's rounded body, in its own origin.
+  cairo_surface_t* header = cairo_surface_create_for_rectangle(
+      surface, win_x, win_y, win_w, m.top - sm.top);
+  if (cairo_surface_status(header) == CAIRO_STATUS_SUCCESS)
+    impl_->backend->DrawHeader(header, win_w);
+  cairo_surface_destroy(header);
+
   cairo_surface_flush(surface);
   cairo_surface_destroy(surface);
 }
@@ -171,38 +194,55 @@ HitZone GtkCsdPlugin::HitTest(int x,
                               int y,
                               int surface_w,
                               int surface_h,
-                              int /*content_w*/,
+                              int content_w,
                               int /*content_h*/) const noexcept {
   if (x < 0 || y < 0 || x >= surface_w || y >= surface_h)
     return HitZone::None;
 
-  const int top = std::max(impl_->header_height, 1);
+  const int header_h = std::max(impl_->header_height, 1);
+  const Margins& sm = impl_->shadow;
 
-  // Resize zones: corners first, then edges.
-  if (x < kBorderWidth && y < kBorderWidth)
-    return HitZone::ResizeTopLeft;
-  if (x >= surface_w - kBorderWidth && y < kBorderWidth)
-    return HitZone::ResizeTopRight;
-  if (x < kBorderWidth && y >= surface_h - kBorderWidth)
-    return HitZone::ResizeBottomLeft;
-  if (x >= surface_w - kBorderWidth && y >= surface_h - kBorderWidth)
-    return HitZone::ResizeBottomRight;
-  if (y < kBorderWidth)
-    return HitZone::ResizeTop;
-  if (y >= surface_h - kBorderWidth)
-    return HitZone::ResizeBottom;
-  if (x < kBorderWidth)
-    return HitZone::ResizeLeft;
-  if (x >= surface_w - kBorderWidth)
+  // The shadow margin is the resize grab area: invisible, but the only place a
+  // pointer can reach an edge, since the window itself is the title bar and the
+  // application's content. A maximized window has no shadow and so no grab
+  // margin — which is right, there is nothing to resize it to.
+  const bool left = x < sm.left;
+  const bool right = x >= surface_w - sm.right;
+  const bool top = y < sm.top;
+  const bool bottom = y >= surface_h - sm.bottom;
+
+  if (left || right || top || bottom) {
+    // Corners win over edges, and reach further along each edge than the
+    // margin is thick — a 24px diagonal target is hard to hit otherwise.
+    const bool near_l = x < kCornerSize;
+    const bool near_r = x >= surface_w - kCornerSize;
+    const bool near_t = y < kCornerSize;
+    const bool near_b = y >= surface_h - kCornerSize;
+
+    if (near_t && near_l)
+      return HitZone::ResizeTopLeft;
+    if (near_t && near_r)
+      return HitZone::ResizeTopRight;
+    if (near_b && near_l)
+      return HitZone::ResizeBottomLeft;
+    if (near_b && near_r)
+      return HitZone::ResizeBottomRight;
+    if (top)
+      return HitZone::ResizeTop;
+    if (bottom)
+      return HitZone::ResizeBottom;
+    if (left)
+      return HitZone::ResizeLeft;
     return HitZone::ResizeRight;
+  }
 
   // Title bar: ask the backend, so the answer comes from the same widget
   // geometry that was drawn rather than from a second guess at where the
   // buttons are.
-  if (y < top) {
+  if (y < sm.top + header_h) {
     if (!impl_->backend)
       return HitZone::TitleBar;
-    return impl_->backend->HitTestHeader(x, y, surface_w);
+    return impl_->backend->HitTestHeader(x - sm.left, y - sm.top, content_w);
   }
 
   return HitZone::Content;

@@ -57,6 +57,26 @@ class GtkThemeBackend {
   /// the answer changes with the theme, so callers must not cache it.
   [[nodiscard]] virtual int HeaderHeight() = 0;
 
+  /// The margin the theme reserves around the window for its drop shadow.
+  ///
+  /// Asked rather than chosen: the shadow's size, offset, blur and opacity are
+  /// the theme's, and a margin invented here would be the wrong size for it.
+  /// Zero when the window is maximized or fullscreen, where the theme drops
+  /// the shadow entirely.
+  [[nodiscard]] virtual Margins ShadowMargin() = 0;
+
+  /// Draw the window's decoration — drop shadow, rounded corners and the
+  /// hairline border — for a window rectangle of @p width by @p height at
+  /// (@p x, @p y) within @p surface.
+  ///
+  /// The theme draws all of it, so the shadow follows focus and disappears
+  /// when maximized without anything here knowing that it should.
+  virtual void DrawDecoration(cairo_surface_t* surface,
+                              int x,
+                              int y,
+                              int width,
+                              int height) = 0;
+
   /// Lay the header out to @p width and draw it into the top-left of
   /// @p surface, which must be an ARGB32 image surface.
   virtual void DrawHeader(cairo_surface_t* surface, int width) = 0;

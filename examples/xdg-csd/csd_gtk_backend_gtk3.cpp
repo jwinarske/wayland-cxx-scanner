@@ -101,8 +101,43 @@ void FindByName(GtkWidget* widget, void* data) {
 class Gtk3Backend final : public GtkThemeBackend {
  public:
   ~Gtk3Backend() override {
+    if (decoration_ctx_ != nullptr)
+      g_object_unref(decoration_ctx_);
     if (GTK_IS_WIDGET(window_))
       gtk_widget_destroy(window_);  // Destroys the header with it.
+  }
+
+  [[nodiscard]] Margins ShadowMargin() override {
+    // The theme drops the shadow when the window is maximized or fullscreen —
+    // it fills the screen, so it has nothing to cast onto — and GTK zeroes the
+    // margin to match. Reserving it anyway would leave a gap around the window.
+    if (state_.maximized || decoration_ctx_ == nullptr)
+      return {};
+    GtkBorder margin{};
+    gtk_style_context_get_margin(decoration_ctx_, DecorationState(), &margin);
+    return {margin.left, margin.right, margin.top, margin.bottom};
+  }
+
+  void DrawDecoration(cairo_surface_t* surface,
+                      int x,
+                      int y,
+                      int width,
+                      int height) override {
+    if (decoration_ctx_ == nullptr)
+      return;
+    cairo_t* cr = cairo_create(surface);
+    gtk_style_context_save(decoration_ctx_);
+    gtk_style_context_set_state(decoration_ctx_, DecorationState());
+    if (state_.maximized)
+      gtk_style_context_add_class(decoration_ctx_, "maximized");
+    else
+      gtk_style_context_remove_class(decoration_ctx_, "maximized");
+    // Background paints the rounded body; frame paints the outset box-shadow
+    // and the hairline around it.
+    gtk_render_background(decoration_ctx_, cr, x, y, width, height);
+    gtk_render_frame(decoration_ctx_, cr, x, y, width, height);
+    gtk_style_context_restore(decoration_ctx_);
+    cairo_destroy(cr);
   }
 
   [[nodiscard]] bool Init() override {
@@ -132,6 +167,23 @@ class Gtk3Backend final : public GtkThemeBackend {
 
     gtk_window_set_titlebar(GTK_WINDOW(window_), header_);
     gtk_widget_show_all(window_);
+
+    // A style context for the window's `decoration` node, which is where the
+    // theme keeps the drop shadow, the corner radius and the hairline border.
+    // It is built by hand rather than taken from the offscreen window: an
+    // offscreen window is never decorated, so it has no decoration node of its
+    // own to borrow.
+    GtkWidgetPath* path = gtk_widget_path_new();
+    gtk_widget_path_append_type(path, GTK_TYPE_WINDOW);
+    gtk_widget_path_iter_set_object_name(path, -1, "window");
+    gtk_widget_path_iter_add_class(path, -1, "background");
+    gtk_widget_path_iter_add_class(path, -1, "csd");
+    gtk_widget_path_append_type(path, G_TYPE_NONE);
+    gtk_widget_path_iter_set_object_name(path, -1, "decoration");
+    decoration_ctx_ = gtk_style_context_new();
+    gtk_style_context_set_path(decoration_ctx_, path);
+    gtk_style_context_set_screen(decoration_ctx_, gdk_screen_get_default());
+    gtk_widget_path_free(path);
     return true;
   }
 
@@ -224,9 +276,16 @@ class Gtk3Backend final : public GtkThemeBackend {
  private:
   GtkWidget* window_ = nullptr;
   GtkWidget* header_ = nullptr;
+  GtkStyleContext* decoration_ctx_ = nullptr;
   std::string title_;
   InputState state_;
   int laid_out_width_ = -1;
+
+  /// The state the decoration is drawn in.  Backdrop is the whole of it: the
+  /// theme has a separate, weaker shadow for an unfocused window.
+  [[nodiscard]] GtkStateFlags DecorationState() const {
+    return state_.focused ? GTK_STATE_FLAG_NORMAL : GTK_STATE_FLAG_BACKDROP;
+  }
 
   /// Push focus/maximized state into the widget tree so the theme picks the
   /// matching styling itself.

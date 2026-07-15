@@ -51,15 +51,12 @@ namespace wl::csd {
 /// abort the process.
 class GtkCsdPlugin final : public CsdPlugin {
  public:
-  /// Side and bottom border thickness, in pixels.
+  /// How far from a corner a grab counts as a diagonal resize.
   ///
-  /// Unlike the title bar height this is not theme-derived: it is the grabbable
-  /// resize margin the decoration adds around the content, not something GTK
-  /// has an opinion about.
-  static constexpr int kBorderWidth = 4;
-
-  /// Flat color for those borders.
-  static constexpr uint32_t kBorderColor = 0xFF303030;
+  /// The one decoration measurement that is ours: the shadow's size, offset,
+  /// blur and colour all come from the theme, but how big a diagonal resize
+  /// target should be is an input question, not a styling one.
+  static constexpr int kCornerSize = 32;
 
   /// Build the plugin and bring GTK up.
   ///
@@ -77,6 +74,7 @@ class GtkCsdPlugin final : public CsdPlugin {
   // ── CsdPlugin interface ────────────────────────────────────────────────
 
   [[nodiscard]] Margins DecorationMargins() const override;
+  [[nodiscard]] Margins ShadowMargins() const override;
 
   void SetTitle(std::string_view title) override;
   void SetInputState(const InputState& state) override;
