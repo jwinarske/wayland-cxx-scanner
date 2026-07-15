@@ -5,25 +5,25 @@
 //
 // Demonstrates the zxdg_decoration_manager_v1 protocol for negotiating
 // CSD vs SSD with the compositor, and renders client-side decorations
-// (title bar with close/maximize/minimize buttons, resize borders)
-// using a pluggable CSD rendering backend.
+// (title bar, window buttons, resize borders) using a pluggable CSD
+// rendering backend:
+//   • GtkCsdPlugin      — decorations rendered by GTK's own theming (optional)
+//   • CairoCsdPlugin    — Cairo + Pango decorations (optional)
+//   • FallbackCsdPlugin — flat-color SHM decorations (always available)
 //
-// Following the plugin pattern from libdecor
-// (https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/gtk):
-//   • GtkCsdPlugin      — GTK-themed decorations via Cairo/Pango (optional)
-//   • FallbackCsdPlugin  — flat-color SHM decorations (always available)
+// Which one is built and used is a build-time choice: the csd and csd_gtk
+// options (WAYLAND_CXX_CSD / WAYLAND_CXX_CSD_GTK under CMake).  A themed
+// plugin may also decline at run time, in which case the fallback is used.
 //
-// The build system selects the GTK plugin when gtk+-3.0 is available,
-// otherwise falls back to the regular plugin.
-//
-// This example provides equivalent functionality to libdecor's core
-// decoration features:
+// Decoration features:
 //   • Decoration mode negotiation via xdg-decoration-unstable-v1
 //   • Title bar rendering with window control buttons
 //   • Resize borders around the window
 //   • Interactive move (click title bar), resize (click border),
 //     and close (click close button) via pointer events
-//   • Proper xdg_surface.set_window_geometry to exclude decorations
+//   • xdg_surface.set_window_geometry declaring the window's visible bounds,
+//     which here is the whole surface: every pixel of it is visible
+//     decoration.  See OnToplevelConfigure() — the two must agree.
 //
 // Usage:
 //   xdg_csd [-w WIDTH] [-h HEIGHT] [-t TITLE]
@@ -759,8 +759,11 @@ void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
 
 void App::OnToplevelConfigure(int32_t width, int32_t height) {
   if (width > 0 && height > 0) {
-    // The compositor provides the total window size.
-    // In CSD mode, subtract decoration space to get the content area.
+    // width/height are the size of the window geometry rectangle, so this must
+    // stay the exact inverse of the SetWindowGeometry() call in CommitFrame().
+    // That geometry is the whole surface, so the decoration comes off here to
+    // get the content area.  If the two ever disagree the window resizes itself
+    // by the difference on every configure.
     if (use_csd_ && csd_plugin_) {
       const wl::csd::Margins m = csd_plugin_->DecorationMargins();
       content_w_ = width - m.left - m.right;
@@ -970,9 +973,19 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
     paint_content({pixels, npixels}, m.left, m.top, content_w_, content_h_, sw,
                   time_ms);
 
-    // Window geometry excludes the decoration area.
-    xdg_surface_.Get()->SetWindowGeometry(m.left, m.top, content_w_,
-                                          content_h_);
+    // Window geometry is the window's visible bounds. Every pixel of this
+    // surface is visible decoration — the title bar and the flat resize
+    // borders — so the geometry is the whole surface.
+    //
+    // It must agree with how OnToplevelConfigure reads the size back: the
+    // compositor's configure carries the size of *this* rectangle, so
+    // declaring a content-sized geometry while subtracting the decoration from
+    // the configure would shrink the window by the margins on every configure,
+    // and a drag-resize sends them continuously.
+    //
+    // Once the borders become an invisible shadow they must come back out of
+    // this rectangle, and the configure math has to move with it.
+    xdg_surface_.Get()->SetWindowGeometry(0, 0, sw, sh);
 
     // Everything below the title bar is opaque, but the title bar itself is
     // not: a themed decoration rounds its top corners, leaving those pixels
