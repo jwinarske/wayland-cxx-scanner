@@ -47,15 +47,19 @@ owns input. Three touch points:
 1. **Geometry** — forward `xdg_toplevel.configure` sizes with
    `ImGui_ImplWaylandCxx_SetDisplaySize()`, and buffer scale with
    `SetContentScale()` (feeds `DisplayFramebufferScale` and reloads the cursor
-   theme).
+   theme). Scale is the application's to source, since it owns the surface; the
+   demo binds `wp_fractional_scale_v1` + `wp_viewport` and forwards
+   `preferred_scale / 120` — see **Scale** below.
 2. **Key repeat / animated cursors** — two timerfds to add to your poll set.
    `wl::RunEventLoop`'s 5-argument overload handles the keyboard one directly
    (see `main.cpp`).
 3. **`wl_iface()` ownership** — `<wl/seat.hpp>` defines the traits for every
    interface it binds (`wl_seat`, `wl_keyboard`, `wl_pointer`, `wl_touch`); this
-   backend adds `wl_shm`, which it binds itself for the cursor. Don't define
-   `wl_shm` again in application code; the app keeps `wl_compositor`,
-   `wl_surface`, `wl_callback`, and anything else it binds.
+   backend adds what it binds itself: `wl_shm` for the cursor and
+   `wl_data_device_manager` / `wl_data_device` / `wl_data_offer` /
+   `wl_data_source` for the clipboard. Don't define those again in application
+   code; the app keeps `wl_compositor`, `wl_surface`, `wl_callback`, and
+   anything else it binds.
 
 ```cpp
 ImGui::CreateContext();
@@ -67,3 +71,30 @@ ImGui_ImplOpenGL3_NewFrame();
 ImGui_ImplWaylandCxx_NewFrame();   // DisplaySize, DeltaTime, cursor shape
 ImGui::NewFrame();
 ```
+
+## Scale
+
+The demo owns the surface, so it owns scale. It binds `wp_fractional_scale_v1`
+and `wp_viewport` and applies the framework's normative policy
+(`<wl/scale_policy.hpp>`): the buffer is allocated at **physical** pixels, the
+viewport destination is the **logical** size, and ImGui lays out in logical
+units with `DisplayFramebufferScale` carrying the rest.
+
+Two details that are easy to get wrong:
+
+- **The GL viewport comes from `ScalePolicy`, not from
+  `DisplaySize * DisplayFramebufferScale`.** That product truncates where the
+  policy rounds half up, so at a fractional scale the two can disagree by one
+  pixel — leaving a seam along an edge the buffer has but the viewport does not
+  cover. Both sizes must come from the same rounding.
+- **The two protocols are bound as a pair or not at all.** A fractional scale
+  with no viewport to present the physical buffer at the logical size would
+  simply size the window wrong, so a compositor offering only one gets unity.
+
+Without `wp_fractional_scale_v1` the window stays at scale 1 and the compositor
+upscales it. There is no integer fallback: `wl_surface.preferred_buffer_scale`
+needs `wl_compositor` v6, and compositors that lack fractional-scale here also
+advertise v5 — so the fallback the protocol offers is not available on the
+compositors that would need it. Doing it properly means tracking
+`wl_output.scale` across `wl_surface.enter`/`leave`, which no example here
+needs yet.
