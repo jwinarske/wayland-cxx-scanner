@@ -29,6 +29,10 @@
 //      backend; ordinary text is per-keysym via xkb_keysym_to_utf32().
 //  [ ] Platform: Multi-viewport (impossible: Wayland has no global coords).
 //  [ ] Platform: SetMousePos (impossible: Wayland cannot warp the pointer).
+//  [ ] Platform: OS drag-and-drop.  ImGui's drag-and-drop is internal to one
+//      context (BeginDragDropSource / AcceptDragDropPayload) and it exposes no
+//      platform hook for a drag crossing the process boundary, so there is
+//      nothing to wire wl_data_device's drag half to.
 //
 // The backend is self-contained: given a connected wl_display and the app's
 // wl_surface it creates its OWN wl_registry on the same connection and binds
