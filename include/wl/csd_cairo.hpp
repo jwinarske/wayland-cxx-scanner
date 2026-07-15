@@ -47,6 +47,7 @@ namespace wl::csd {
 class CairoCsdPlugin final : public CsdPlugin {
  public:
   static constexpr int kShadowMargin = 24;
+  static constexpr int kBorderWidth = 1;
   static constexpr int kTitleHeight = 24;
   static constexpr int kButtonWidth = 32;
   static constexpr int kSymDim = 14;
@@ -70,18 +71,16 @@ class CairoCsdPlugin final : public CsdPlugin {
 
   // ── CsdPlugin interface ────────────────────────────────────────────────
 
-  [[nodiscard]] int BorderWidth() const noexcept override;
-  [[nodiscard]] int TitleBarHeight() const noexcept override;
+  [[nodiscard]] Margins DecorationMargins() const override;
 
   void SetTitle(std::string_view title) override;
-  void SetState(bool focused, bool maximized) override;
+  void SetInputState(const InputState& state) override;
 
-  void RenderFrame(uint32_t* buffer,
-                   int surface_w,
-                   int surface_h,
-                   int content_w,
-                   int content_h,
-                   uint32_t time) override;
+  void RenderDecoration(uint32_t* buffer,
+                        int surface_w,
+                        int surface_h,
+                        int content_w,
+                        int content_h) override;
 
   [[nodiscard]] HitZone HitTest(int x,
                                 int y,

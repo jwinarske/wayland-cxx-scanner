@@ -18,8 +18,6 @@
 #include <wl/csd_gtk.hpp>
 
 #include <algorithm>
-#include <cmath>
-#include <cstring>
 #include <string>
 
 #include <cairo/cairo.h>
@@ -47,8 +45,7 @@ static uint32_t GdkColorToArgb(const GdkRGBA& c) noexcept {
 
 struct GtkCsdPlugin::Impl {
   std::string title;
-  bool focused = true;
-  bool maximized = false;
+  InputState state;
 
   // Cached theme colors (refreshed on state change).
   uint32_t title_bar_color = 0xFF3C3C3C;
@@ -170,21 +167,24 @@ GtkCsdPlugin::~GtkCsdPlugin() = default;
 GtkCsdPlugin::GtkCsdPlugin(GtkCsdPlugin&&) noexcept = default;
 GtkCsdPlugin& GtkCsdPlugin::operator=(GtkCsdPlugin&&) noexcept = default;
 
-int GtkCsdPlugin::BorderWidth() const noexcept {
-  return kBorderWidth;
-}
-
-int GtkCsdPlugin::TitleBarHeight() const noexcept {
-  return kTitleBarHeight;
+Margins GtkCsdPlugin::DecorationMargins() const {
+  return {kBorderWidth, kBorderWidth, kTitleBarHeight, kBorderWidth};
 }
 
 void GtkCsdPlugin::SetTitle(std::string_view title) {
   impl_->title = title;
 }
 
-void GtkCsdPlugin::SetState(bool focused, bool maximized) {
-  impl_->focused = focused;
-  impl_->maximized = maximized;
+void GtkCsdPlugin::SetInputState(const InputState& state) {
+  impl_->state = state;
+}
+
+void GtkCsdPlugin::Dispatch() {
+  // Drain GLib without blocking.  GTK's own machinery runs here, so settings
+  // and theme changes are noticed on the next redraw — no GMainLoop, and no
+  // integration of GLib's fds into the caller's poll set.
+  while (g_main_context_iteration(nullptr, FALSE)) {
+  }
 }
 
 // ── Pixel helpers ───────────────────────────────────────────────────────────
@@ -201,38 +201,7 @@ static void FillRect(uint32_t* buf,
       buf[row * buf_w + col] = color;
 }
 
-static void PaintContent(uint32_t* pixels,
-                         int width,
-                         int height,
-                         int stride,
-                         uint32_t time) noexcept {
-  const int halfh = height / 2;
-  const int halfw = width / 2;
-  int outer_r = (halfw < halfh ? halfw : halfh) - 8;
-  const int inner_r = outer_r - 32;
-  outer_r *= outer_r;
-  const int inner_r2 = inner_r * inner_r;
-
-  for (int y = 0; y < height; ++y) {
-    const int y2 = (y - halfh) * (y - halfh);
-    for (int x = 0; x < width; ++x) {
-      uint32_t v;
-      const int r2 = (x - halfw) * (x - halfw) + y2;
-      if (r2 < inner_r2)
-        v = (static_cast<uint32_t>(r2 / 32) + time / 64) * 0x0080401u;
-      else if (r2 < outer_r)
-        v = (static_cast<uint32_t>(y) + time / 32) * 0x0080401u;
-      else
-        v = (static_cast<uint32_t>(x) + time / 16) * 0x0080401u;
-      v &= 0x00FFFFFFu;
-      if (std::abs(x - y) > 6 && std::abs(x + y - height) > 6)
-        v |= 0xFF000000u;
-      pixels[y * stride + x] = v;
-    }
-  }
-}
-
-// ── Render title text using Pango + Cairo → XRGB8888 ────────────────────────
+// ── Render title text using Pango + Cairo → ARGB8888 ────────────────────────
 
 static void RenderTitle(uint32_t* buf,
                         int buf_w,
@@ -278,7 +247,7 @@ static void RenderTitle(uint32_t* buf,
   g_object_unref(layout);
   cairo_destroy(cr);
 
-  // Blit the ARGB32 Cairo surface into our XRGB8888 buffer.
+  // Blit the ARGB32 Cairo surface into our ARGB8888 buffer.
   cairo_surface_flush(surface);
   const auto* src =
       reinterpret_cast<const uint32_t*>(cairo_image_surface_get_data(surface));
@@ -333,18 +302,27 @@ static void DrawCircleButton(uint32_t* buf,
 
 // ── RenderFrame ─────────────────────────────────────────────────────────────
 
-void GtkCsdPlugin::RenderFrame(uint32_t* buffer,
-                               int surface_w,
-                               int surface_h,
-                               int content_w,
-                               int content_h,
-                               uint32_t time) {
-  // Fill entire surface with border color.
-  FillRect(buffer, surface_w, 0, 0, surface_w, surface_h, impl_->border_color);
+void GtkCsdPlugin::RenderDecoration(uint32_t* buffer,
+                                    int surface_w,
+                                    int surface_h,
+                                    int content_w,
+                                    int /*content_h*/) {
+  // Borders — the four bands around the content rect.  The content area is
+  // left untouched for the application to paint.
+  FillRect(buffer, surface_w, 0, 0, surface_w, kTitleBarHeight,
+           impl_->border_color);
+  FillRect(buffer, surface_w, 0, surface_h - kBorderWidth, surface_w,
+           kBorderWidth, impl_->border_color);
+  FillRect(buffer, surface_w, 0, kTitleBarHeight, kBorderWidth,
+           surface_h - kTitleBarHeight - kBorderWidth, impl_->border_color);
+  FillRect(buffer, surface_w, surface_w - kBorderWidth, kTitleBarHeight,
+           kBorderWidth, surface_h - kTitleBarHeight - kBorderWidth,
+           impl_->border_color);
 
   // Title bar background.
-  const uint32_t tb_color = impl_->focused ? impl_->title_bar_color
-                                           : impl_->title_bar_unfocused_color;
+  const uint32_t tb_color = impl_->state.focused
+                                ? impl_->title_bar_color
+                                : impl_->title_bar_unfocused_color;
   FillRect(buffer, surface_w, kBorderWidth, kBorderWidth, content_w,
            kTitleBarHeight - kBorderWidth, tb_color);
 
@@ -377,10 +355,6 @@ void GtkCsdPlugin::RenderFrame(uint32_t* buffer,
     RenderTitle(buffer, surface_w, text_x, text_y, text_max_w, text_max_h,
                 impl_->title, impl_->title_text_color);
   }
-
-  // Content area — animated ring pattern.
-  uint32_t* content_start = buffer + kTitleBarHeight * surface_w + kBorderWidth;
-  PaintContent(content_start, content_w, content_h, surface_w, time);
 }
 
 // ── HitTest ─────────────────────────────────────────────────────────────────

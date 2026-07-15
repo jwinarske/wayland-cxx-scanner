@@ -62,18 +62,16 @@ class GtkCsdPlugin final : public CsdPlugin {
 
   // ── CsdPlugin interface ────────────────────────────────────────────────
 
-  [[nodiscard]] int BorderWidth() const noexcept override;
-  [[nodiscard]] int TitleBarHeight() const noexcept override;
+  [[nodiscard]] Margins DecorationMargins() const override;
 
   void SetTitle(std::string_view title) override;
-  void SetState(bool focused, bool maximized) override;
+  void SetInputState(const InputState& state) override;
 
-  void RenderFrame(uint32_t* buffer,
-                   int surface_w,
-                   int surface_h,
-                   int content_w,
-                   int content_h,
-                   uint32_t time) override;
+  void RenderDecoration(uint32_t* buffer,
+                        int surface_w,
+                        int surface_h,
+                        int content_w,
+                        int content_h) override;
 
   [[nodiscard]] HitZone HitTest(int x,
                                 int y,
@@ -81,6 +79,8 @@ class GtkCsdPlugin final : public CsdPlugin {
                                 int surface_h,
                                 int content_w,
                                 int content_h) const noexcept override;
+
+  void Dispatch() override;
 
  private:
   struct Impl;

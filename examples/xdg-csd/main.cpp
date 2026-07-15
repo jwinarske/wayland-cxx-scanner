@@ -73,7 +73,6 @@ extern "C" {
 #include <array>
 #include <cerrno>
 #include <climits>
-#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -111,6 +110,9 @@ const wl_interface& wl_shm_traits::wl_iface() noexcept {
 }
 const wl_interface& wl_buffer_traits::wl_iface() noexcept {
   return wl_buffer_interface;
+}
+const wl_interface& wl_region_traits::wl_iface() noexcept {
+  return wl_region_interface;
 }
 
 }  // namespace wayland::client
@@ -212,6 +214,10 @@ class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
+// ── WlRegionHandler ─────────────────────────────────────────────────────────
+
+class WlRegionHandler : public wayland::client::CWlRegion<WlRegionHandler> {};
+
 // ── WlCallbackHandler ───────────────────────────────────────────────────────
 
 class WlCallbackHandler
@@ -307,7 +313,7 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
     if (wl_proxy* raw = wl::construct<wl_buffer_traits,
                                       wl_shm_pool_traits::Op::CreateBuffer>(
             *pool.Get(), offset, w, h, static_cast<int32_t>(stride),
-            WL_SHM_FORMAT_XRGB8888)) {
+            WL_SHM_FORMAT_ARGB8888)) {
       bufs.at(static_cast<std::size_t>(i)).Get()->_SetProxy(raw);
     } else {
       std::fprintf(stderr, "xdg-csd: wl_shm_pool.create_buffer [%d] failed\n",
@@ -324,11 +330,23 @@ bool BufferPool::Create(int w, int h, wl_proxy* shm_raw) noexcept {
 // Pixel painting
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Paint the content area only (no decorations — SSD mode).
-static void paint_ssd_frame(wl::span<uint32_t> buf,
-                            int width,
-                            int height,
-                            uint32_t time) noexcept {
+/// Paint the application's content — an animated ring pattern.
+///
+/// This is the app's own drawing, deliberately kept out of the CSD plugins:
+/// a decoration plugin owns the chrome and nothing else.  The content is
+/// written at (@p dst_x, @p dst_y) into a buffer of @p stride pixels per row,
+/// so the same painter serves both the CSD case (content inset by the
+/// decoration margins) and the SSD case (content fills the surface).
+///
+/// Pixels are opaque ARGB8888: the alpha channel exists for the decoration's
+/// benefit, not the content's.
+static void paint_content(wl::span<uint32_t> buf,
+                          int dst_x,
+                          int dst_y,
+                          int width,
+                          int height,
+                          int stride,
+                          uint32_t time) noexcept {
   const int halfh = height / 2;
   const int halfw = width / 2;
   int64_t outer_r = (halfw < halfh ? halfw : halfh) - 8;
@@ -349,12 +367,13 @@ static void paint_ssd_frame(wl::span<uint32_t> buf,
         v = (static_cast<uint32_t>(y) + time / 32) * 0x0080401u;
       else
         v = (static_cast<uint32_t>(x) + time / 16) * 0x0080401u;
-      v &= 0x00FFFFFFu;
-      if (std::abs(x - y) > 6 && std::abs(x + y - height) > 6)
-        v |= 0xFF000000u;
-      const std::size_t idx =
-          static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
-          static_cast<std::size_t>(x);
+      // Opaque: the diagonal cross that the classic demo leaves transparent
+      // would need premultiplied RGB ≤ alpha to be valid, and the content has
+      // no reason to be see-through.
+      v = (v & 0x00FFFFFFu) | 0xFF000000u;
+      const std::size_t idx = static_cast<std::size_t>(dst_y + y) *
+                                  static_cast<std::size_t>(stride) +
+                              static_cast<std::size_t>(dst_x + x);
       buf[idx] = v;
     }
   }
@@ -459,9 +478,20 @@ class App {
   uint32_t last_time_ = 0;
 
   // ── Pointer state ─────────────────────────────────────────────────────────
-  int pointer_x_ = 0;
-  int pointer_y_ = 0;
+  int pointer_x_ =
+      -1;  // -1 ⇒ pointer not over the surface (wl::csd::InputState)
+  int pointer_y_ = -1;
+  bool pointer_pressed_ = false;
   uint32_t enter_serial_ = 0;  // last wl_pointer.enter serial, for set_cursor
+
+  // Always true for now.  The authoritative source is the xdg_toplevel
+  // configure `states` array (ACTIVATED), which wl::XdgToplevelHandler
+  // currently discards, so nothing can drive this yet.  Feeding it — and the
+  // matching backdrop styling — is the interactive-state work, not the
+  // interface change.  Behaviour is unchanged either way: the previous
+  // interface's SetState() was never called at all, so every plugin has always
+  // rendered its focused state.
+  bool focused_ = true;
 
   // ── Global IDs from registry scan ─────────────────────────────────────────
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
@@ -479,6 +509,10 @@ class App {
 
   void RequestFrameCallback() noexcept;
   void CommitFrame(uint32_t time_ms) noexcept;
+  void UpdateOpaqueRegion(int x, int y, int w, int h) noexcept;
+
+  // Last opaque region submitted, to avoid re-sending it every frame.
+  int opaque_x_ = -1, opaque_y_ = -1, opaque_w_ = -1, opaque_h_ = -1;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -621,9 +655,11 @@ bool App::BindGlobals() {
     return false;
   }
 
-  constexpr uint32_t kXrgb8888 = 1u;
-  if (!(shm_.Get()->formats & (1u << kXrgb8888))) {
-    std::fprintf(stderr, "xdg-csd: WL_SHM_FORMAT_XRGB8888 not supported\n");
+  // ARGB8888 — decorations need an alpha channel.  wl_shm guarantees this
+  // format, but check rather than assume.
+  constexpr uint32_t kArgb8888 = 0u;
+  if (!(shm_.Get()->formats & (1u << kArgb8888))) {
+    std::fprintf(stderr, "xdg-csd: WL_SHM_FORMAT_ARGB8888 not supported\n");
     return false;
   }
 
@@ -727,9 +763,9 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) {
     // The compositor provides the total window size.
     // In CSD mode, subtract decoration space to get the content area.
     if (use_csd_ && csd_plugin_) {
-      content_w_ = width - 2 * csd_plugin_->BorderWidth();
-      content_h_ =
-          height - csd_plugin_->TitleBarHeight() - csd_plugin_->BorderWidth();
+      const wl::csd::Margins m = csd_plugin_->DecorationMargins();
+      content_w_ = width - m.left - m.right;
+      content_h_ = height - m.top - m.bottom;
     } else {
       content_w_ = width;
       content_h_ = height;
@@ -787,6 +823,7 @@ void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
 void App::OnPointerLeave() noexcept {
   pointer_x_ = -1;
   pointer_y_ = -1;
+  pointer_pressed_ = false;
 }
 
 void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
@@ -796,9 +833,14 @@ void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
-  if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED)
-    return;
   if (ev.button != BTN_LEFT)
+    return;
+
+  // Track the held state so the plugin can render a pressed button.  No
+  // redraw is requested: the frame callback already redraws unconditionally.
+  pointer_pressed_ = (ev.state == WL_POINTER_BUTTON_STATE_PRESSED);
+
+  if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED)
     return;
 
   // The seat proxy backs interactive move/resize; the button serial authorizes
@@ -851,6 +893,39 @@ void App::RequestFrameCallback() noexcept {
   }
 }
 
+// Tell the compositor which part of the surface is fully opaque, so it can
+// skip blending there.  The buffer is ARGB8888 — without this the compositor
+// must assume every pixel may be translucent and blend the whole surface.
+//
+// Re-sent only when the rectangle changes; a wl_region is a throwaway object,
+// so it is created, populated, installed, and destroyed in one go.
+void App::UpdateOpaqueRegion(int x, int y, int w, int h) noexcept {
+  if (x == opaque_x_ && y == opaque_y_ && w == opaque_w_ && h == opaque_h_)
+    return;
+
+  using wayland::client::wl_compositor_traits;
+  using wayland::client::wl_region_traits;
+
+  // wl_region has no events, so it takes a bare Attach() rather than
+  // _SetProxy() (which would install a dispatcher the interface never
+  // generates).  WlPtr is RAII: leaving scope sends destroy for us.
+  wl::WlPtr<WlRegionHandler> region;
+  wl_proxy* const raw =
+      wl::construct<wl_region_traits, wl_compositor_traits::Op::CreateRegion>(
+          *compositor_.Get());
+  if (!raw)
+    return;
+  region.Attach(raw);
+
+  region.Get()->Add(x, y, w, h);
+  surface_.Get()->SetOpaqueRegion(region.Get()->GetProxy());
+
+  opaque_x_ = x;
+  opaque_y_ = y;
+  opaque_w_ = w;
+  opaque_h_ = h;
+}
+
 void App::CommitFrame(uint32_t time_ms) noexcept {
   const int sw = SurfaceWidth();
   const int sh = SurfaceHeight();
@@ -871,17 +946,35 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
       static_cast<std::size_t>(sw) * static_cast<std::size_t>(sh);
 
   if (use_csd_ && csd_plugin_) {
-    csd_plugin_->RenderFrame(pixels, sw, sh, content_w_, content_h_, time_ms);
+    // Let the plugin pump its own event source (theme changes, etc.) before it
+    // is asked for geometry or pixels.  This is the app's only chance: the
+    // event loop blocks in poll() on the Wayland fd, so the plugin is drained
+    // once per frame — which is enough precisely because the demo animates and
+    // therefore always has a next frame.
+    csd_plugin_->Dispatch();
+
+    csd_plugin_->SetInputState(
+        {pointer_x_, pointer_y_, pointer_pressed_, focused_, maximized_});
+
+    const wl::csd::Margins m = csd_plugin_->DecorationMargins();
+
+    // The plugin paints the chrome; the app paints its own content into the
+    // content rect the chrome leaves untouched.
+    csd_plugin_->RenderDecoration(pixels, sw, sh, content_w_, content_h_);
+    paint_content({pixels, npixels}, m.left, m.top, content_w_, content_h_, sw,
+                  time_ms);
+
+    // Window geometry excludes the decoration area.
+    xdg_surface_.Get()->SetWindowGeometry(m.left, m.top, content_w_,
+                                          content_h_);
   } else {
-    paint_ssd_frame({pixels, npixels}, sw, sh, time_ms);
+    paint_content({pixels, npixels}, 0, 0, sw, sh, sw, time_ms);
   }
 
-  // Set window geometry to exclude decoration area.
-  if (use_csd_ && csd_plugin_) {
-    xdg_surface_.Get()->SetWindowGeometry(csd_plugin_->BorderWidth(),
-                                          csd_plugin_->TitleBarHeight(),
-                                          content_w_, content_h_);
-  }
+  // Every pixel written above is opaque, in both the CSD and SSD paths.  Once
+  // the decoration grows rounded corners and a shadow, the CSD case must
+  // shrink this to exclude them.
+  UpdateOpaqueRegion(0, 0, sw, sh);
 
   surface_.Get()->Attach(
       pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
