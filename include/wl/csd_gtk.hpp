@@ -3,16 +3,21 @@
 //
 // csd_gtk — GTK-themed CSD plugin (optional; requires GTK 3).
 //
-// Following the plugin pattern from libdecor's GTK plugin
-// (https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/gtk),
-// this plugin uses GTK 3's CSS theming engine and Cairo rendering to produce
-// decorations that match the user's GTK theme.  Colors for the title bar,
-// borders, and window-control buttons are extracted from the GTK style
-// context, and the title text is drawn with Pango.
+// Renders decorations that match the user's GTK theme by building a real
+// header bar widget offscreen and asking GTK to lay it out, draw it and
+// measure it.  Nothing about the decoration is approximated locally: the title
+// bar height, the font, which window buttons exist and in what order, their
+// icons, and the hover/pressed/backdrop styling are all GTK's answers for the
+// active theme.
 //
-// When GTK 3 is not available at build time the fallback plugin
-// (<wl/csd_fallback.hpp>) is used instead — the selection happens in the
-// meson build and through the factory in <wl/csd_plugin.hpp>.
+// Notably the button set is never parsed out of a setting.  GTK builds the
+// header bar from gtk-decoration-layout, so a desktop configured to show only
+// a close button gets exactly that, with no code here aware of the option.
+//
+// When GTK is unavailable at build time the Cairo or fallback plugin is used
+// instead; that selection happens in the build (the csd / csd_gtk options).
+// When GTK is present but unusable at *run* time, TryCreate() returns null so
+// the caller can degrade rather than abort.
 //
 // ── Include order
 // ─────────────────────────────────────────────────────────────
@@ -21,17 +26,17 @@
 //
 // ── Build requirements
 // ─────────────────────────────────────────────────────────
-//   dependency('gtk+-3.0')    →  provides GtkStyleContext, Cairo, Pango
+//   dependency('gtk+-3.0')    →  provides GtkHeaderBar, Cairo, Pango
 //
-// The implementation lives in a separate .cpp file
-// (examples/xdg-csd/csd_gtk.cpp) because it links against GTK3.
+// The implementation lives in separate .cpp files under examples/xdg-csd/
+// because it links against GTK.
 #pragma once
 
 #include <wl/csd_plugin.hpp>
 
 #include <cstdint>
 #include <memory>
-#include <string>
+#include <string_view>
 
 namespace wl::csd {
 
@@ -39,20 +44,29 @@ namespace wl::csd {
 // GtkCsdPlugin — GTK-themed CSD plugin
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// CSD plugin that uses GTK 3's style context and Cairo to render
-/// decorations matching the user's GTK theme.
+/// CSD plugin that renders its decorations through GTK's own widget theming.
 ///
-/// The title bar color, border color, button colors and title text are
-/// all derived from the active GTK theme.  When the window loses focus the
-/// decoration dims to the theme's backdrop style.
+/// Construct with TryCreate(): GTK may be linked but unusable at run time (no
+/// display, no theme), and that must degrade to another plugin rather than
+/// abort the process.
 class GtkCsdPlugin final : public CsdPlugin {
  public:
+  /// Side and bottom border thickness, in pixels.
+  ///
+  /// Unlike the title bar height this is not theme-derived: it is the grabbable
+  /// resize margin the decoration adds around the content, not something GTK
+  /// has an opinion about.
   static constexpr int kBorderWidth = 4;
-  static constexpr int kTitleBarHeight = 36;
-  static constexpr int kButtonSize = 20;
-  static constexpr int kButtonPadding = 6;
 
-  GtkCsdPlugin();
+  /// Flat color for those borders.
+  static constexpr uint32_t kBorderColor = 0xFF303030;
+
+  /// Build the plugin and bring GTK up.
+  ///
+  /// @returns null when GTK cannot be initialized, leaving the caller to fall
+  ///          back to another plugin.
+  [[nodiscard]] static std::unique_ptr<GtkCsdPlugin> TryCreate();
+
   ~GtkCsdPlugin() override;
 
   GtkCsdPlugin(const GtkCsdPlugin&) = delete;
@@ -83,6 +97,8 @@ class GtkCsdPlugin final : public CsdPlugin {
   void Dispatch() override;
 
  private:
+  GtkCsdPlugin();
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

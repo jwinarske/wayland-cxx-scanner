@@ -44,12 +44,14 @@
 #include <wl/client_helpers.hpp>
 #include <wl/csd_plugin.hpp>
 #include <wl/cursor.hpp>
+// The fallback is always available and always compiled in: it is both the
+// build-time choice when nothing richer is present, and the run-time landing
+// spot when a themed plugin declines to start.
+#include <wl/csd_fallback.hpp>
 #ifdef USE_GTK_CSD
 #include <wl/csd_gtk.hpp>
 #elif defined(USE_CAIRO_CSD)
 #include <wl/csd_cairo.hpp>
-#else
-#include <wl/csd_fallback.hpp>
 #endif
 #include <wl/display.hpp>
 #include <wl/raii.hpp>
@@ -967,14 +969,17 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
     // Window geometry excludes the decoration area.
     xdg_surface_.Get()->SetWindowGeometry(m.left, m.top, content_w_,
                                           content_h_);
+
+    // Everything below the title bar is opaque, but the title bar itself is
+    // not: a themed decoration rounds its top corners, leaving those pixels
+    // transparent.  Claiming they are opaque would stop the compositor
+    // blending them and the rounding would come out as black corners, so the
+    // region stops below the title bar and that band is left to blend.
+    UpdateOpaqueRegion(0, m.top, sw, sh - m.top);
   } else {
     paint_content({pixels, npixels}, 0, 0, sw, sh, sw, time_ms);
+    UpdateOpaqueRegion(0, 0, sw, sh);
   }
-
-  // Every pixel written above is opaque, in both the CSD and SSD paths.  Once
-  // the decoration grows rounded corners and a shadow, the CSD case must
-  // shrink this to exclude them.
-  UpdateOpaqueRegion(0, 0, sw, sh);
 
   surface_.Get()->Attach(
       pool_.bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
@@ -1076,21 +1081,31 @@ int main(const int argc, char* argv[]) {
     }
   }
 
-  // Create CSD plugin — highest-fidelity available at build time.
-  // Follows the libdecor plugin selection pattern: prefer the richer
-  // plugin when available, degrade gracefully otherwise.
-  //   GTK > Cairo > Fallback
+  // Which plugin is compiled in is a build-time choice (the csd / csd_gtk
+  // options). The themed plugin can still fail at run time — GTK may be linked
+  // but have no usable display or theme — so it is asked rather than assumed,
+  // and the dependency-free fallback covers the refusal.
   std::unique_ptr<CsdPlugin> plugin;
 #ifdef USE_GTK_CSD
-  plugin = std::make_unique<wl::csd::GtkCsdPlugin>();
-  std::fprintf(stderr, "xdg-csd: using GTK CSD plugin\n");
+  plugin = wl::csd::GtkCsdPlugin::TryCreate();
+  if (plugin) {
+    std::fprintf(stderr, "xdg-csd: using GTK CSD plugin\n");
+  } else {
+    std::fprintf(stderr,
+                 "xdg-csd: GTK unavailable at run time — using fallback CSD "
+                 "plugin\n");
+  }
 #elif defined(USE_CAIRO_CSD)
   plugin = std::make_unique<wl::csd::CairoCsdPlugin>();
   std::fprintf(stderr, "xdg-csd: using Cairo CSD plugin\n");
-#else
-  plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
-  std::fprintf(stderr, "xdg-csd: using fallback CSD plugin\n");
 #endif
+
+  if (!plugin) {
+    plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
+#if !defined(USE_GTK_CSD) && !defined(USE_CAIRO_CSD)
+    std::fprintf(stderr, "xdg-csd: using fallback CSD plugin\n");
+#endif
+  }
 
   App app{content_w, content_h, title, std::move(plugin)};
   return app.Run();

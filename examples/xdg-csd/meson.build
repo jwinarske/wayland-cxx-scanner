@@ -128,7 +128,7 @@ if csd_choice == 'gtk'
         error('csd=gtk: gtk+-3.0 not found. Install it, or pick another plugin ' +
               'with csd=cairo / csd=fallback.')
     endif
-    xdg_csd_sources += 'csd_gtk.cpp'
+    xdg_csd_sources += ['csd_gtk.cpp', 'csd_gtk_backend_gtk3.cpp']
     xdg_csd_deps    += gtk_dep
     xdg_csd_args    += '-DUSE_GTK_CSD'
 elif csd_choice == 'cairo'

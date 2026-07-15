@@ -1,163 +1,46 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// csd_gtk.cpp — GTK-themed CSD plugin implementation.
+// csd_gtk.cpp — themed CSD plugin.
 //
-// Uses GTK 3's CSS theming engine, Cairo, and Pango to render window
-// decorations (title bar, window buttons, resize borders) that match
-// the user's active GTK theme.
+// This file deliberately does not include gtk.h.  Everything needing a widget
+// tree lives behind <csd_gtk_backend.hpp>; what remains here is the part that
+// is not the toolkit's business: the border fills, the surface geometry, and
+// compositing the header the backend drew into the wl_shm buffer.
 //
-// Following the plugin pattern from libdecor's GTK plugin:
-// https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/gtk
+// The header bar is not approximated.  Its height, font, button set, icons and
+// styling are whatever the backend's toolkit produces for the active theme.
 
 // clang-tidy: suppress diagnostics for C-API boundary code.
 // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast,
-//             cppcoreguidelines-pro-bounds-pointer-arithmetic,
-//             cppcoreguidelines-avoid-non-const-global-variables)
+//             cppcoreguidelines-pro-bounds-pointer-arithmetic)
 
 #include <wl/csd_gtk.hpp>
 
+#include "csd_gtk_backend.hpp"
+
 #include <algorithm>
-#include <string>
+#include <memory>
 
 #include <cairo/cairo.h>
-#include <gtk/gtk.h>
-#include <pango/pangocairo.h>
 
 namespace wl::csd {
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Theme color extraction helpers
-// ══════════════════════════════════════════════════════════════════════════════
-
-/// ARGB8888 from GdkRGBA.
-static uint32_t GdkColorToArgb(const GdkRGBA& c) noexcept {
-  const auto a = static_cast<uint32_t>(c.alpha * 255.0) & 0xFFu;
-  const auto r = static_cast<uint32_t>(c.red * 255.0) & 0xFFu;
-  const auto g = static_cast<uint32_t>(c.green * 255.0) & 0xFFu;
-  const auto b = static_cast<uint32_t>(c.blue * 255.0) & 0xFFu;
-  return (a << 24u) | (r << 16u) | (g << 8u) | b;
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// GtkCsdPlugin::Impl — pimpl holding GTK/Cairo state
+// GtkCsdPlugin::Impl
 // ══════════════════════════════════════════════════════════════════════════════
 
 struct GtkCsdPlugin::Impl {
-  std::string title;
+  std::unique_ptr<detail::GtkThemeBackend> backend;
   InputState state;
 
-  // Cached theme colors (refreshed on state change).
-  uint32_t title_bar_color = 0xFF3C3C3C;
-  uint32_t title_bar_unfocused_color = 0xFF505050;
-  uint32_t border_color = 0xFF505050;
-  uint32_t close_btn_color = 0xFFE04040;
-  uint32_t max_btn_color = 0xFF40A040;
-  uint32_t min_btn_color = 0xFFD0A020;
-  uint32_t title_text_color = 0xFFFFFFFF;
-
-  // GTK style context for header bar (owned).
-  GtkStyleContext* header_ctx = nullptr;
-
-  Impl() { InitGtk(); }
-
-  ~Impl() {
-    if (header_ctx) {
-      g_object_unref(header_ctx);
-      header_ctx = nullptr;
-    }
-  }
-
-  Impl(const Impl&) = delete;
-  Impl& operator=(const Impl&) = delete;
-
-  void InitGtk() {
-    // Initialize GTK (safe to call multiple times; no-op after first).
-    gtk_init(nullptr, nullptr);
-
-    // Build a minimal style context path that queries the header bar theme.
-    auto* path = gtk_widget_path_new();
-    gtk_widget_path_append_type(path, GTK_TYPE_WINDOW);
-    const auto hdr_pos = gtk_widget_path_append_type(path, GTK_TYPE_HEADER_BAR);
-    gtk_widget_path_iter_add_class(path, hdr_pos, "titlebar");
-    gtk_widget_path_iter_add_class(path, hdr_pos, "header-bar");
-    gtk_widget_path_iter_add_class(path, hdr_pos, GTK_STYLE_CLASS_DEFAULT);
-
-    header_ctx = gtk_style_context_new();
-    gtk_style_context_set_path(header_ctx, path);
-    gtk_style_context_set_screen(header_ctx, gdk_screen_get_default());
-    gtk_widget_path_free(path);
-
-    RefreshColors();
-  }
-
-  void RefreshColors() {
-    if (!header_ctx)
-      return;
-
-    // Extract background color by rendering to a tiny Cairo surface and
-    // sampling the result — avoids the deprecated
-    // gtk_style_context_get_background_color().
-    auto sample_bg = [](GtkStyleContext* ctx, GtkStateFlags state) -> uint32_t {
-      gtk_style_context_set_state(ctx, state);
-      cairo_surface_t* tmp =
-          cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
-      cairo_t* cr = cairo_create(tmp);
-      gtk_render_background(ctx, cr, 0, 0, 1, 1);
-      cairo_destroy(cr);
-      cairo_surface_flush(tmp);
-      const auto* px =
-          reinterpret_cast<const uint32_t*>(cairo_image_surface_get_data(tmp));
-      const uint32_t argb = px ? *px : 0u;
-      cairo_surface_destroy(tmp);
-      return argb;
-    };
-
-    // Active state colors.
-    title_bar_color = sample_bg(header_ctx, GTK_STATE_FLAG_NORMAL);
-    if ((title_bar_color & 0x00FFFFFFu) == 0)
-      title_bar_color = 0xFF3C3C3C;  // Fallback if theme returns black.
-
-    // Backdrop (unfocused) state.
-    title_bar_unfocused_color = sample_bg(header_ctx, GTK_STATE_FLAG_BACKDROP);
-    if ((title_bar_unfocused_color & 0x00FFFFFFu) == 0)
-      title_bar_unfocused_color = 0xFF505050;
-
-    // Text color.
-    gtk_style_context_set_state(header_ctx, GTK_STATE_FLAG_NORMAL);
-    {
-      GdkRGBA fg{};
-      gtk_style_context_get_color(header_ctx, GTK_STATE_FLAG_NORMAL, &fg);
-      title_text_color = GdkColorToArgb(fg);
-    }
-
-    // Border color — derive from title bar with reduced brightness.
-    border_color = DarkenColor(title_bar_color, 0.7);
-
-    // Button colors — we keep sensible defaults since GTK doesn't
-    // expose per-button colors in a portable way.
-    close_btn_color = 0xFFE04040;
-    max_btn_color = 0xFF40A040;
-    min_btn_color = 0xFFD0A020;
-
-    // Reset state.
-    gtk_style_context_set_state(header_ctx, GTK_STATE_FLAG_NORMAL);
-  }
-
-  static uint32_t DarkenColor(uint32_t argb, double factor) noexcept {
-    const auto a = argb & 0xFF000000u;
-    auto r = static_cast<uint32_t>(((argb >> 16u) & 0xFFu) * factor);
-    auto g = static_cast<uint32_t>(((argb >> 8u) & 0xFFu) * factor);
-    auto b = static_cast<uint32_t>((argb & 0xFFu) * factor);
-    r = std::min(r, 255u);
-    g = std::min(g, 255u);
-    b = std::min(b, 255u);
-    return a | (r << 16u) | (g << 8u) | b;
-  }
+  // Cached header height, refreshed per redraw.  DecorationMargins() is
+  // const, and the geometry must not silently disagree with what was drawn.
+  int header_height = 0;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// GtkCsdPlugin — public interface implementation
+// Construction
 // ══════════════════════════════════════════════════════════════════════════════
 
 GtkCsdPlugin::GtkCsdPlugin() : impl_(std::make_unique<Impl>()) {}
@@ -167,208 +50,127 @@ GtkCsdPlugin::~GtkCsdPlugin() = default;
 GtkCsdPlugin::GtkCsdPlugin(GtkCsdPlugin&&) noexcept = default;
 GtkCsdPlugin& GtkCsdPlugin::operator=(GtkCsdPlugin&&) noexcept = default;
 
+std::unique_ptr<GtkCsdPlugin> GtkCsdPlugin::TryCreate() {
+  auto plugin = std::unique_ptr<GtkCsdPlugin>(new GtkCsdPlugin());
+  plugin->impl_->backend = detail::MakeGtk3Backend();
+  if (!plugin->impl_->backend->Init())
+    return nullptr;  // No usable GTK; the caller picks another plugin.
+  plugin->impl_->header_height = plugin->impl_->backend->HeaderHeight();
+  return plugin;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CsdPlugin interface
+// ══════════════════════════════════════════════════════════════════════════════
+
 Margins GtkCsdPlugin::DecorationMargins() const {
-  return {kBorderWidth, kBorderWidth, kTitleBarHeight, kBorderWidth};
+  // Height comes from the theme, so it is re-measured rather than fixed.  The
+  // side and bottom borders stay flat for now; they become the shadow once the
+  // decoration grows one.
+  if (impl_->backend)
+    impl_->header_height = impl_->backend->HeaderHeight();
+  return {kBorderWidth, kBorderWidth, std::max(impl_->header_height, 1),
+          kBorderWidth};
 }
 
 void GtkCsdPlugin::SetTitle(std::string_view title) {
-  impl_->title = title;
+  if (impl_->backend)
+    impl_->backend->SetTitle(title);
 }
 
 void GtkCsdPlugin::SetInputState(const InputState& state) {
   impl_->state = state;
+  // The header spans the full surface width and starts at y=0, so surface-local
+  // pointer coordinates are already header-local.
+  if (impl_->backend)
+    impl_->backend->SetInputState(state);
 }
 
 void GtkCsdPlugin::Dispatch() {
-  // Drain GLib without blocking.  GTK's own machinery runs here, so settings
-  // and theme changes are noticed on the next redraw — no GMainLoop, and no
-  // integration of GLib's fds into the caller's poll set.
-  while (g_main_context_iteration(nullptr, FALSE)) {
-  }
+  if (impl_->backend)
+    impl_->backend->Dispatch();
 }
 
-// ── Pixel helpers ───────────────────────────────────────────────────────────
+// ── Rendering ───────────────────────────────────────────────────────────────
 
-static void FillRect(uint32_t* buf,
-                     int buf_w,
-                     int x,
-                     int y,
-                     int w,
-                     int h,
-                     uint32_t color) noexcept {
+namespace {
+
+void FillRect(uint32_t* buf,
+              int buf_w,
+              int x,
+              int y,
+              int w,
+              int h,
+              uint32_t color) noexcept {
   for (int row = y; row < y + h; ++row)
     for (int col = x; col < x + w; ++col)
       buf[row * buf_w + col] = color;
 }
 
-// ── Render title text using Pango + Cairo → ARGB8888 ────────────────────────
-
-static void RenderTitle(uint32_t* buf,
-                        int buf_w,
-                        int x,
-                        int y,
-                        int max_w,
-                        int max_h,
-                        const std::string& title,
-                        uint32_t text_color) noexcept {
-  if (title.empty() || max_w <= 0 || max_h <= 0)
-    return;
-
-  // Create a Cairo image surface sized to the title bar text area.
-  cairo_surface_t* surface =
-      cairo_image_surface_create(CAIRO_FORMAT_ARGB32, max_w, max_h);
-  cairo_t* cr = cairo_create(surface);
-
-  // Set text color.
-  const double r = ((text_color >> 16u) & 0xFFu) / 255.0;
-  const double g = ((text_color >> 8u) & 0xFFu) / 255.0;
-  const double b = (text_color & 0xFFu) / 255.0;
-  cairo_set_source_rgb(cr, r, g, b);
-
-  // Layout with Pango.
-  PangoLayout* layout = pango_cairo_create_layout(cr);
-  pango_layout_set_text(layout, title.c_str(), -1);
-
-  PangoFontDescription* font = pango_font_description_from_string("Sans 11");
-  pango_layout_set_font_description(layout, font);
-  pango_font_description_free(font);
-
-  pango_layout_set_width(layout, max_w * PANGO_SCALE);
-  pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-
-  // Center vertically.
-  int text_w = 0;
-  int text_h = 0;
-  pango_layout_get_pixel_size(layout, &text_w, &text_h);
-  const int offset_y = std::max(0, (max_h - text_h) / 2);
-  cairo_move_to(cr, 0, offset_y);
-  pango_cairo_show_layout(cr, layout);
-
-  g_object_unref(layout);
-  cairo_destroy(cr);
-
-  // Blit the ARGB32 Cairo surface into our ARGB8888 buffer.
-  cairo_surface_flush(surface);
-  const auto* src =
-      reinterpret_cast<const uint32_t*>(cairo_image_surface_get_data(surface));
-  const int src_stride = cairo_image_surface_get_stride(surface) / 4;
-
-  for (int row = 0; row < max_h; ++row) {
-    for (int col = 0; col < max_w; ++col) {
-      const uint32_t pixel = src[row * src_stride + col];
-      const uint32_t alpha = (pixel >> 24u) & 0xFFu;
-      if (alpha > 0) {
-        // Alpha-over compositing — Cairo ARGB32 uses premultiplied alpha,
-        // so the source RGB channels are already multiplied by alpha.
-        const uint32_t dst = buf[(y + row) * buf_w + (x + col)];
-        const uint32_t inv_alpha = 255u - alpha;
-        const uint32_t out_r =
-            std::min(255u, ((pixel >> 16u) & 0xFFu) +
-                               ((dst >> 16u) & 0xFFu) * inv_alpha / 255u);
-        const uint32_t out_g =
-            std::min(255u, ((pixel >> 8u) & 0xFFu) +
-                               ((dst >> 8u) & 0xFFu) * inv_alpha / 255u);
-        const uint32_t out_b =
-            std::min(255u, (pixel & 0xFFu) + (dst & 0xFFu) * inv_alpha / 255u);
-        buf[(y + row) * buf_w + (x + col)] =
-            0xFF000000u | (out_r << 16u) | (out_g << 8u) | out_b;
-      }
-    }
-  }
-
-  cairo_surface_destroy(surface);
-}
-
-// ── Draw a circular button (close/max/min) ──────────────────────────────────
-
-static void DrawCircleButton(uint32_t* buf,
-                             int buf_w,
-                             int cx,
-                             int cy,
-                             int radius,
-                             uint32_t color) noexcept {
-  const int r2 = radius * radius;
-  for (int dy = -radius; dy <= radius; ++dy) {
-    for (int dx = -radius; dx <= radius; ++dx) {
-      if (dx * dx + dy * dy <= r2) {
-        const int px = cx + dx;
-        const int py = cy + dy;
-        if (px >= 0 && py >= 0)
-          buf[py * buf_w + px] = color;
-      }
-    }
-  }
-}
-
-// ── RenderFrame ─────────────────────────────────────────────────────────────
+}  // namespace
 
 void GtkCsdPlugin::RenderDecoration(uint32_t* buffer,
                                     int surface_w,
                                     int surface_h,
                                     int content_w,
                                     int /*content_h*/) {
-  // Borders — the four bands around the content rect.  The content area is
-  // left untouched for the application to paint.
-  FillRect(buffer, surface_w, 0, 0, surface_w, kTitleBarHeight,
-           impl_->border_color);
-  FillRect(buffer, surface_w, 0, surface_h - kBorderWidth, surface_w,
-           kBorderWidth, impl_->border_color);
-  FillRect(buffer, surface_w, 0, kTitleBarHeight, kBorderWidth,
-           surface_h - kTitleBarHeight - kBorderWidth, impl_->border_color);
-  FillRect(buffer, surface_w, surface_w - kBorderWidth, kTitleBarHeight,
-           kBorderWidth, surface_h - kTitleBarHeight - kBorderWidth,
-           impl_->border_color);
+  const Margins m = DecorationMargins();
 
-  // Title bar background.
-  const uint32_t tb_color = impl_->state.focused
-                                ? impl_->title_bar_color
-                                : impl_->title_bar_unfocused_color;
-  FillRect(buffer, surface_w, kBorderWidth, kBorderWidth, content_w,
-           kTitleBarHeight - kBorderWidth, tb_color);
+  // Borders — the bands left, right and below the content rect.  The content
+  // area itself is the application's to paint.
+  FillRect(buffer, surface_w, 0, surface_h - m.bottom, surface_w, m.bottom,
+           kBorderColor);
+  FillRect(buffer, surface_w, 0, m.top, m.left, surface_h - m.top - m.bottom,
+           kBorderColor);
+  FillRect(buffer, surface_w, surface_w - m.right, m.top, m.right,
+           surface_h - m.top - m.bottom, kBorderColor);
 
-  // Window control buttons (circular, like GNOME/Adwaita).
-  const int btn_cy = kBorderWidth + (kTitleBarHeight - kBorderWidth) / 2;
-  const int btn_radius = kButtonSize / 2;
-
-  // Close button (rightmost).
-  int btn_cx = kBorderWidth + content_w - kButtonPadding - btn_radius;
-  DrawCircleButton(buffer, surface_w, btn_cx, btn_cy, btn_radius,
-                   impl_->close_btn_color);
-
-  // Maximize button.
-  btn_cx -= (kButtonSize + kButtonPadding);
-  DrawCircleButton(buffer, surface_w, btn_cx, btn_cy, btn_radius,
-                   impl_->max_btn_color);
-
-  // Minimize button.
-  btn_cx -= (kButtonSize + kButtonPadding);
-  DrawCircleButton(buffer, surface_w, btn_cx, btn_cy, btn_radius,
-                   impl_->min_btn_color);
-
-  // Title text (rendered via Pango + Cairo).
-  const int text_x = kBorderWidth + kButtonPadding;
-  const int text_y = kBorderWidth;
-  const int text_max_w =
-      content_w - 3 * (kButtonSize + kButtonPadding) - 2 * kButtonPadding;
-  const int text_max_h = kTitleBarHeight - kBorderWidth;
-  if (text_max_w > 0) {
-    RenderTitle(buffer, surface_w, text_x, text_y, text_max_w, text_max_h,
-                impl_->title, impl_->title_text_color);
+  if (!impl_->backend) {
+    FillRect(buffer, surface_w, 0, 0, surface_w, m.top, kBorderColor);
+    return;
   }
+
+  // Hand the backend an ARGB32 surface over the title-bar band and let it draw
+  // the header there.  cairo_image_surface_create_for_data writes straight into
+  // the wl_shm buffer, so there is no intermediate copy -- the band is the full
+  // surface width at y=0, so it starts at a row boundary.
+  cairo_surface_t* surface = cairo_image_surface_create_for_data(
+      reinterpret_cast<unsigned char*>(buffer), CAIRO_FORMAT_ARGB32, surface_w,
+      m.top, surface_w * 4);
+  if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+    cairo_surface_destroy(surface);
+    FillRect(buffer, surface_w, 0, 0, surface_w, m.top, kBorderColor);
+    return;
+  }
+
+  // Clear to transparent first.  The theme rounds the header's top corners and
+  // leaves those pixels alone, and the buffer is recycled between frames, so
+  // whatever was there before would otherwise show through the curve.
+  FillRect(buffer, surface_w, 0, 0, surface_w, m.top, 0x00000000u);
+
+  // The header spans the full surface width rather than being inset by the
+  // border, so the corners the theme rounds are the window's own corners.  A
+  // flat border strip beside them would frame the rounding in a square edge and
+  // defeat the point.
+  impl_->backend->DrawHeader(surface, surface_w);
+  cairo_surface_flush(surface);
+  cairo_surface_destroy(surface);
 }
 
-// ── HitTest ─────────────────────────────────────────────────────────────────
+// ── Hit testing ─────────────────────────────────────────────────────────────
 
 HitZone GtkCsdPlugin::HitTest(int x,
                               int y,
                               int surface_w,
                               int surface_h,
-                              int content_w,
+                              int /*content_w*/,
                               int /*content_h*/) const noexcept {
   if (x < 0 || y < 0 || x >= surface_w || y >= surface_h)
     return HitZone::None;
 
-  // Corner resize zones.
+  const int top = std::max(impl_->header_height, 1);
+
+  // Resize zones: corners first, then edges.
   if (x < kBorderWidth && y < kBorderWidth)
     return HitZone::ResizeTopLeft;
   if (x >= surface_w - kBorderWidth && y < kBorderWidth)
@@ -377,8 +179,6 @@ HitZone GtkCsdPlugin::HitTest(int x,
     return HitZone::ResizeBottomLeft;
   if (x >= surface_w - kBorderWidth && y >= surface_h - kBorderWidth)
     return HitZone::ResizeBottomRight;
-
-  // Edge resize zones.
   if (y < kBorderWidth)
     return HitZone::ResizeTop;
   if (y >= surface_h - kBorderWidth)
@@ -388,39 +188,13 @@ HitZone GtkCsdPlugin::HitTest(int x,
   if (x >= surface_w - kBorderWidth)
     return HitZone::ResizeRight;
 
-  // Title bar region.
-  if (y < kTitleBarHeight) {
-    const int btn_cy = kBorderWidth + (kTitleBarHeight - kBorderWidth) / 2;
-    const int btn_radius = kButtonSize / 2;
-
-    // Close button.
-    int btn_cx = kBorderWidth + content_w - kButtonPadding - btn_radius;
-    {
-      const int dx = x - btn_cx;
-      const int dy = y - btn_cy;
-      if (dx * dx + dy * dy <= btn_radius * btn_radius)
-        return HitZone::CloseButton;
-    }
-
-    // Maximize button.
-    btn_cx -= (kButtonSize + kButtonPadding);
-    {
-      const int dx = x - btn_cx;
-      const int dy = y - btn_cy;
-      if (dx * dx + dy * dy <= btn_radius * btn_radius)
-        return HitZone::MaximizeButton;
-    }
-
-    // Minimize button.
-    btn_cx -= (kButtonSize + kButtonPadding);
-    {
-      const int dx = x - btn_cx;
-      const int dy = y - btn_cy;
-      if (dx * dx + dy * dy <= btn_radius * btn_radius)
-        return HitZone::MinimizeButton;
-    }
-
-    return HitZone::TitleBar;
+  // Title bar: ask the backend, so the answer comes from the same widget
+  // geometry that was drawn rather than from a second guess at where the
+  // buttons are.
+  if (y < top) {
+    if (!impl_->backend)
+      return HitZone::TitleBar;
+    return impl_->backend->HitTestHeader(x, y, surface_w);
   }
 
   return HitZone::Content;
@@ -429,5 +203,4 @@ HitZone GtkCsdPlugin::HitTest(int x,
 }  // namespace wl::csd
 
 // NOLINTEND(cppcoreguidelines-pro-type-reinterpret-cast,
-//           cppcoreguidelines-pro-bounds-pointer-arithmetic,
-//           cppcoreguidelines-avoid-non-const-global-variables)
+//           cppcoreguidelines-pro-bounds-pointer-arithmetic)

@@ -265,7 +265,7 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
                 "WAYLAND_CXX_CSD=gtk: gtk+-3.0 not found. Install it, or pick "
                 "another plugin with WAYLAND_CXX_CSD=cairo / fallback.")
         endif ()
-        set(_csd_src  xdg-csd/csd_gtk.cpp)
+        set(_csd_src  xdg-csd/csd_gtk.cpp xdg-csd/csd_gtk_backend_gtk3.cpp)
         set(_csd_deps PkgConfig::gtk3)
         set(_csd_defs USE_GTK_CSD)
     elseif (_csd_choice STREQUAL "cairo")
