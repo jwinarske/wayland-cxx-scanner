@@ -66,7 +66,7 @@ class FallbackCsdPlugin final : public CsdPlugin {
                         int content_w,
                         int /*content_h*/) override {
     // Everything arrives logical and the buffer is physical, so every
-    // dimension is scaled on the way in. Flat colour has no detail to gain
+    // dimension is scaled on the way in. Flat color has no detail to gain
     // from the extra pixels, but it still has to fill them: drawn at logical
     // size it would occupy a corner of the buffer.
     const int bw = S(kBorderWidth);

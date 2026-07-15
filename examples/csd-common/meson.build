@@ -10,7 +10,7 @@
 # headers: the themed plugins need a .cpp and a toolkit on the link line, and
 # the framework is header-only. What *is* installable stays there —
 # <wl/csd_plugin.hpp> (the interface), <wl/csd_fallback.hpp> (header-only, no
-# dependencies) and <wl/csd_common.hpp> (colour helpers).
+# dependencies) and <wl/csd_common.hpp> (color helpers).
 #
 # How the decoration is chosen:
 #

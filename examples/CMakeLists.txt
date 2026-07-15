@@ -218,7 +218,7 @@ endif ()
 #
 # These are not framework headers: the themed plugins need a .cpp and a toolkit
 # on the link line, and the framework is header-only. Only the interface, the
-# header-only fallback and the colour helpers are installed from include/wl/.
+# header-only fallback and the color helpers are installed from include/wl/.
 set(CSD_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csd-common")
 
 # ── xdg-csd — decoration chosen by WAYLAND_CXX_CSD / WAYLAND_CXX_CSD_GTK ──────

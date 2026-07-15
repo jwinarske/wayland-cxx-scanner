@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// csd_common — Shared CSD colour helpers for Cairo-based plugins.
+// csd_common — Shared CSD color helpers for Cairo-based plugins.
 //
 // ── Provided utilities
 // ─────────────────────────────────────────────────────────────

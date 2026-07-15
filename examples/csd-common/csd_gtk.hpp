@@ -54,7 +54,7 @@ class GtkCsdPlugin final : public CsdPlugin {
   /// How far from a corner a grab counts as a diagonal resize.
   ///
   /// The one decoration measurement that is ours: the shadow's size, offset,
-  /// blur and colour all come from the theme, but how big a diagonal resize
+  /// blur and color all come from the theme, but how big a diagonal resize
   /// target should be is an input question, not a styling one.
   static constexpr int kCornerSize = 32;
 

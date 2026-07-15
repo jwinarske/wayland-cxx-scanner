@@ -145,7 +145,7 @@ static void DrawMinimizeSymbol(cairo_t* cr,
 /// Render title text using Pango into the ARGB8888 buffer with alpha
 /// compositing.  The text is centered horizontally and vertically within
 /// the given rectangle.
-/// Render the title with Pango straight onto @p cr, centred in the given
+/// Render the title with Pango straight onto @p cr, centered in the given
 /// rectangle.
 ///
 /// Drawn through the caller's context rather than blitted through a scratch

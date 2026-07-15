@@ -1001,7 +1001,7 @@ void App::OnToplevelClose() {
 // The compositor's preferred scale for this surface — which changes when the
 // window is dragged onto an output with a different scale.
 void App::OnPreferredScale(const int32_t scale_120) noexcept {
-  // Honoured only with a viewport to present the physical buffer at the
+  // Honored only with a viewport to present the physical buffer at the
   // logical size; without one the window would come out the wrong size.
   if (!CanScale() || scale_120 <= 0 || scale_120 == scale_120_)
     return;
@@ -1057,7 +1057,7 @@ void App::OnPointerLeave() noexcept {
   pointer_x_ = -1;
   pointer_y_ = -1;
   pointer_pressed_ = false;
-  pressed_zone_ = HitZone::None;  // A press the pointer leaves is cancelled.
+  pressed_zone_ = HitZone::None;  // A press the pointer leaves is canceled.
   title_press_pending_ = false;
   title_press_time_ = 0;
 }
@@ -1147,11 +1147,11 @@ void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
   const HitZone pressed = pressed_zone_;
   pointer_pressed_ = false;
   pressed_zone_ = HitZone::None;
-  // A title-bar press that never travelled is just a click. title_press_time_
+  // A title-bar press that never traveled is just a click. title_press_time_
   // survives, so a second press soon after can still pair with it.
   title_press_pending_ = false;
 
-  // Released somewhere other than where the press landed: cancelled.
+  // Released somewhere other than where the press landed: canceled.
   if (pressed != zone)
     return;
 
@@ -1350,7 +1350,7 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
   // Without it the surface would be the buffer's size, so the window would come
   // out scaled up on screen and the window geometry would describe only the
   // fraction of it that the logical size covers — which is why a preferred
-  // scale is only ever honoured when there is a viewport to answer it with.
+  // scale is only ever honored when there is a viewport to answer it with.
   //
   // Sent every frame it could change: the destination and the buffer are both
   // derived from (sw, sh, scale_120_), so they cannot disagree.
