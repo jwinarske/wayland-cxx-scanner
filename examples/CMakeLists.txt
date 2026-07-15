@@ -307,7 +307,17 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
         # 'ssd' and 'fallback' would be indistinguishable to the example.
         set(_csd_defs USE_FALLBACK_CSD)
     endif ()
-    # 'ssd' adds neither source nor define.
+    # 'ssd' adds neither plugin source nor plugin define.
+
+    # csd_factory reads whichever define the choice above set, and
+    # DecoratedWindow owns the decoration negotiation — which with no plugin is
+    # the whole of the csd=ssd case. Both are wanted for every choice, so they
+    # are appended after the chain rather than inside it. Meson builds these
+    # into a csd_common library; here they compile into the example, which is
+    # also what supplies the generated protocol headers they include.
+    list(APPEND _csd_src csd-common/csd_factory.cpp csd-common/decorated_window.cpp)
+    list(APPEND _csd_defs CSD_HAVE_DECORATED_WINDOW)
+
     list(APPEND _csd_defs ${_csd_extra_defs})
     message(STATUS "xdg-csd: CSD plugin '${_csd_choice}' "
                    "(WAYLAND_CXX_CSD=${WAYLAND_CXX_CSD}, "
