@@ -405,6 +405,7 @@ class App {
   // ── Callbacks from CRTP handlers ──────────────────────────────────────────
   void OnXdgSurfaceConfigure(uint32_t serial);
   void OnToplevelConfigure(int32_t width, int32_t height);
+  void OnToplevelStates(const wl::ToplevelStates& states);
   void OnToplevelClose();
   void OnDecorationConfigure(uint32_t mode);
   void OnKey(const wl::KeyEvent& ev);
@@ -486,13 +487,9 @@ class App {
   bool pointer_pressed_ = false;
   uint32_t enter_serial_ = 0;  // last wl_pointer.enter serial, for set_cursor
 
-  // Always true for now.  The authoritative source is the xdg_toplevel
-  // configure `states` array (ACTIVATED), which wl::XdgToplevelHandler
-  // currently discards, so nothing can drive this yet.  Feeding it — and the
-  // matching backdrop styling — is the interactive-state work, not the
-  // interface change.  Behaviour is unchanged either way: the previous
-  // interface's SetState() was never called at all, so every plugin has always
-  // rendered its focused state.
+  // Driven by the xdg_toplevel configure `states` array, not by keyboard focus:
+  // ACTIVATED is what the compositor means by "this window is the active one",
+  // and it is what the decoration's active/backdrop styling must follow.
   bool focused_ = true;
 
   // ── Global IDs from registry scan ─────────────────────────────────────────
@@ -779,6 +776,14 @@ void App::OnToplevelConfigure(int32_t width, int32_t height) {
   }
 }
 
+// The compositor is the authority on both of these. Tracking them from our own
+// button clicks instead would be optimistic: a maximize can be refused, and can
+// equally arrive from a keybinding or a double-click we never saw.
+void App::OnToplevelStates(const wl::ToplevelStates& states) {
+  focused_ = states.activated;
+  maximized_ = states.maximized;
+}
+
 void App::OnToplevelClose() {
   running_ = false;
 }
@@ -862,13 +867,12 @@ void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
       break;
 
     case HitZone::MaximizeButton:
-      if (maximized_) {
+      // Request only. maximized_ follows the configure the compositor sends
+      // back, so a refused request does not leave us drawing the wrong icon.
+      if (maximized_)
         xdg_toplevel_.Get()->UnsetMaximized();
-        maximized_ = false;
-      } else {
+      else
         xdg_toplevel_.Get()->SetMaximized();
-        maximized_ = true;
-      }
       break;
 
     case HitZone::MinimizeButton:
