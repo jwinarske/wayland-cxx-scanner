@@ -156,9 +156,11 @@ struct ImGui_ImplWaylandCxx_Data
   bool ime_enabled = false;
 
   // Uncommitted composition text.  ImGui has no API to draw a preedit inline,
-  // so it is kept here for the application to render itself and deliberately
-  // not fed to AddInputCharacter — doing that would insert composition text
-  // that the next preedit_string is supposed to replace.
+  // and it is deliberately not fed to AddInputCharacter — that would insert
+  // composition text which the next preedit_string is supposed to replace.  It
+  // is tracked because it says whether an IME is mid-composition, which is what
+  // the keysym text path stands down on; nothing renders it today, and there is
+  // no accessor for an application to render it either.
   std::string preedit;
   int32_t preedit_cursor_begin = 0;
   int32_t preedit_cursor_end = 0;
