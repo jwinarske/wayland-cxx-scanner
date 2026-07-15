@@ -25,6 +25,13 @@ if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found()
     subdir_done()
 endif
 
+# This example exists to demonstrate client-side decoration and negotiates the
+# mode itself, so a build that asked for no decoration code at all has no use
+# for it. Skipped rather than built inert.
+if get_option('csd') == 'none'
+    subdir_done()
+endif
+
 # ── Locate system protocol XMLs ───────────────────────────────────────────────
 
 wayland_xml        = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'

@@ -122,6 +122,15 @@ void GtkCsdPlugin::SetScale(int scale_120) {
   impl_->scale_120 = scale_120;
 }
 
+const char* GtkCsdPlugin::CursorThemeName() const {
+  return impl_->backend != nullptr ? impl_->backend->CursorThemeName()
+                                   : nullptr;
+}
+
+int GtkCsdPlugin::CursorSize() const {
+  return impl_->backend != nullptr ? impl_->backend->CursorSize() : 0;
+}
+
 int GtkCsdPlugin::DoubleClickTimeMs() const {
   return impl_->backend ? impl_->backend->DoubleClickTimeMs() : 400;
 }

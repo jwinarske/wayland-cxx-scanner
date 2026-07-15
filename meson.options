@@ -50,6 +50,6 @@ option('csd_gtk', type: 'combo', choices: ['auto', 'gtk3', 'gtk4', 'disabled'],
 # downgrade, which is what lets CI pin one and build the ones that would
 # otherwise never be reached.
 option('csd', type: 'combo',
-    choices: ['ssd', 'auto', 'gtk', 'cairo', 'fallback'],
-    value: 'ssd',
-    description: 'How the xdg-csd example is decorated (ssd = compositor only, no toolkit dependency; auto = prefer the compositor, fall back to the best plugin; naming a plugin forces client-side)')
+    choices: ['none', 'ssd', 'auto', 'gtk', 'cairo', 'fallback'],
+    value: 'none',
+    description: 'How the examples are decorated. none (default) = no decoration code is built at all, for targets that will never want it; ssd = no plugin, but ask the compositor to decorate; auto = prefer the compositor, fall back to the best plugin available; naming a plugin forces client-side')

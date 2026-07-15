@@ -95,12 +95,17 @@ done
 # to the example. 'auto' additionally carries CSD_PREFER_SSD, and which plugin
 # it resolves to depends on what is installed, so it is checked for parity
 # between the two builds rather than against a fixed value.
-for pl in gtk cairo fallback ssd auto; do
+for pl in gtk cairo fallback none ssd auto; do
     case "$pl" in
-        gtk)      want=USE_GTK_CSD ;;
-        cairo)    want=USE_CAIRO_CSD ;;
-        fallback) want=USE_FALLBACK_CSD ;;
-        ssd)      want= ;;
+        # CSD_ENABLED says the decoration library is built and linked; every
+        # choice but 'none' carries it. 'none' must carry nothing at all: that
+        # is the whole point of it, and this is what proves the two builds agree
+        # on that rather than one of them quietly compiling the frame anyway.
+        gtk)      want=CSD_ENABLED,USE_GTK_CSD ;;
+        cairo)    want=CSD_ENABLED,USE_CAIRO_CSD ;;
+        fallback) want=CSD_ENABLED,USE_FALLBACK_CSD ;;
+        ssd)      want=CSD_ENABLED ;;
+        none)     want= ;;
         auto)     want=@parity-only@ ;;
     esac
 
@@ -114,12 +119,12 @@ for pl in gtk cairo fallback ssd auto; do
         || fail "CMake configure failed for csd=$pl"
     test -e "$WORK/csdc/compile_commands.json" \
         || fail "CMake wrote no compile_commands.json for csd=$pl"
-    cdef="$(grep -ohE 'USE_(GTK|CAIRO|FALLBACK)_CSD|CSD_PREFER_SSD' "$WORK/csdc/compile_commands.json" | sort -u | tr '\n' ',' || true)"
+    cdef="$(grep -ohE 'USE_(GTK|CAIRO|FALLBACK)_CSD|CSD_PREFER_SSD|CSD_ENABLED' "$WORK/csdc/compile_commands.json" | sort -u | tr '\n' ',' || true)"
     rm -rf "$WORK/csdc"
 
     meson setup "$WORK/csdm" "$ROOT" -Dcsd="$pl" -Dtests=false -Dexamples=true >/dev/null 2>&1 \
         || fail "Meson configure failed for csd=$pl"
-    mdef="$(grep -ohE 'USE_(GTK|CAIRO|FALLBACK)_CSD|CSD_PREFER_SSD' "$WORK/csdm/compile_commands.json" | sort -u | tr '\n' ',' || true)"
+    mdef="$(grep -ohE 'USE_(GTK|CAIRO|FALLBACK)_CSD|CSD_PREFER_SSD|CSD_ENABLED' "$WORK/csdm/compile_commands.json" | sort -u | tr '\n' ',' || true)"
     rm -rf "$WORK/csdm"
 
     if [ "$want" = "@parity-only@" ]; then

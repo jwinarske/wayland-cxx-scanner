@@ -89,10 +89,11 @@ endif ()
 # dependency. Same reasoning as the Skia and ImGui examples — building the
 # examples must never drag in a toolkit. 'auto' compiles the best plugin but
 # still prefers the compositor at run time; naming a plugin forces client-side.
-# 'ssd' outranks WAYLAND_CXX_CSD_GTK.
-set(WAYLAND_CXX_CSD "ssd" CACHE STRING
-    "How the xdg-csd example is decorated (ssd = compositor only, no toolkit dependency; auto = prefer compositor, fall back to best plugin; naming a plugin forces client-side)")
-set(_wlcxx_csd_choices ssd auto gtk cairo fallback)
+# 'none' and 'ssd' outrank WAYLAND_CXX_CSD_GTK: neither builds a plugin for a
+# GTK backend to be behind.
+set(WAYLAND_CXX_CSD "none" CACHE STRING
+    "How the examples are decorated. none (default) = no decoration code is built at all, for targets that will never want it; ssd = no plugin, but ask the compositor to decorate; auto = prefer compositor, fall back to best plugin; naming a plugin forces client-side")
+set(_wlcxx_csd_choices none ssd auto gtk cairo fallback)
 set_property(CACHE WAYLAND_CXX_CSD PROPERTY STRINGS ${_wlcxx_csd_choices})
 if (NOT WAYLAND_CXX_CSD IN_LIST _wlcxx_csd_choices)
     string(REPLACE ";" ", " _wlcxx_csd_list "${_wlcxx_csd_choices}")

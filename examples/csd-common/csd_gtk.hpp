@@ -94,6 +94,8 @@ class GtkCsdPlugin final : public CsdPlugin {
                                 int content_w,
                                 int content_h) const noexcept override;
 
+  [[nodiscard]] const char* CursorThemeName() const override;
+  [[nodiscard]] int CursorSize() const override;
   [[nodiscard]] int DoubleClickTimeMs() const override;
   [[nodiscard]] int DragThreshold() const override;
 

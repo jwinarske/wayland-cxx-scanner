@@ -63,21 +63,32 @@ class CursorManager {
   CursorManager(CursorManager&&) = delete;
   CursorManager& operator=(CursorManager&&) = delete;
 
-  /// Load the cursor theme (name from XCURSOR_THEME, base size from
-  /// XCURSOR_SIZE or 24, times @p scale) and create the cursor surface.  @p shm
-  /// and @p compositor are the bound wl_shm / wl_compositor proxies (e.g.
+  /// Load the cursor theme and create the cursor surface.  @p shm and @p
+  /// compositor are the bound wl_shm / wl_compositor proxies (e.g.
   /// handler.Get()->GetProxy()).  Returns false when either proxy is null, the
   /// theme cannot be loaded, or the cursor surface cannot be created; a failed
   /// Init leaves Set() a safe no-op.
+  ///
+  /// @param theme_name  The cursor theme to load, or null to fall back to
+  ///                    XCURSOR_THEME and then to the system default.  A caller
+  ///                    with a toolkit to ask should ask it: the desktop's
+  ///                    cursor theme is a user preference, and the environment
+  ///                    only carries it when something took the trouble to
+  ///                    export it.
+  /// @param base_size   The cursor size in logical pixels, or 0 to fall back to
+  ///                    XCURSOR_SIZE and then to 24.  Also a user preference.
   [[nodiscard]] bool Init(wl_proxy* shm,
                           wl_proxy* compositor,
-                          int scale = 1) noexcept {
+                          int scale = 1,
+                          const char* theme_name = nullptr,
+                          int base_size = 0) noexcept {
     Release();
     if (shm == nullptr || compositor == nullptr)
       return false;
     shm_ = shm;
     compositor_ = compositor;
     scale_ = scale > 0 ? scale : 1;
+    theme_name_ = theme_name;
 
     base_size_ = 24;
     if (const char* env = std::getenv("XCURSOR_SIZE")) {
@@ -86,6 +97,8 @@ class CursorManager {
       if (end != env && v > 0 && v <= 512)
         base_size_ = static_cast<int>(v);
     }
+    if (base_size > 0 && base_size <= 512)
+      base_size_ = base_size;  // the caller asked its toolkit; that outranks
     if (!LoadTheme())
       return false;
 
@@ -217,7 +230,10 @@ class CursorManager {
 
   [[nodiscard]] bool LoadTheme() noexcept {
     wl_cursor_theme* old = theme_;
-    const char* theme_name = std::getenv("XCURSOR_THEME");  // null → default
+    // What the caller was told by its toolkit, else the environment, else the
+    // system default.
+    const char* theme_name =
+        theme_name_ != nullptr ? theme_name_ : std::getenv("XCURSOR_THEME");
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     theme_ = wl_cursor_theme_load(theme_name, base_size_ * scale_,
                                   reinterpret_cast<wl_shm*>(shm_));
@@ -276,6 +292,7 @@ class CursorManager {
 
   wl_cursor_theme* theme_ = nullptr;
   wl_surface* surface_ = nullptr;
+  const char* theme_name_ = nullptr;  // null → XCURSOR_THEME, then default
   wl_proxy* shm_ = nullptr;  // retained for theme reloads on scale change
   wl_proxy* compositor_ =
       nullptr;  // retained (unused after Init, for symmetry)

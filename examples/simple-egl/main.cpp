@@ -6,6 +6,12 @@
 // Connects to the running compositor, creates an XDG toplevel window, and
 // renders a hue-shifting solid color via OpenGL ES 2 + EGL.
 //
+// The window is decorated by wl::csd::DecoratedWindow when the csd option built
+// a plugin and the compositor did not claim the job itself.
+//
+// Keys:  Esc  quit
+//        F    toggle fullscreen — a fullscreen window has no decoration
+//
 // Build requirements: wayland-client, wayland-egl, EGL, GLESv2.
 // Runtime requirement: a running Wayland compositor with xdg-shell support.
 
@@ -37,11 +43,17 @@ extern "C" {
 // ── Framework headers
 // ─────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
+#include <wl/cursor.hpp>
 #include <wl/display.hpp>
 #include <wl/registry.hpp>
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
+
+// The window frame. This example renders with EGL and has no CPU buffer for a
+// decoration plugin to paint into, so the frame puts the decoration on a
+// subsurface of its own and this file never sees it.
+#include "decorated_window.hpp"
 
 // ── Standard library
 // ──────────────────────────────────────────────────────────
@@ -76,6 +88,29 @@ const wl_interface& wl_compositor_traits::wl_iface() noexcept {
 }
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
+}
+
+// The window frame is a library, and this repo defines wl_iface() per consumer
+// — so it cannot define these itself without colliding with the very example
+// linking it. These are the interfaces the frame's subsurface and its SHM
+// buffers need; omitting one is a link error naming exactly what is missing.
+const wl_interface& wl_shm_traits::wl_iface() noexcept {
+  return wl_shm_interface;
+}
+const wl_interface& wl_shm_pool_traits::wl_iface() noexcept {
+  return wl_shm_pool_interface;
+}
+const wl_interface& wl_buffer_traits::wl_iface() noexcept {
+  return wl_buffer_interface;
+}
+const wl_interface& wl_subcompositor_traits::wl_iface() noexcept {
+  return wl_subcompositor_interface;
+}
+const wl_interface& wl_subsurface_traits::wl_iface() noexcept {
+  return wl_subsurface_interface;
+}
+const wl_interface& wl_region_traits::wl_iface() noexcept {
+  return wl_region_interface;
 }
 
 }  // namespace wayland::client
@@ -131,6 +166,12 @@ class WlCompositorHandler
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
+// wl_shm, for the cursor theme's buffers. The window frame binds its own for
+// the decoration; this one is the cursor's, which is the application's own
+// business — it owns the pointer, and wants a cursor over its content whether
+// or not anything decorates it.
+class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // App class
 // ══════════════════════════════════════════════════════════════════════════════
@@ -152,6 +193,19 @@ class App {
   /// Called by WlCallbackHandler::OnDone — render one frame and arm the next
   /// frame callback.
   void OnFrameReady(uint32_t time_ms) noexcept;
+
+  // Forwarded straight to the frame, which keeps the events on its own surface
+  // and ignores the rest — so there is no test to get wrong here. It drives
+  // move, resize, maximize and minimize itself; only close comes back.
+  void OnPointerEnter(const wl::PointerEvent& ev) noexcept;
+  void OnPointerLeave() noexcept;
+  void OnPointerMotion(const wl::PointerEvent& ev) noexcept;
+  void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
+  void UpdateCursor() noexcept;
+
+  /// The compositor is the authority on these, not our own button clicks: a
+  /// maximize can be refused, and can equally arrive from a keybinding.
+  void OnToplevelStates(const wl::ToplevelStates& states) noexcept;
 
  private:
   // ── Member declaration order determines RAII destruction order.
@@ -211,6 +265,14 @@ class App {
   // Seat + keyboard manager — keyboard_ inside is destroyed before seat_.
   wl::SeatManager<App> seat_;
 
+  // Cursor theme, and the wl_shm it loads through.
+  wl::WlPtr<WlShmHandler> shm_;
+  wl::CursorManager cursor_;
+
+  // The window frame. Declared after xdg_toplevel_ so it is destroyed first:
+  // it holds a subsurface of surface_ and borrows the toplevel.
+  wl::csd::DecoratedWindow window_frame_;
+
   // Frame-pacing callback — destroyed first among all WlPtrs.
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
@@ -220,6 +282,9 @@ class App {
   int width_ = 800;
   int height_ = 600;
   uint64_t frame_ = 0;
+  bool fullscreen_ = false;    // as the compositor last reported it
+  uint32_t enter_serial_ = 0;  // wl_pointer.set_cursor must carry one
+  uint32_t shm_name_ = 0, shm_ver_ = 0;
   int32_t scroll_value120_ = 0;  // accumulated scroll; 120 == one wheel notch
 
   // Globals recorded during registry scan
@@ -318,7 +383,6 @@ bool App::ScanGlobals() {
     using wl_comp = wayland::client::wl_compositor_traits;
     using xdg_base = xdg_shell::client::xdg_wm_base_traits;
     using wl_s = wayland::client::wl_seat_traits;
-
     if (iface == wl_comp::interface_name) {
       compositor_name_ = name;
       compositor_ver_ = ver;
@@ -327,6 +391,9 @@ bool App::ScanGlobals() {
       xdg_wm_base_ver_ = ver;
     } else if (iface == wl_s::interface_name) {
       seat_.Record(name, ver);
+    } else if (iface == wayland::client::wl_shm_traits::interface_name) {
+      shm_name_ = name;
+      shm_ver_ = ver;
     }
   });
 
@@ -429,6 +496,40 @@ bool App::CreateSurfaces() {
 
   xdg_toplevel_.Get()->SetTitle("simple-egl");
   xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.simple-egl");
+
+  // The cursor theme, loaded through our own wl_shm. Not fatal: a window with
+  // no cursor theme still works, it just shows whatever the compositor last
+  // set.
+  if (shm_name_ != 0) {
+    using shm_t = wayland::client::wl_shm_traits;
+    if (wl_proxy* raw = registry_.Bind<shm_t>(
+            shm_name_, std::min(shm_ver_, shm_t::version)))
+      shm_.Attach(raw);
+  }
+  if (!shm_.IsNull() &&
+      !cursor_.Init(shm_.Get()->GetProxy(), compositor_.Get()->GetProxy())) {
+    std::fprintf(stderr, "simple-egl: no cursor theme; cursors unchanged\n");
+  }
+
+  // Hand the frame the connection and the window; it binds wl_shm,
+  // wl_subcompositor and the decoration manager from a registry of its own, and
+  // settles who decorates. Which plugin exists is the csd option's business, so
+  // it is asked for rather than named here, and a null plugin is a supported
+  // answer rather than an error.
+  wl::csd::DecoratedWindow::Config cfg;
+  cfg.display = display_.Get();
+  cfg.content_surface = surface_.Get()->GetProxy();
+  cfg.xdg_surface = xdg_surface_.Get()->GetProxy();
+  cfg.xdg_toplevel = xdg_toplevel_.Get()->GetProxy();
+  cfg.seat = seat_.Seat();
+  cfg.content_width = width_;
+  cfg.content_height = height_;
+  if (!window_frame_.Init(cfg, wl::csd::MakeCsdPlugin())) {
+    std::fprintf(stderr,
+                 "simple-egl: window frame failed to build; the window will be "
+                 "undecorated\n");
+  }
+  window_frame_.SetTitle("simple-egl");
 
   surface_.Get()->Commit();
   if (!wl::RoundtripWithTimeout(display_.Get())) {
@@ -555,6 +656,18 @@ void App::RenderFrame() noexcept {
   const float r = static_cast<float>(frame_ % 256u) / 255.0f;
   glClearColor(r, 0.3f, 0.5f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
+
+  // Let the decoration's own event source run: a themed plugin follows the
+  // desktop theme, and the theme can change while we are running.
+  window_frame_.Dispatch();
+
+  // Draw the decoration before the content commit; it declares the window
+  // geometry as it goes. The subsurface is synchronized, so nothing here
+  // reaches the screen until eglSwapBuffers commits this surface — which is
+  // what keeps the frame and the content in step through a resize instead of a
+  // frame ahead of it.
+  window_frame_.Commit(width_, height_);
+
   eglSwapBuffers(egl_.display, egl_.surface);
   ++frame_;
 }
@@ -606,15 +719,61 @@ void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
 }
 
 void App::OnToplevelConfigure(const int32_t w, const int32_t h) {
-  // Clamp to a sane upper bound; a compositor bug or malicious value of
-  // INT32_MAX would otherwise be forwarded directly to wl_egl_window_resize.
-  static constexpr int32_t kMaxDim = 16384;
-  if (w > 0 && h > 0) {
-    width_ = std::min(w, kMaxDim);
-    height_ = std::min(h, kMaxDim);
-    if (egl_.window)
-      wl_egl_window_resize(egl_.window, width_, height_, 0, 0);
-  }
+  // w/h size the window geometry, not this surface, and a zero axis means the
+  // size is ours to pick. The frame owns that arithmetic and the size to
+  // restore to, because it is what declared the geometry this configure is
+  // answering — so it hands back a content size and this just uses it.
+  window_frame_.ContentSizeForConfigure(w, h, &width_, &height_);
+
+  if (egl_.window)
+    wl_egl_window_resize(egl_.window, width_, height_, 0, 0);
+}
+
+// The compositor is the authority on both of these. Tracking them from our own
+// button clicks instead would be optimistic: a maximize can be refused, and can
+// equally arrive from a keybinding or a double-click we never saw.
+void App::OnToplevelStates(const wl::ToplevelStates& states) noexcept {
+  // Kept only to know which way the F key should toggle; the frame tracks its
+  // own copy for the decoration and the restore size.
+  fullscreen_ = states.fullscreen;
+  window_frame_.SetToplevelStates(states.activated, states.maximized,
+                                  states.fullscreen);
+}
+
+// ── Pointer — forwarded whole; the frame keeps what is its own ──────────────
+
+// The frame names the shape it wants wherever the pointer is over its own
+// surface — a resize arrow on an edge, a pointer on a button — and answers null
+// everywhere else, which is where the application's own cursor applies. Setting
+// it stays here because the pointer is the application's: the frame never
+// touches a surface it does not own.
+void App::UpdateCursor() noexcept {
+  const char* name = window_frame_.CursorName();
+  cursor_.Set(seat_.Pointer(), enter_serial_,
+              name != nullptr ? name : "default");
+}
+
+void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+  enter_serial_ = ev.serial;  // set_cursor must carry the enter it answers
+  window_frame_.OnPointerEnter({ev.x, ev.y, ev.serial, ev.time, ev.surface});
+  cursor_.Reset();  // the compositor drops the cursor on enter; re-apply
+  UpdateCursor();
+}
+
+void App::OnPointerLeave() noexcept {
+  window_frame_.OnPointerLeave();
+}
+
+void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
+  window_frame_.OnPointerMotion({ev.x, ev.y, ev.serial, ev.time, nullptr});
+  UpdateCursor();
+}
+
+void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+  window_frame_.OnPointerButton({ev.serial, ev.time, ev.button, ev.state});
+  // Close is the only gesture the frame hands back: it cannot decide to exit.
+  if (window_frame_.CloseRequested())
+    running_ = false;
 }
 
 void App::OnToplevelClose() {
@@ -622,8 +781,18 @@ void App::OnToplevelClose() {
 }
 
 void App::OnKey(const wl::KeyEvent& ev) {
-  if (ev.key == KEY_ESC && ev.state == WL_KEYBOARD_KEY_STATE_PRESSED)
+  if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED)
+    return;
+  if (ev.key == KEY_ESC) {
     running_ = false;
+  } else if (ev.key == KEY_F) {
+    // Request only: fullscreen_ follows the configure the compositor sends
+    // back, so a refused request does not leave us out of step with it.
+    if (fullscreen_)
+      xdg_toplevel_.Get()->UnsetFullscreen();
+    else
+      xdg_toplevel_.Get()->SetFullscreen(nullptr);
+  }
 }
 
 void App::OnPointerAxis(const wl::PointerAxisEvent& ev) {

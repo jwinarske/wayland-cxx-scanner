@@ -92,6 +92,14 @@ class GtkThemeBackend {
 
   /// Interval within which two presses count as a double-click, in ms, as the
   /// toolkit's own settings define it.
+  /// The desktop's cursor theme name, or null when the toolkit has none set.
+  /// The returned string is owned by the backend and stays valid until the next
+  /// call.
+  [[nodiscard]] virtual const char* CursorThemeName() = 0;
+
+  /// The desktop's cursor size in logical pixels, or 0 when unset.
+  [[nodiscard]] virtual int CursorSize() = 0;
+
   [[nodiscard]] virtual int DoubleClickTimeMs() = 0;
 
   /// Distance the pointer must travel before a press becomes a drag, in px,
