@@ -188,8 +188,10 @@ void GtkCsdPlugin::RenderDecoration(uint32_t* buffer,
   cairo_restore(cr);
   cairo_destroy(cr);
 
-  if (impl_->backend == nullptr)
+  if (impl_->backend == nullptr) {
+    cairo_surface_destroy(surface);
     return;
+  }
 
   // The theme draws the decoration — drop shadow, corner radius, hairline —
   // for the whole window rect. Nothing here decides what a shadow looks like,

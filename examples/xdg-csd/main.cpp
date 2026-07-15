@@ -1001,9 +1001,18 @@ void App::OnToplevelClose() {
 // The compositor's preferred scale for this surface — which changes when the
 // window is dragged onto an output with a different scale.
 void App::OnPreferredScale(const int32_t scale_120) noexcept {
+  // Clamp to a sane upper bound before it reaches an allocation. This value is
+  // the compositor's, and it is multiplied by the surface size to get the
+  // buffer size: a bug or a silly value at the far end would otherwise overflow
+  // that product into a negative or wrapped dimension, which wl_shm would then
+  // be asked to allocate. Same reasoning as the kMaxDim clamp on configure.
+  // 8x is far past any real display and still leaves the product bounded.
+  static constexpr int32_t kMaxScale120 = 8 * wl::ScalePolicy::kUnityScale120;
+
   // Honored only with a viewport to present the physical buffer at the
   // logical size; without one the window would come out the wrong size.
-  if (!CanScale() || scale_120 <= 0 || scale_120 == scale_120_)
+  if (!CanScale() || scale_120 <= 0 || scale_120 > kMaxScale120 ||
+      scale_120 == scale_120_)
     return;
   scale_120_ = scale_120;
   if (csd_plugin_)
