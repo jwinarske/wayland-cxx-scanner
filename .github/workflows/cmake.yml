@@ -145,10 +145,21 @@ jobs:
             -DWAYLAND_CXX_SCANNER_BUILD_EXAMPLES=ON \
             -DWAYLAND_CXX_CSD=${{ matrix.csd }}
 
-      # Build only the CSD example: the point is plugin coverage, and the rest
-      # of the example surface is already built by the examples job.
+      # The point is plugin coverage, so build the examples that carry a
+      # decoration rather than the whole surface, which the examples job covers.
+      #
+      # csd=none builds no xdg-csd at all -- that example exists to demonstrate
+      # client-side decoration and negotiates the mode itself, so a build that
+      # asked for no decoration code has no use for it. simple-egl is built for
+      # every choice, and is what proves csd=none still compiles and links a
+      # window with the decoration calls compiled out.
       - name: Build
-        run: cmake --build build --target xdg_csd
+        run: |
+          if [ "${{ matrix.csd }}" = "none" ]; then
+            cmake --build build --target simple_egl
+          else
+            cmake --build build --target xdg_csd simple_egl
+          fi
 
   ime-backends:
     name: CMake IME backend (${{ matrix.ime_backend }})
