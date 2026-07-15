@@ -485,6 +485,9 @@ class App {
       -1;  // -1 ⇒ pointer not over the surface (wl::csd::InputState)
   int pointer_y_ = -1;
   bool pointer_pressed_ = false;
+  // Which zone the press landed in, so the release can be matched to it: a
+  // button only fires when press and release agree.
+  HitZone pressed_zone_ = HitZone::None;
   uint32_t enter_serial_ = 0;  // last wl_pointer.enter serial, for set_cursor
 
   // Driven by the xdg_toplevel configure `states` array, not by keyboard focus:
@@ -834,6 +837,7 @@ void App::OnPointerLeave() noexcept {
   pointer_x_ = -1;
   pointer_y_ = -1;
   pointer_pressed_ = false;
+  pressed_zone_ = HitZone::None;  // A press the pointer leaves is cancelled.
 }
 
 void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
@@ -842,29 +846,54 @@ void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
   UpdateCursor();
 }
 
+// A window button fires on release over the button it was pressed on — the
+// convention every toolkit follows, and the only one that lets a press be
+// visible as a pressed state or be taken back by releasing elsewhere.  Acting
+// on press instead makes the pressed styling unreachable, since the window is
+// already gone by the time it would be drawn.
+//
+// Move and resize are the exception: they are drags, so they start on press and
+// the compositor takes a grab from there.
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
   if (ev.button != BTN_LEFT)
     return;
 
-  // Track the held state so the plugin can render a pressed button.  No
-  // redraw is requested: the frame callback already redraws unconditionally.
-  pointer_pressed_ = (ev.state == WL_POINTER_BUTTON_STATE_PRESSED);
-
-  if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED)
-    return;
-
-  // The seat proxy backs interactive move/resize; the button serial authorizes
-  // the grab (see wl::SeatManager::Seat()).
-  wl_proxy* const seat = seat_.Seat();
   const HitZone zone = HitTest(pointer_x_, pointer_y_);
 
-  switch (zone) {
-    case HitZone::TitleBar:
-      // Interactive move.
-      if (seat != nullptr)
-        xdg_toplevel_.Get()->Move(seat, ev.serial);
-      break;
+  if (ev.state == WL_POINTER_BUTTON_STATE_PRESSED) {
+    pointer_pressed_ = true;
+    pressed_zone_ = zone;
 
+    // The seat proxy backs interactive move/resize; the button serial
+    // authorizes the grab (see wl::SeatManager::Seat()).
+    wl_proxy* const seat = seat_.Seat();
+    const uint32_t edge = wl::csd::HitZoneToResizeEdge(zone);
+
+    if (zone == HitZone::TitleBar && seat != nullptr) {
+      xdg_toplevel_.Get()->Move(seat, ev.serial);
+    } else if (edge != 0 && seat != nullptr) {
+      xdg_toplevel_.Get()->Resize(seat, ev.serial, edge);
+    } else {
+      return;  // A button: hold the press and wait for the release.
+    }
+
+    // The compositor owns the pointer for the duration of the grab and the
+    // matching release never arrives, so the press is finished with here.
+    pointer_pressed_ = false;
+    pressed_zone_ = HitZone::None;
+    return;
+  }
+
+  // ── Release ───────────────────────────────────────────────────────────────
+  const HitZone pressed = pressed_zone_;
+  pointer_pressed_ = false;
+  pressed_zone_ = HitZone::None;
+
+  // Released somewhere other than where the press landed: cancelled.
+  if (pressed != zone)
+    return;
+
+  switch (zone) {
     case HitZone::CloseButton:
       running_ = false;
       break;
@@ -882,12 +911,8 @@ void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
       xdg_toplevel_.Get()->SetMinimized();
       break;
 
-    default: {
-      // Resize zones.
-      const uint32_t edge = wl::csd::HitZoneToResizeEdge(zone);
-      if (edge != 0 && seat != nullptr)
-        xdg_toplevel_.Get()->Resize(seat, ev.serial, edge);
-    } break;
+    default:
+      break;
   }
 }
 
