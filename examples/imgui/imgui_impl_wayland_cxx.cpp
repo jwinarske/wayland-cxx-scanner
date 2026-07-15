@@ -11,9 +11,9 @@
 // wayland-cxx-scanner:
 //
 //   BackendSeat     : CWlSeat<...>       capability tracking, creates the rest
-//   BackendPointer  : CWlPointer<...>    written against the generated class
-//                                        directly; see the note on it below for
-//                                        why it is not wl::PointerHandler
+//   wl::PointerHandler<Data>             position, buttons, and the normalized
+//                                        axis family; enter/leave filtered to
+//                                        the application's surface
 //   wl::KeyboardHandler<Data>            xkbcommon keymap + timerfd key repeat,
 //                                        reused as-is from the framework
 //   wl::TouchHandler<Data>               single-touch mouse emulation hooks
@@ -96,39 +96,6 @@ struct BackendSeat : public wayland::client::CWlSeat<BackendSeat> {
   void OnName(const char* /*name*/) override {}
 };
 
-// ── BackendPointer ───────────────────────────────────────────────────────────
-// Derives from the generated CWlPointer directly rather than using the
-// framework's wl::PointerHandler.
-//
-// The original reason — that the helper left scroll at its generated no-op
-// defaults — is gone: wl::PointerHandler now normalizes the whole axis family
-// behind OnPointerAxis / OnPointerFrame, which is a straight replacement for
-// the accumulation below.
-//
-// What still blocks the swap is enter/leave: this backend must ignore any
-// surface that is not the application's, and wl::PointerEvent does not carry
-// the surface, so the filtering in OnEnter/OnLeave cannot be expressed through
-// the helper's hooks.  Adopting it means adding the surface to that event
-// first.
-struct BackendPointer : public wayland::client::CWlPointer<BackendPointer> {
-  ImGui_ImplWaylandCxx_Data* bd = nullptr;
-
-  void OnEnter(uint32_t serial,
-               wl_proxy* surface,
-               wl_fixed_t sx,
-               wl_fixed_t sy) override;
-  void OnLeave(uint32_t serial, wl_proxy* surface) override;
-  void OnMotion(uint32_t time, wl_fixed_t sx, wl_fixed_t sy) override;
-  void OnButton(uint32_t serial,
-                uint32_t time,
-                uint32_t button,
-                uint32_t state) override;
-  void OnAxis(uint32_t time, uint32_t axis, wl_fixed_t value) override;
-  void OnAxisDiscrete(uint32_t axis, int32_t discrete) override;
-  void OnAxisValue120(uint32_t axis, int32_t value120) override;
-  void OnFrame() override;
-};
-
 struct ImGui_ImplWaylandCxx_Data
 #ifdef IMGUI_IMPL_WAYLAND_CXX_HAS_IME
     : public wl::ime::TextInputListener
@@ -145,7 +112,7 @@ struct ImGui_ImplWaylandCxx_Data
   struct ShmHandler : public wayland::client::CWlShm<ShmHandler> {};
   wl::WlPtr<ShmHandler> shm;
   wl::WlPtr<wl::KeyboardHandler<ImGui_ImplWaylandCxx_Data>> keyboard;
-  wl::WlPtr<BackendPointer> pointer;
+  wl::WlPtr<wl::PointerHandler<ImGui_ImplWaylandCxx_Data>> pointer;
   wl::WlPtr<wl::TouchHandler<ImGui_ImplWaylandCxx_Data>> touch;
   wl::CursorManager cursor;
 
@@ -165,14 +132,6 @@ struct ImGui_ImplWaylandCxx_Data
   bool pointer_inside = false;
   uint32_t enter_serial = 0;
   ImGuiMouseCursor last_cursor = ImGuiMouseCursor_COUNT;  // force first apply
-
-  // Scroll accumulation, flushed on wl_pointer.frame.  Hi-res value120
-  // (v8+) wins over continuous axis within a frame; axis_discrete (v5-7)
-  // is normalized into the same v120 accumulator.
-  double axis_x = 0.0, axis_y = 0.0;  // continuous, surface units
-  double v120_x = 0.0, v120_y = 0.0;  // 120 == one detent
-  bool has_v120 = false;
-  bool pointer_frame_supported = false;  // wl_pointer v5+
 
   // Touch mouse-emulation state.
   int32_t active_touch = -1;
@@ -225,6 +184,16 @@ struct ImGui_ImplWaylandCxx_Data
   void PushImeState();
 #endif
 
+  // ── Hooks detected by wl::PointerHandler<Data> via SFINAE ────────────────
+  // The surface-carrying leave hook is the one this backend needs: a wl_pointer
+  // serves every surface on the connection, and only the application's may feed
+  // ImGui.
+  void OnPointerEnter(const wl::PointerEvent& ev);
+  void OnPointerLeave(const wl::PointerEvent& ev);
+  void OnPointerMotion(const wl::PointerEvent& ev);
+  void OnPointerButton(const wl::PointerButtonEvent& ev);
+  void OnPointerAxis(const wl::PointerAxisEvent& ev);
+
   // ── Hooks required by wl::KeyboardHandler<Data> ───────────────────────────
   void OnKey(const wl::KeyEvent& ev);
   // Optional hook, detected by KeyboardHandler via SFINAE.
@@ -238,7 +207,6 @@ struct ImGui_ImplWaylandCxx_Data
 
   // ── Internal helpers ──────────────────────────────────────────────────────
   void OnSeatCapabilities(uint32_t caps);
-  void FlushScroll();
   void UpdateModifier(uint32_t evdev_key, bool down, ImGuiIO& io);
   void ApplyMouseCursor(ImGuiMouseCursor c);
 
@@ -438,9 +406,7 @@ void ImGui_ImplWaylandCxx_Data::OnSeatCapabilities(uint32_t caps) {
             pointer,
             wl::construct<wl_pointer_traits, wl_seat_traits::Op::GetPointer>(
                 *seat.Get()))) {
-      pointer.Get()->bd = this;
-      pointer_frame_supported =
-          seat_ver >= wl_pointer_traits::Evt::Since::Frame;
+      pointer.Get()->app_ = this;
     }
   } else if (!has_ptr && !pointer.IsNull()) {
     if (seat_ver >= wl_pointer_traits::Op::Since::Release)
@@ -468,55 +434,56 @@ void ImGui_ImplWaylandCxx_Data::OnSeatCapabilities(uint32_t caps) {
 // Pointer events
 // ══════════════════════════════════════════════════════════════════════════════
 
-void BackendPointer::OnEnter(uint32_t serial,
-                             wl_proxy* surface,
-                             wl_fixed_t sx,
-                             wl_fixed_t sy) {
-  // Filter to the application surface; the cursor surface (or any other
-  // surface the app creates) must not feed ImGui.
-  if (surface != bd->surface) {
-    bd->pointer_inside = false;
+// ══════════════════════════════════════════════════════════════════════════════
+// Pointer events (delivered by wl::PointerHandler<Data>)
+//
+// The handler owns the whole axis family — continuous axis, axis_discrete on
+// seats 5-7, hi-res axis_value120 on 8 and up, accumulated per axis and batched
+// on wl_pointer.frame — and hands over one normalized event per scrolled axis.
+// ══════════════════════════════════════════════════════════════════════════════
+
+void ImGui_ImplWaylandCxx_Data::OnPointerEnter(const wl::PointerEvent& ev) {
+  // Filter to the application surface; the cursor surface (or any other surface
+  // the app creates) must not feed ImGui.
+  if (ev.surface != surface) {
+    pointer_inside = false;
     return;
   }
-  bd->pointer_inside = true;
-  bd->enter_serial = serial;
+  pointer_inside = true;
+  enter_serial = ev.serial;
 
   ImGuiIO& io = ImGui::GetIO();
   io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
-  io.AddMousePosEvent(static_cast<float>(wl_fixed_to_double(sx)),
-                      static_cast<float>(wl_fixed_to_double(sy)));
+  io.AddMousePosEvent(static_cast<float>(ev.x), static_cast<float>(ev.y));
 
-  // The compositor resets the cursor image on every enter; force a re-apply
-  // of whatever shape ImGui currently wants.
-  bd->cursor.Reset();
-  bd->last_cursor = ImGuiMouseCursor_COUNT;
+  // The compositor resets the cursor image on every enter; force a re-apply of
+  // whatever shape ImGui currently wants.
+  cursor.Reset();
+  last_cursor = ImGuiMouseCursor_COUNT;
 }
 
-void BackendPointer::OnLeave(uint32_t /*serial*/, wl_proxy* surface) {
-  if (surface != bd->surface)
+void ImGui_ImplWaylandCxx_Data::OnPointerLeave(const wl::PointerEvent& ev) {
+  if (ev.surface != surface)
     return;
-  bd->pointer_inside = false;
-  bd->cursor.Reset();
+  pointer_inside = false;
+  cursor.Reset();
   ImGui::GetIO().AddMousePosEvent(-FLT_MAX, -FLT_MAX);
 }
 
-void BackendPointer::OnMotion(uint32_t /*time*/, wl_fixed_t sx, wl_fixed_t sy) {
-  if (!bd->pointer_inside)
+void ImGui_ImplWaylandCxx_Data::OnPointerMotion(const wl::PointerEvent& ev) {
+  if (!pointer_inside)
     return;
   ImGuiIO& io = ImGui::GetIO();
   io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
-  io.AddMousePosEvent(static_cast<float>(wl_fixed_to_double(sx)),
-                      static_cast<float>(wl_fixed_to_double(sy)));
+  io.AddMousePosEvent(static_cast<float>(ev.x), static_cast<float>(ev.y));
 }
 
-void BackendPointer::OnButton(uint32_t /*serial*/,
-                              uint32_t /*time*/,
-                              uint32_t button,
-                              uint32_t state) {
-  if (!bd->pointer_inside)
+void ImGui_ImplWaylandCxx_Data::OnPointerButton(
+    const wl::PointerButtonEvent& ev) {
+  if (!pointer_inside)
     return;
   int mouse_button = -1;
-  switch (button) {
+  switch (ev.button) {
     case BTN_LEFT:
       mouse_button = 0;
       break;
@@ -538,64 +505,24 @@ void BackendPointer::OnButton(uint32_t /*serial*/,
   ImGuiIO& io = ImGui::GetIO();
   io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
   io.AddMouseButtonEvent(mouse_button,
-                         state == WL_POINTER_BUTTON_STATE_PRESSED);
+                         ev.state == WL_POINTER_BUTTON_STATE_PRESSED);
 }
 
-void BackendPointer::OnAxis(uint32_t /*time*/,
-                            uint32_t axis,
-                            wl_fixed_t value) {
-  if (!bd->pointer_inside)
+void ImGui_ImplWaylandCxx_Data::OnPointerAxis(const wl::PointerAxisEvent& ev) {
+  if (!pointer_inside)
     return;
-  const double v = wl_fixed_to_double(value);
-  if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-    bd->axis_y += v;
-  else if (axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
-    bd->axis_x += v;
-  // wl_pointer < v5 never sends frame; deliver each axis event standalone.
-  if (!bd->pointer_frame_supported)
-    bd->FlushScroll();
-}
-
-void BackendPointer::OnAxisDiscrete(uint32_t axis, int32_t discrete) {
-  // v5-7 detent count; normalize into the value120 accumulator.
-  OnAxisValue120(axis, discrete * 120);
-}
-
-void BackendPointer::OnAxisValue120(uint32_t axis, int32_t value120) {
-  if (!bd->pointer_inside)
+  // value120 is normalized across every wl_pointer version and scroll source,
+  // so one divisor serves all of them: 120 is one wheel step, which is ImGui's
+  // unit.  An axis_stop carries no distance and falls out here.
+  const auto wheel = static_cast<float>(-ev.value120 / 120.0);
+  if (wheel == 0.0f)
     return;
-  bd->has_v120 = true;
-  if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-    bd->v120_y += value120;
-  else if (axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
-    bd->v120_x += value120;
-}
-
-void BackendPointer::OnFrame() {
-  bd->FlushScroll();
-}
-
-void ImGui_ImplWaylandCxx_Data::FlushScroll() {
-  float wheel_x = 0.0f;
-  float wheel_y = 0.0f;
-  if (has_v120) {
-    // Hi-res / discrete detents: 120 == one wheel step.
-    wheel_x = static_cast<float>(-v120_x / 120.0);
-    wheel_y = static_cast<float>(-v120_y / 120.0);
-  } else {
-    // Continuous axis (touchpad two-finger scroll): libinput emits ~15
-    // surface units per wheel-click equivalent, matching the convention
-    // used by GLFW's and SDL's Wayland backends.
-    wheel_x = static_cast<float>(-axis_x / 15.0);
-    wheel_y = static_cast<float>(-axis_y / 15.0);
-  }
-  axis_x = axis_y = v120_x = v120_y = 0.0;
-  has_v120 = false;
-  if (wheel_x != 0.0f || wheel_y != 0.0f) {
-    ImGuiIO& io = ImGui::GetIO();
-    io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
-    io.AddMouseWheelEvent(wheel_x, wheel_y);
-  }
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+  if (ev.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL)
+    io.AddMouseWheelEvent(wheel, 0.0f);
+  else
+    io.AddMouseWheelEvent(0.0f, wheel);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
