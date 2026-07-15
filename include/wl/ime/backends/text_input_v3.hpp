@@ -89,10 +89,23 @@ class TextInputV3Backend : public ITextInputReceiver {
 
   // ── ITextInputReceiver
   // ──────────────────────────────────────────────────────
+
+  /// Enable, leaving the request pending until Commit() — as the v1 backend
+  /// does, and as the protocol intends.
+  ///
+  /// zwp_text_input_v3.enable resets content type, cursor rectangle and
+  /// surrounding text, and commit applies whatever is pending atomically.  So
+  /// the state a consumer wants has to be sent between the two:
+  ///
+  ///   Activate(); SetContentType(...); SetCursorRectangle(...); Commit();
+  ///
+  /// Committing inside this call would publish an enabled text input with
+  /// nothing but defaults — no cursor rectangle for an on-screen keyboard or
+  /// candidate window to anchor to — and force a second commit to correct it.
   void Activate() override {
     want_active_ = true;
-    if (entered_)
-      EnableAndCommit();
+    if (entered_ && !ti_.IsNull())
+      ti_.Get()->Enable();
   }
   void Deactivate() override {
     want_active_ = false;
@@ -111,6 +124,11 @@ class TextInputV3Backend : public ITextInputReceiver {
     ti_.Get()->SetSurroundingText(text_buf_.c_str(),
                                   static_cast<int32_t>(cursor),
                                   static_cast<int32_t>(anchor));
+  }
+  void SetTextChangeCause(ChangeCause cause) override {
+    // The facade enum mirrors v3's change_cause exactly.
+    if (!ti_.IsNull())
+      ti_.Get()->SetTextChangeCause(static_cast<uint32_t>(cause));
   }
   void SetContentType(ContentHint hint, ContentPurpose purpose) override {
     // The facade enums mirror v3's content_hint / content_purpose exactly.
@@ -143,8 +161,13 @@ class TextInputV3Backend : public ITextInputReceiver {
     void OnEnter(wl_proxy* /*surface*/) override {
       backend_->entered_ = true;
       // The field is focused now; (re)enable if the consumer asked to activate.
-      if (backend_->want_active_)
-        backend_->EnableAndCommit();
+      // Pending, like Activate(): the enable has just reset every field, so the
+      // consumer has to re-send its state from OnEnter below and Commit().
+      // Nothing else will — a compositor sends no further prompt, and a
+      // consumer driven by a UI toolkit is only called back when the toolkit's
+      // own state changes, which a focus round-trip does not.
+      if (backend_->want_active_ && !backend_->ti_.IsNull())
+        backend_->ti_.Get()->Enable();
       if (backend_->listener_)
         backend_->listener_->OnEnter();
     }
@@ -179,14 +202,6 @@ class TextInputV3Backend : public ITextInputReceiver {
   struct Manager
       : public text_input_unstable_v3::client::CZwpTextInputManagerV3<Manager> {
   };
-
-  void EnableAndCommit() noexcept {
-    if (ti_.IsNull())
-      return;
-    ti_.Get()->Enable();
-    ti_.Get()->Commit();
-    ++serial_;
-  }
 
   // Declaration order = reverse destruction order: ti_ destroyed before mgr_.
   wl::WlPtr<Manager> mgr_;

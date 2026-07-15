@@ -94,6 +94,9 @@ class TextInputV1Backend : public ITextInputReceiver {
     if (!ti_.IsNull())
       ti_.Get()->Deactivate(seat_);
   }
+  /// v1 has no set_text_change_cause: it carries no such concept, so there is
+  /// nothing to send and nothing to remember.
+  void SetTextChangeCause(ChangeCause /*cause*/) override {}
   void SetSurroundingText(std::string_view utf8,
                           uint32_t cursor,
                           uint32_t anchor) override {
