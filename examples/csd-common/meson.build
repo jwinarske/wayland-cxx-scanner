@@ -117,30 +117,89 @@ endif
 message('csd-common: CSD plugin "' + csd_choice + '" (csd=' + csd_opt +
         ', csd_gtk=' + csd_gtk_opt + ')')
 
+# ── The window frame ─────────────────────────────────────────────────────────
+#
+# DecoratedWindow puts the decoration on a subsurface, which is what lets an EGL
+# or Vulkan client be decorated at all: it has no CPU buffer of its own for a
+# plugin to paint into. It is built whatever the csd option says, because it
+# owns the decoration negotiation — with no plugin that negotiation is what asks
+# the compositor to decorate, which is precisely the csd=ssd case.
+#
+# It speaks the protocol, so unlike the plugins it needs the scanner and the
+# protocol XMLs. Every example that would take it needs those too and skips
+# itself without them, so their absence costs nothing here but the frame.
+
+wp_dep_csd         = dependency('wayland-protocols', required: false)
+wl_scanner_dep_csd = dependency('wayland-scanner',   required: false)
+
+csd_frame_ok = (wp_dep_csd.found() and wl_scanner_dep_csd.found()
+                and wayland_client_dep.found())
+
+# csd_factory is pure C++ and always builds: it is where the csd option's
+# defines are read, and reading them is the whole point of the option.
+csd_sources += 'csd_factory.cpp'
+
+if csd_frame_ok
+    csd_wayland_xml_f        = wl_scanner_dep_csd.get_variable('pkgdatadir') / 'wayland.xml'
+    csd_xdg_shell_xml_f      = wp_dep_csd.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+    csd_xdg_decoration_xml_f = wp_dep_csd.get_variable('pkgdatadir') / 'unstable/xdg-decoration/xdg-decoration-unstable-v1.xml'
+
+    csd_wayland_client_hdr = custom_target(
+        'csd-common-wayland-client-header',
+        input:   csd_wayland_xml_f,
+        output:  'wayland_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    )
+    csd_xdg_shell_client_hdr = custom_target(
+        'csd-common-xdg-shell-client-header',
+        input:   csd_xdg_shell_xml_f,
+        output:  'xdg_shell_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    )
+    csd_xdg_decoration_client_hdr = custom_target(
+        'csd-common-xdg-decoration-client-header',
+        input:   csd_xdg_decoration_xml_f,
+        output:  'xdg_decoration_unstable_v1_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
+    )
+
+    csd_sources += [
+        'decorated_window.cpp',
+        csd_wayland_client_hdr,
+        csd_xdg_shell_client_hdr,
+        csd_xdg_decoration_client_hdr,
+    ]
+    csd_deps += wayland_client_dep
+    csd_args += '-DCSD_HAVE_DECORATED_WINDOW'
+else
+    message('csd-common: no wayland-protocols/scanner — building the plugins ' +
+            'without the subsurface window frame')
+endif
+
 # ── The dependency ───────────────────────────────────────────────────────────
 
 csd_common_inc = include_directories('.')
 framework_inc_csd = include_directories('../../include')
 
-# 'ssd' and 'fallback' compile nothing, so there is no library to link — the
-# dependency then carries only the include path and the define.
-if csd_sources.length() > 0
-    csd_common_lib = static_library(
-        'csd_common',
-        sources: csd_sources,
-        include_directories: [csd_common_inc, framework_inc_csd],
-        dependencies: csd_deps,
-        cpp_args: csd_args,
-    )
-    csd_dep = declare_dependency(
-        link_with: csd_common_lib,
-        include_directories: csd_common_inc,
-        dependencies: csd_deps,
-        compile_args: csd_args,
-    )
-else
-    csd_dep = declare_dependency(
-        include_directories: csd_common_inc,
-        compile_args: csd_args,
-    )
-endif
+# There is always something to build — csd_factory at least — so unlike the
+# plugins this is unconditional. The generated headers land in this target's
+# build directory, which csd_common_inc covers, so decorated_window.cpp includes
+# them by bare name the way an example does.
+#
+# The library deliberately leaves wl_iface() for the core wl_* interfaces
+# undefined: this repo defines those per-consumer, so defining them here would
+# collide with the very example linking this. The link is what supplies them,
+# and omitting one is a link error naming exactly what is missing.
+csd_common_lib = static_library(
+    'csd_common',
+    sources: csd_sources,
+    include_directories: [csd_common_inc, framework_inc_csd],
+    dependencies: csd_deps,
+    cpp_args: csd_args,
+)
+csd_dep = declare_dependency(
+    link_with: csd_common_lib,
+    include_directories: csd_common_inc,
+    dependencies: csd_deps,
+    compile_args: csd_args,
+)
