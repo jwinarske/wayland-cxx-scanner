@@ -3,12 +3,11 @@
 //
 // csd_plugin — Abstract interface for client-side decoration (CSD) plugins.
 //
-// Following the plugin pattern from libdecor
-// (https://gitlab.freedesktop.org/libdecor/libdecor/), this header defines
-// the abstract base class that every CSD plugin must implement.  Concrete
-// plugins (e.g. the header-only fallback in <wl/csd_fallback.hpp> or the
-// GTK-themed plugin in <wl/csd_gtk.hpp>) override these virtual methods to
-// provide decoration rendering, hit-testing, and metric queries.
+// This header defines the abstract base class that every CSD plugin must
+// implement.  Concrete plugins override these virtual methods to provide
+// decoration rendering, hit-testing, and metric queries: the header-only
+// fallback in <wl/csd_fallback.hpp>, and the themed plugins, which are not
+// framework headers because they need a source file and a toolkit to link.
 //
 // A plugin owns the decoration chrome only — borders, title bar, buttons.
 // The application paints its own content into the content rectangle; the
@@ -145,8 +144,7 @@ struct InputState {
 /// Abstract base class for CSD decoration plugins.
 ///
 /// Concrete plugins override the pure virtual methods to provide
-/// decoration rendering, hit-testing, and metric queries.  The interface
-/// follows the plugin pattern used by libdecor: each plugin is a
+/// decoration rendering, hit-testing, and metric queries.  Each plugin is a
 /// self-contained module responsible for all aspects of the decoration
 /// chrome (borders, title bar, buttons) — and for nothing else.
 class CsdPlugin {

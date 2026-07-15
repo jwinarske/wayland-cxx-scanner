@@ -3,13 +3,9 @@
 //
 // csd_cairo.cpp — Cairo CSD plugin implementation.
 //
-// Uses Cairo and Pango to render libdecor-cairo style window decorations:
-// a near-black title bar with colored button backgrounds, line-art
-// symbols (close ×, maximize □/⧉, minimize ─), and centered Pango title
-// text.
-//
-// Following the plugin pattern from libdecor's Cairo plugin:
-// https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/cairo
+// Uses Cairo and Pango to render dark-themed window decorations: a
+// near-black title bar with colored button backgrounds, line-art symbols
+// (close ×, maximize □/⧉, minimize ─), and centered Pango title text.
 
 // clang-tidy: suppress diagnostics for C-API boundary code.
 // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast,

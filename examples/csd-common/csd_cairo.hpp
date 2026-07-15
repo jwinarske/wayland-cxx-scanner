@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// csd_cairo — Cairo CSD plugin (libdecor-cairo style decorations).
+// csd_cairo — Cairo CSD plugin (dark-themed decorations).
 //
-// Following the plugin pattern from libdecor's Cairo plugin
-// (https://gitlab.freedesktop.org/libdecor/libdecor/-/tree/master/src/plugins/cairo),
-// this plugin uses Cairo rendering and Pango text to produce dark-themed
+// This plugin uses Cairo rendering and Pango text to produce dark-themed
 // decorations with colored window-control buttons and line-art symbols.
 //
-// The title bar, button colors, and symbol style are taken from the
-// libdecor-cairo defaults.  Title text is rendered with Pango and centered
-// in the available space.
+// The title bar, button colors, and symbol style are fixed values chosen
+// here, not read from any theme — which is the point of it: it draws the
+// same decoration everywhere, needing nothing but Cairo and Pango.  Title
+// text is rendered with Pango and centered in the available space.
 //
 // ── Include order
 // ─────────────────────────────────────────────────────────────
@@ -35,15 +34,15 @@
 namespace wl::csd {
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CairoCsdPlugin — libdecor-cairo style CSD plugin
+// CairoCsdPlugin — dark-themed Cairo CSD plugin
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// CSD plugin that uses Cairo and Pango to render dark-themed decorations
 /// with colored window-control buttons and line-art symbols.
 ///
-/// The aesthetic follows libdecor's Cairo plugin: a near-black title bar
-/// with amber/green/orange button backgrounds and light-colored symbols.
-/// When the window loses focus the title bar and symbols dim.
+/// The aesthetic is a near-black title bar with amber/green/orange button
+/// backgrounds and light-colored symbols.  When the window loses focus the
+/// title bar and symbols dim.
 class CairoCsdPlugin final : public CsdPlugin {
  public:
   static constexpr int kShadowMargin = 24;
@@ -52,7 +51,7 @@ class CairoCsdPlugin final : public CsdPlugin {
   static constexpr int kButtonWidth = 32;
   static constexpr int kSymDim = 14;
 
-  // Colors matching libdecor-cairo defaults (ARGB8888).
+  // Colors (ARGB8888).
   static constexpr uint32_t kColTitle = 0xFF080706;
   static constexpr uint32_t kColTitleInact = 0xFF303030;
   static constexpr uint32_t kColButtonMin = 0xFFFFBB00;
