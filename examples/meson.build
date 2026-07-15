@@ -27,8 +27,8 @@ subdir('clipboard')
 # ext-data-control uses subdir_done() internally if wayland-protocols/scanner or
 # the staging ext-data-control protocol are absent.
 subdir('ext-data-control')
-# text-input uses subdir_done() internally unless ime_backend=text-input-v1 and
-# wayland-protocols/scanner are present.
+# text-input uses subdir_done() internally unless ime_backend is text-input-v1
+# or text-input-v3 and wayland-protocols/scanner are present.
 subdir('text-input')
 # xdg-csd uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.
 subdir('xdg-csd')

@@ -38,8 +38,9 @@
 // ── System headers
 // ────────────────────────────────────────────────────────────
 extern "C" {
-#include <sys/mman.h>  // memfd_create, mmap, munmap
-#include <unistd.h>    // close, ftruncate
+#include <linux/input-event-codes.h>  // KEY_ESC
+#include <sys/mman.h>                 // memfd_create, mmap, munmap
+#include <unistd.h>                   // close, ftruncate
 #include <wayland-client-protocol.h>
 }
 
@@ -72,6 +73,9 @@ const wl_interface& wl_compositor_traits::wl_iface() noexcept {
 }
 const wl_interface& wl_seat_traits::wl_iface() noexcept {
   return wl_seat_interface;
+}
+const wl_interface& wl_keyboard_traits::wl_iface() noexcept {
+  return wl_keyboard_interface;
 }
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
@@ -370,13 +374,63 @@ class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
   void OnRelease() override { busy = false; }
 };
 
+// ── WlKeyboardHandler ────────────────────────────────────────────────────────
+// Bound so that Escape can close the window.  Which path a key takes depends on
+// the backend: text-input-v1 forwards keys its IME does not consume as its own
+// keysym event, whereas v3 has no such event and every ordinary key arrives
+// here.  Escape is matched on the evdev scancode, which no keyboard layout
+// remaps, so this stays clear of xkbcommon and the keymap it would compile.
+
+class WlKeyboardHandler
+    : public wayland::client::CWlKeyboard<WlKeyboardHandler> {
+ public:
+  bool* running = nullptr;
+
+  // The protocol hands the client ownership of the keymap fd.  The keymap goes
+  // unused here, but the fd still has to be closed or one leaks on every
+  // keymap event — which the compositor resends whenever the layout changes.
+  void OnKeymap(uint32_t /*format*/, int32_t fd, uint32_t /*size*/) override {
+    close(fd);
+  }
+
+  void OnKey(uint32_t /*serial*/,
+             uint32_t /*time*/,
+             uint32_t key,
+             uint32_t state) override {
+    if (running != nullptr && state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+        key == KEY_ESC)
+      *running = false;
+  }
+};
+
 // ── WlSeatHandler ────────────────────────────────────────────────────────────
-// The text-input backend needs the wl_seat proxy for activate(); seat events
-// are not used here.
+// The text-input backend needs the wl_seat proxy for activate(); the seat also
+// supplies the keyboard that carries Escape.
 
 class WlSeatHandler : public wayland::client::CWlSeat<WlSeatHandler> {
  public:
-  void OnCapabilities(uint32_t /*caps*/) override {}
+  bool* running = nullptr;
+  uint32_t version = 0;
+
+  // Owned by the seat handler so that it is released before the seat proxy it
+  // was created from goes away.
+  wl::WlPtr<WlKeyboardHandler> keyboard;
+
+  void OnCapabilities(uint32_t caps) override {
+    using namespace wayland::client;
+    const bool has_kbd = (caps & WL_SEAT_CAPABILITY_KEYBOARD) != 0u;
+    if (has_kbd && keyboard.IsNull()) {
+      if (wl::SetupHandler(
+              keyboard, wl::construct<wl_keyboard_traits,
+                                      wl_seat_traits::Op::GetKeyboard>(*this)))
+        keyboard.Get()->running = running;
+    } else if (!has_kbd && !keyboard.IsNull()) {
+      if (version >= wl_keyboard_traits::Op::Since::Release)
+        keyboard.Get()->Release();
+      keyboard.Reset();
+    }
+  }
+
   void OnName(const char* /*name*/) override {}
 };
 
@@ -658,7 +712,7 @@ class App : public wl::ime::TextInputListener {
   //    Declared first → destroyed last; declared last → destroyed first.
   //
   //    Destruction sequence (reverse of declaration order):
-  //      seat_ (keyboard_ first, then seat_ inside) →
+  //      seat_ (its keyboard first, then the seat proxy) →
   //      xdg_toplevel_ → xdg_surface_ → xdg_wm_base_ →
   //      shm_state_ → shm_handler_ → surface_ → compositor_ →
   //      registry_ → display_
@@ -683,7 +737,8 @@ class App : public wl::ime::TextInputListener {
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
 
-  // wl_seat — bound only to obtain its proxy for text-input activate().
+  // wl_seat — supplies its proxy to text-input activate(), and owns the
+  // keyboard that Escape arrives on.
   wl::WlPtr<WlSeatHandler> seat_;
 
   // Text-input backend (selected at build time) — declared after seat_ so it
@@ -875,6 +930,10 @@ bool App::BindGlobals() {
     std::fprintf(stderr, "text-input: wl_seat bind failed\n");
     return false;
   }
+  // Set before the capabilities event is dispatched, which is what creates the
+  // keyboard.
+  seat_.Get()->running = &running_;
+  seat_.Get()->version = seat_ver_;
 
   // Text-input manager — required for this example.
   if (!text_input_mgr_name_) {
