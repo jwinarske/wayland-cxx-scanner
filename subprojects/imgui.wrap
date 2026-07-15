@@ -1,0 +1,17 @@
+[wrap-file]
+directory = imgui-1.92.8
+source_url = https://github.com/ocornut/imgui/archive/refs/tags/v1.92.8.tar.gz
+source_filename = imgui-1.92.8.tar.gz
+source_hash = fecb33d33930e12ff53a34064e9d3a06c8f7c3e04408f14cd36c80e3faac863b
+patch_directory = imgui
+
+# Fetched only when -Dimgui_examples=enabled.
+#
+# Dear ImGui ships no build system, so subprojects/packagefiles/imgui supplies
+# one.  It is deliberately not the wrapdb wrap: that one builds the OpenGL
+# renderer against desktop GL with no GLES define, and leaves its *platform*
+# backends on 'auto' — so an installed SDL3 or GLFW would be compiled in
+# silently, and the platform backend is exactly what examples/imgui replaces.
+
+[provide]
+imgui = imgui_dep
