@@ -30,6 +30,9 @@ subdir('ext-data-control')
 # text-input uses subdir_done() internally unless ime_backend is text-input-v1
 # or text-input-v3 and wayland-protocols/scanner are present.
 subdir('text-input')
+# csd-common resolves the decoration plugin into `csd_dep`; every example that
+# wants a window frame takes that dep, so it must be descended into first.
+subdir('csd-common')
 # xdg-csd uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.
 subdir('xdg-csd')
 # xdg-ssd uses subdir_done() internally if wayland-protocols/scanner/xkbcommon absent.

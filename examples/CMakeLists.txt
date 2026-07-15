@@ -213,8 +213,15 @@ if (WAYLAND_CXX_IME_BACKEND MATCHES "^text-input-v[13]$"
     wlcxx_gen(text_input text-input ${_ti_out} ${_ti_xml} TABLES)
 endif ()
 
-# ── xdg-csd — CSD plugin chosen by WAYLAND_CXX_CSD / WAYLAND_CXX_CSD_GTK ──────
-# Mirrors the Meson csd / csd_gtk combos; keep the two in lock-step.
+# ── csd-common — the decoration plugins, shared by any example wanting a frame ─
+# Mirrors examples/csd-common/meson.build; keep the two in lock-step.
+#
+# These are not framework headers: the themed plugins need a .cpp and a toolkit
+# on the link line, and the framework is header-only. Only the interface, the
+# header-only fallback and the colour helpers are installed from include/wl/.
+set(CSD_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csd-common")
+
+# ── xdg-csd — decoration chosen by WAYLAND_CXX_CSD / WAYLAND_CXX_CSD_GTK ──────
 if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
     AND TARGET PkgConfig::wayland_cursor)
     # 'ssd' outranks the GTK selection: with no plugin compiled there is no
@@ -284,7 +291,7 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
                 "WAYLAND_CXX_CSD=gtk: gtk+-3.0 not found. Install it, or pick "
                 "another plugin with WAYLAND_CXX_CSD=cairo / fallback.")
         endif ()
-        set(_csd_src  xdg-csd/csd_gtk.cpp xdg-csd/csd_gtk_backend_gtk3.cpp)
+        set(_csd_src  csd-common/csd_gtk.cpp csd-common/csd_gtk_backend_gtk3.cpp)
         set(_csd_deps PkgConfig::gtk3)
         set(_csd_defs USE_GTK_CSD)
     elseif (_csd_choice STREQUAL "cairo")
@@ -292,7 +299,7 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
             message(FATAL_ERROR
                 "WAYLAND_CXX_CSD=cairo: cairo and pangocairo are both required.")
         endif ()
-        set(_csd_src  xdg-csd/csd_cairo.cpp)
+        set(_csd_src  csd-common/csd_cairo.cpp)
         set(_csd_deps PkgConfig::cairo PkgConfig::pangocairo)
         set(_csd_defs USE_CAIRO_CSD)
     elseif (_csd_choice STREQUAL "fallback")
@@ -306,6 +313,8 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
                    "(WAYLAND_CXX_CSD=${WAYLAND_CXX_CSD}, "
                    "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK})")
     wlcxx_example(xdg_csd xdg-csd/main.cpp ${_csd_src})
+    # The themed plugins' headers live beside their sources, not in include/wl/.
+    target_include_directories(xdg_csd PRIVATE ${CSD_COMMON_DIR})
     target_link_libraries(xdg_csd PRIVATE PkgConfig::wayland_client PkgConfig::wayland_cursor PkgConfig::xkbcommon ${_csd_deps})
     if (_csd_defs)
         target_compile_definitions(xdg_csd PRIVATE ${_csd_defs})

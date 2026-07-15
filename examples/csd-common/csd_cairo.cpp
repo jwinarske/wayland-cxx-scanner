@@ -16,7 +16,7 @@
 //             cppcoreguidelines-pro-bounds-pointer-arithmetic,
 //             cppcoreguidelines-avoid-non-const-global-variables)
 
-#include <wl/csd_cairo.hpp>
+#include "csd_cairo.hpp"
 #include <wl/csd_common.hpp>
 #include <wl/scale_policy.hpp>
 

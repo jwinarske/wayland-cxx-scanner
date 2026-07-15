@@ -15,7 +15,7 @@
 // NOLINTBEGIN(cppcoreguidelines-pro-type-reinterpret-cast,
 //             cppcoreguidelines-pro-bounds-pointer-arithmetic)
 
-#include <wl/csd_gtk.hpp>
+#include "csd_gtk.hpp"
 
 #include "csd_gtk_backend.hpp"
 

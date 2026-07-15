@@ -50,14 +50,18 @@
 #include <wl/csd_plugin.hpp>
 #include <wl/cursor.hpp>
 // Exactly one plugin is compiled in, chosen by the build (the csd option), and
-// with csd=ssd there is none at all. The fallback comes along with the GTK
-// plugin regardless: it is the run-time landing spot when GTK declines to
-// start.
+// with csd=ssd there is none at all. csd_dep supplies both the define that says
+// which, and the include path for the themed plugins' headers — those are not
+// framework headers, because they need a .cpp and a toolkit that a header-only
+// framework cannot carry.
+//
+// The fallback comes along with the GTK plugin regardless: it is the run-time
+// landing spot when GTK declines to start.
 #ifdef USE_GTK_CSD
 #include <wl/csd_fallback.hpp>
-#include <wl/csd_gtk.hpp>
+#include "csd_gtk.hpp"
 #elif defined(USE_CAIRO_CSD)
-#include <wl/csd_cairo.hpp>
+#include "csd_cairo.hpp"
 #elif defined(USE_FALLBACK_CSD)
 #include <wl/csd_fallback.hpp>
 #endif
