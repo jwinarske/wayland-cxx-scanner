@@ -234,6 +234,9 @@ struct DecoratedWindow::Impl {
   int viewport_w = -1;
   int viewport_h = -1;
   int buffer_scale = 0;
+  // Latches the one warning the lossy buffer-scale fallback prints, so a scale
+  // it cannot render exactly is said once rather than every frame.
+  bool warned_inexact_scale = false;
 
   // The negotiated answer. With no decoration manager the compositor has no way
   // to say, and will not decorate — so a plugin is the only chance of a frame
@@ -689,6 +692,37 @@ void DecoratedWindow::Commit(int content_w, int content_h) {
   impl_->plugin->RenderDecoration(pixels, buf.width, sw, sh, content_w,
                                   content_h);
 
+  // Fractional-scale seam guard.
+  //
+  // The plugin cuts the content hole at the exact logical top margin. At a
+  // whole scale that lands on a pixel row; at a fractional one it lands between
+  // two — logical 47 at 1.25x is physical row 58.75 — and the opaque decoration
+  // can end a row above it (measured: solid to row 57, hole from 58.75). The
+  // content surface is a separate surface on its own subpixel phase, so it need
+  // not cover that row either, and the ~1px between the two shows the desktop
+  // through. It reads as a gap under the title bar, which is opaque and makes
+  // the clear row stark; the shadowed side edges hide theirs.
+  //
+  // Extend the decoration's last solid row down across the seam. The strip sits
+  // under the content, so it is invisible wherever the content covers and shows
+  // frame color — never the desktop — where a subpixel phase leaves it bare. A
+  // whole scale has no seam, so this only runs on a fractional one.
+  if (impl_->scale_120 % ScalePolicy::kUnityScale120 != 0) {
+    const int k = ScalePolicy::kUnityScale120;
+    const int yb = m.top * impl_->scale_120 / k;   // seam row, floor
+    const int xl = m.left * impl_->scale_120 / k;  // content left
+    const int xr = ((m.left + content_w) * impl_->scale_120 + k - 1) / k;
+    const int src = yb - 3;  // a row safely inside the opaque decoration
+    if (src >= 0 && yb + 1 < buf.height && xr <= buf.width) {
+      const uint32_t* srow = pixels + static_cast<size_t>(src) * buf.width;
+      for (int y = yb - 1; y <= yb + 1; ++y) {
+        uint32_t* drow = pixels + static_cast<size_t>(y) * buf.width;
+        for (int x = xl; x < xr; ++x)
+          drow[x] = srow[x];
+      }
+    }
+  }
+
   // The decoration sits at the negative margin: its origin is above and left of
   // the content surface's.
   if (m.left != impl_->placed_x || m.top != impl_->placed_y) {
@@ -721,6 +755,20 @@ void DecoratedWindow::Commit(int content_w, int content_h) {
     // outright, and every compositor that advertises a fractional scale also
     // offers the viewporter that answers it.
     const int n = impl_->scale_120 / ScalePolicy::kUnityScale120;
+    // A scale that is not a whole number lands here only if the compositor gave
+    // us a fractional scale but no viewporter to answer it — an odd pairing the
+    // frame cannot fix, so it says so once rather than degrade in silence.
+    if (impl_->scale_120 % ScalePolicy::kUnityScale120 != 0 &&
+        !impl_->warned_inexact_scale) {
+      impl_->warned_inexact_scale = true;
+      std::fprintf(
+          stderr,
+          "csd: fractional scale %.3g with no wp_viewporter; the "
+          "decoration falls back to buffer scale %d and is oversized "
+          "by the remainder\n",
+          static_cast<double>(impl_->scale_120) / ScalePolicy::kUnityScale120,
+          n);
+    }
     if (n >= 1 && n != impl_->buffer_scale) {
       impl_->surface.Get()->SetBufferScale(n);
       impl_->buffer_scale = n;
