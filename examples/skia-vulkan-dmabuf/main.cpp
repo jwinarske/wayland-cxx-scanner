@@ -69,6 +69,9 @@ extern "C" {
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>  // must follow xdg_shell_client.hpp
+// The window frame: decoration on a subsurface, driven by a compact wrapper
+// that also owns the cursor. Under csd=none it is empty inlines.
+#include "decorated_frame.hpp"
 
 // ── Shared scene + pacing
 // ─────────────────────────────────────────────────────
@@ -138,9 +141,9 @@ const wl_interface& wl_compositor_traits::wl_iface() noexcept {
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
 }
-const wl_interface& wl_buffer_traits::wl_iface() noexcept {
-  return wl_buffer_interface;
-}
+// wl_buffer, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface and wl_region
+// are defined inline by <decorated_frame.hpp> — the frame needs them and this
+// example's own dmabuf wl_buffers use the first.
 
 }  // namespace wayland::client
 
@@ -204,6 +207,10 @@ class WlCompositorHandler
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
+// wl_shm — this Vulkan example renders into a dmabuf and needs no shm of its
+// own, but the window frame's cursor loads its theme through one.
+class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {};
+
 // Tracks wl_buffer.release so a slot is not re-rendered while the compositor is
 // still scanning out of its dma-buf.  released_ starts true.
 class WlBufferHandler : public wayland::client::CWlBuffer<WlBufferHandler> {
@@ -246,8 +253,22 @@ class App {
   void OnXdgSurfaceConfigure(std::uint32_t serial);
   void OnToplevelConfigure(int32_t w, int32_t h);
   void OnToplevelClose() { running_ = false; }
+  // The compositor is the authority on these; the frame styles itself from
+  // them.
+  void OnToplevelStates(const wl::ToplevelStates& states) noexcept {
+    frame_.States(states.activated, states.maximized, states.fullscreen);
+  }
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameReady(std::uint32_t time_ms) noexcept;
+  // Every pointer event goes to the frame, which drives its own title bar,
+  // edges and cursor; the App's own hit test runs on top.
+  void OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerEnter(ev, seat_.Pointer());
+  }
+  void OnPointerLeave() noexcept { frame_.PointerLeave(); }
+  void OnPointerMotion(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerMotion(ev, seat_.Pointer());
+  }
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
   void OnTouchDown(const wl::TouchPoint& p) noexcept;
   void OnPresented(const wl::PresentFeedback& fb) noexcept;
@@ -265,7 +286,6 @@ class App {
  private:
   static constexpr int kDefaultWidth = 480;
   static constexpr int kDefaultHeight = 320;
-  static constexpr int kMaxDim = 16384;
   static constexpr int kNumSlots = 2;
   static constexpr int kRoundtripTimeoutMs = 5000;
 
@@ -389,6 +409,10 @@ class App {
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
   wl::SeatManager<App> seat_;
+  wl::WlPtr<WlShmHandler> shm_;  // only for the frame's cursor theme
+  // The window frame, which also owns the cursor. Declared after surface_ and
+  // xdg_toplevel_ so it is destroyed before them.
+  wl::csd::DecoratedFrame frame_;
   wl::PresentationManager<App> presentation_;
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
@@ -427,6 +451,7 @@ class App {
 #endif
 
   std::uint32_t compositor_name_ = 0, compositor_ver_ = 0;
+  std::uint32_t shm_name_ = 0, shm_ver_ = 0;
   std::uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
   std::uint32_t linux_dmabuf_name_ = 0, linux_dmabuf_ver_ = 0;
 
@@ -517,6 +542,9 @@ bool App::ScanGlobals() {
     if (iface == wl_compositor_traits::interface_name) {
       compositor_name_ = name;
       compositor_ver_ = ver;
+    } else if (iface == wl_shm_traits::interface_name) {
+      shm_name_ = name;
+      shm_ver_ = ver;
     } else if (iface == xdg_wm_base_traits::interface_name) {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
@@ -568,6 +596,13 @@ bool App::BindGlobals() {
           registry_, xdg_wm_base_, xdg_wm_base_name_, xdg_wm_base_ver_)) {
     std::fprintf(stderr, "skia-vulkan-dmabuf: xdg_wm_base bind failed\n");
     return false;
+  }
+  // wl_shm — optional; the frame's cursor loads its theme through it.
+  if (shm_name_ != 0) {
+    using shm_t = wl_shm_traits;
+    if (wl_proxy* raw = registry_.Bind<shm_t>(
+            shm_name_, std::min(shm_ver_, shm_t::version)))
+      shm_.Attach(raw);
   }
   if (!dmabuf_feedback_.Bind(registry_, this)) {
     std::fprintf(stderr,
@@ -641,6 +676,23 @@ bool App::CreateSurfaces() {
   toplevel->app_ = this;
   toplevel->SetTitle("skia-vulkan-dmabuf");
   toplevel->SetAppId("org.wayland-cxx.skia-vulkan-dmabuf");
+
+  // Hand the frame the window; it binds its own globals, settles who decorates,
+  // and loads the cursor through the app's shm + compositor. csd=none is inert.
+  wl::csd::DecoratedWindow::Config cfg;
+  cfg.display = display_.Get();
+  cfg.content_surface = surface_.Get()->GetProxy();
+  cfg.xdg_surface = xdg_surface_.Get()->GetProxy();
+  cfg.xdg_toplevel = xdg_toplevel_.Get()->GetProxy();
+  cfg.seat = seat_.Seat();
+  cfg.content_width = width_;
+  cfg.content_height = height_;
+  if (!frame_.Init(cfg, "skia-vulkan-dmabuf",
+                   shm_.IsNull() ? nullptr : shm_.Get()->GetProxy(),
+                   compositor_.Get()->GetProxy())) {
+    std::fprintf(stderr,
+                 "skia-vulkan-dmabuf: window frame failed; undecorated\n");
+  }
 
   surface_.Get()->Commit();
   if (!wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs)) {
@@ -1606,6 +1658,9 @@ void App::RenderFrame() noexcept {
                                             lo(s.release_point));
   }
 #endif
+  // Draw and commit the decoration before the content commit; its subsurface is
+  // synchronized, so its state is applied with this commit.
+  frame_.CommitBeforePresent(width_, height_);
   surface_.Get()->Commit();
 
   view_tree_.ClearDirty();
@@ -1716,14 +1771,16 @@ void App::OnXdgSurfaceConfigure(std::uint32_t /*serial*/) {
 }
 
 void App::OnToplevelConfigure(int32_t w, int32_t h) {
-  if (w > 0 && h > 0) {
-    const int nw = std::min(w, kMaxDim);
-    const int nh = std::min(h, kMaxDim);
-    if (nw != width_ || nh != height_) {
-      width_ = nw;
-      height_ = nh;
-      needs_resize_ = true;
-    }
+  // The configure carries the window-geometry size (content + decoration); the
+  // frame turns it into the content size, answering a zero axis from the size
+  // it tracks as the one to restore to.
+  int nw = width_;
+  int nh = height_;
+  frame_.ContentSize(w, h, &nw, &nh);
+  if (nw != width_ || nh != height_) {
+    width_ = nw;
+    height_ = nh;
+    needs_resize_ = true;
   }
 }
 
@@ -1742,6 +1799,10 @@ void App::OnKey(const wl::KeyEvent& ev) {
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+  // The frame gets every button first — it owns the title bar, edges and
+  // buttons on its own surface — and hands back only close.
+  if (frame_.PointerButton(ev))
+    running_ = false;
   if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED || ev.button != BTN_LEFT)
     return;
   if (view_tree_.HitTest(static_cast<SkScalar>(ev.x),

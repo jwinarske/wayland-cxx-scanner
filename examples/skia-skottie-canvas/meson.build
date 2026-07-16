@@ -110,6 +110,8 @@ executable(
         xkbcommon_dep,
         wl_cursor_dep,
         skia_demo_common_dep,
+        # The window frame (csd_dep). With csd=none this is only the header path.
+        csd_dep,
     ],
     override_options: ['cpp_std=c++20'],
     cpp_args: ['-Wno-unused-parameter'],

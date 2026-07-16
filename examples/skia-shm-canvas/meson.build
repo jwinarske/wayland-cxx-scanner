@@ -8,8 +8,12 @@
 wp_dep         = dependency('wayland-protocols', required: false)
 wl_scanner_dep = dependency('wayland-scanner',   required: false)
 xkbcommon_dep  = dependency('xkbcommon',         required: false)
+# The window frame draws a cursor over its own surface, through the framework's
+# CursorManager (<decorated_frame.hpp>), which links wayland-cursor.
+wl_cursor_dep  = dependency('wayland-cursor',    required: false)
 
-if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found())
+if not (wp_dep.found() and wl_scanner_dep.found() and xkbcommon_dep.found()
+        and wl_cursor_dep.found())
     subdir_done()
 endif
 
@@ -88,6 +92,10 @@ executable(
         wayland_client_dep,
         xkbcommon_dep,
         skia_demo_common_dep,
+        # The window frame (csd_dep). With csd=none this is only the header path
+        # and <decorated_frame.hpp> resolves to empty inlines.
+        csd_dep,
+        wl_cursor_dep,
     ],
     cpp_args: ['-Wno-unused-parameter'],
 )
