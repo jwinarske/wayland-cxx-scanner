@@ -209,6 +209,12 @@ function(wlcxx_csd exe tag)
     if (NOT WAYLAND_CXX_CSD STREQUAL "none")
         wlcxx_gen(${exe} ${tag} xdg_decoration_unstable_v1_client.hpp
                   ${XDG_DECORATION_XML})
+        # The decoration surface's viewport, for fractional scale. Generated
+        # here for the same reason as xdg-decoration: it is the frame's, not the
+        # example's. An example wanting a viewport of its own must therefore not
+        # generate a second copy into the same <tag> dir — the one from here is
+        # self-contained (TABLES) and serves both.
+        wlcxx_gen(${exe} ${tag} viewporter_client.hpp ${VIEWPORTER_XML} TABLES)
     endif ()
 endfunction()
 
@@ -382,7 +388,9 @@ if (WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommo
     wlcxx_gen(xdg_csd xdg-csd wayland_client.hpp                  ${WAYLAND_XML})
     wlcxx_gen(xdg_csd xdg-csd xdg_shell_client.hpp               ${XDG_SHELL_XML})
     # Extension protocols: TABLES keeps their headers self-contained.
-    wlcxx_gen(xdg_csd xdg-csd viewporter_client.hpp       ${VIEWPORTER_XML}       TABLES)
+    # viewporter comes from wlcxx_csd() above — this example uses it for its own
+    # content surface, but the frame needs it too, and generating a second copy
+    # into the same dir would be two rules for one output.
     wlcxx_gen(xdg_csd xdg-csd fractional_scale_client.hpp ${FRACTIONAL_SCALE_XML} TABLES)
 endif ()
 
