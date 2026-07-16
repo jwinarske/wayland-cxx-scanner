@@ -1,17 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 wayland-cxx-scanner contributors
 #
-# xdg-csd: client-side decoration example
+# xdg-csd: a decorated window, drawn with wl_shm
 #
-# Demonstrates the zxdg_decoration_manager_v1 protocol for negotiating
-# CSD vs SSD with the compositor, and renders client-side decorations
-# (title bar with window buttons, resize borders) using a CSD plugin.
-#
-# Which plugin is built is controlled by the csd / csd_gtk options; with both
-# left at 'auto' the highest-fidelity available one wins:
-#   • GTK 3 present      → GTK-themed CSD plugin (GTK + Cairo + Pango)
-#   • else Cairo present → Cairo CSD plugin (Cairo + Pango)
-#   • otherwise          → fallback flat-color CSD plugin (no deps)
+# The frame is wl::csd::DecoratedWindow, which csd_dep carries along with the
+# plugin that draws it and the xdg-decoration codegen it negotiates with. Which
+# plugin that is, is the csd / csd_gtk options' business — see
+# examples/csd-common. This example only asks for a decoration.
 
 # ── Dep checks — silently skip if anything is absent ─────────────────────────
 
@@ -36,7 +31,6 @@ endif
 
 wayland_xml        = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
 xdg_shell_xml      = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
-xdg_decoration_xml = wp_dep.get_variable('pkgdatadir') / 'unstable/xdg-decoration/xdg-decoration-unstable-v1.xml'
 viewporter_xml       = wp_dep.get_variable('pkgdatadir') / 'stable/viewporter/viewporter.xml'
 fractional_scale_xml = wp_dep.get_variable('pkgdatadir') / 'staging/fractional-scale/fractional-scale-v1.xml'
 
@@ -53,13 +47,6 @@ xdg_shell_client_hdr = custom_target(
     'xdg-csd-xdg-shell-client-header',
     input:   xdg_shell_xml,
     output:  'xdg_shell_client.hpp',
-    command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
-)
-
-xdg_decoration_client_hdr = custom_target(
-    'xdg-csd-xdg-decoration-client-header',
-    input:   xdg_decoration_xml,
-    output:  'xdg_decoration_unstable_v1_client.hpp',
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
 )
 
@@ -93,7 +80,6 @@ xdg_csd_sources = [
     'main.cpp',
     wayland_client_hdr,
     xdg_shell_client_hdr,
-    xdg_decoration_client_hdr,
     xdg_csd_viewporter_client_hdr,
     xdg_csd_fractional_scale_client_hdr,
 ]
