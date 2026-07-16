@@ -11,9 +11,12 @@ libdrm_dep     = dependency('libdrm',             required: false)
 wp_dep         = dependency('wayland-protocols',  required: false)
 wl_scanner_dep = dependency('wayland-scanner',    required: false)
 xkbcommon_dep  = dependency('xkbcommon',          required: false)
+# The window frame's cursor loads its theme through wayland-cursor.
+wl_cursor_dep  = dependency('wayland-cursor',    required: false)
 
 if not (vulkan_dep.found() and libdrm_dep.found() and wp_dep.found() and
-        wl_scanner_dep.found() and xkbcommon_dep.found())
+        wl_scanner_dep.found() and xkbcommon_dep.found()
+        and wl_cursor_dep.found())
     subdir_done()
 endif
 
@@ -98,6 +101,9 @@ executable(
         libdrm_dep,
         xkbcommon_dep,
         skia_demo_common_dep,
+        # The window frame (csd_dep). With csd=none this is only the header path.
+        csd_dep,
+        wl_cursor_dep,
     ],
     cpp_args: extra_cpp_args,
 )

@@ -31,7 +31,6 @@
 // ── Framework headers
 // ─────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
-#include <wl/cursor.hpp>
 #include <wl/display.hpp>
 #include <wl/presentation.hpp>
 #include <wl/raii.hpp>
@@ -40,6 +39,9 @@
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
+// The window frame: decoration on a subsurface, driven by a compact wrapper
+// that also owns the cursor. Under csd=none it is empty inlines.
+#include "decorated_frame.hpp"
 
 // ── Shared pacing + policy helpers
 // ─────────────────────────────────────────────
@@ -102,15 +104,8 @@ const wl_interface& wl_compositor_traits::wl_iface() noexcept {
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
 }
-const wl_interface& wl_shm_pool_traits::wl_iface() noexcept {
-  return wl_shm_pool_interface;
-}
-const wl_interface& wl_shm_traits::wl_iface() noexcept {
-  return wl_shm_interface;
-}
-const wl_interface& wl_buffer_traits::wl_iface() noexcept {
-  return wl_buffer_interface;
-}
+// wl_shm, wl_shm_pool, wl_buffer, wl_subcompositor, wl_subsurface and wl_region
+// are defined inline by <decorated_frame.hpp>.
 
 }  // namespace wayland::client
 
@@ -353,10 +348,19 @@ class App {
   // wp_presentation feedback: the frame committed for `fb.frame` turned to
   // light.  wl::PresentationManager creates the feedback when this hook exists.
   void OnPresented(const wl::PresentFeedback& fb) noexcept;
+  // The compositor is the authority on these; the frame styles itself from
+  // them.
+  void OnToplevelStates(const wl::ToplevelStates& states) noexcept {
+    frame_.States(states.activated, states.maximized, states.fullscreen);
+  }
   // Pointer/touch input (SeatManager binds the wl_pointer / wl_touch when these
-  // hooks are present).  Click or tap pauses/resumes; the enter hook caches the
-  // serial and points the cursor at the default shape via wl::CursorManager.
+  // hooks are present).  Click or tap pauses/resumes; every event also goes to
+  // the frame, which drives its own title bar, edges and cursor.
   void OnPointerEnter(const wl::PointerEvent& ev) noexcept;
+  void OnPointerLeave() noexcept { frame_.PointerLeave(); }
+  void OnPointerMotion(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerMotion(ev, seat_.Pointer());
+  }
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
   void OnTouchDown(const wl::TouchPoint& p) noexcept;
 
@@ -390,13 +394,6 @@ class App {
   [[nodiscard]] bool CanScale() const noexcept {
     return viewport_.Get()->GetProxy() != nullptr;
   }
-  // Integer cursor scale: round the fractional scale up so the cursor stays
-  // crisp (a 1.5 surface uses a 2× cursor).
-  [[nodiscard]] int CursorScale() const noexcept {
-    return (scale_120_ + wl::ScalePolicy::kUnityScale120 - 1) /
-           wl::ScalePolicy::kUnityScale120;
-  }
-
   bool EnsurePool() noexcept;
   void AdvanceClock() noexcept;
   // Seek the animation to the current playhead; returns its dirty region mapped
@@ -435,7 +432,6 @@ class App {
   wl::WlPtr<WpViewporterHandler> viewporter_;
   wl::WlPtr<WpFractionalScaleManagerHandler> fractional_manager_;
   wl::SeatManager<App> seat_;
-  wl::CursorManager cursor_;  // set_cursor for the seat's pointer (HiDPI-aware)
   wl::PresentationManager<App> presentation_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
@@ -444,6 +440,9 @@ class App {
   wl::WlPtr<WpViewportHandler> viewport_;
   wl::WlPtr<WpFractionalScaleHandler> fractional_scale_;
   wl::WlPtr<WlCallbackHandler> frame_cb_;
+  // The window frame, which also owns the cursor. Declared after surface_ and
+  // xdg_toplevel_ so it is destroyed before them.
+  wl::csd::DecoratedFrame frame_;
 
   BufferPool pool_;
 
@@ -465,7 +464,6 @@ class App {
   int pending_width_ = kDefaultWidth;
   int pending_height_ = kDefaultHeight;
   int scale_120_ = wl::ScalePolicy::kUnityScale120;
-  uint32_t enter_serial_ = 0;  // last wl_pointer.enter serial, for set_cursor
 
   demo::FramePacer pacer_;
   demo::PerfHud hud_;
@@ -654,12 +652,7 @@ bool App::BindGlobals() {
     return false;
   }
 
-  // Cursor theme (optional): points the pointer at the default shape and
-  // tracks the fractional scale for a crisp HiDPI cursor.
-  if (!cursor_.Init(shm_.Get()->GetProxy(), compositor_.Get()->GetProxy(),
-                    CursorScale())) {
-    std::fprintf(stderr, "skia-skottie-canvas: cursor theme unavailable\n");
-  }
+  // The cursor is the frame's now, loaded in frame_.Init() (CreateWindow).
   return true;
 }
 
@@ -724,6 +717,22 @@ bool App::CreateWindow() {
       return false;
     }
     fractional_scale_.Get()->app_ = this;
+  }
+
+  // Hand the frame the window; it binds its own globals, settles who decorates,
+  // and loads the cursor through the app's shm + compositor. csd=none is inert.
+  wl::csd::DecoratedWindow::Config cfg;
+  cfg.display = display_.Get();
+  cfg.content_surface = surface_.Get()->GetProxy();
+  cfg.xdg_surface = xdg_surface_.Get()->GetProxy();
+  cfg.xdg_toplevel = xdg_toplevel_.Get()->GetProxy();
+  cfg.seat = seat_.Seat();
+  cfg.content_width = width_;
+  cfg.content_height = height_;
+  if (!frame_.Init(cfg, "skia-skottie-canvas", shm_.Get()->GetProxy(),
+                   compositor_.Get()->GetProxy())) {
+    std::fprintf(stderr,
+                 "skia-skottie-canvas: window frame failed; undecorated\n");
   }
 
   surface_.Get()->Commit();
@@ -906,6 +915,9 @@ void App::CommitFrame(bool arm_callback,
   }
   if (arm_callback)
     RequestFrameCallback();
+  // Draw and commit the decoration before the content commit; its subsurface is
+  // synchronized, so it reaches the screen with this commit.
+  frame_.CommitBeforePresent(width_, height_);
   // Request presentation feedback for this content before committing it.
   presentation_.Arm(surface->GetProxy(), pacer_.frame());
   surface->Commit();
@@ -977,9 +989,10 @@ void App::RequestFrameCallback() noexcept {
 // ───────────────────────────────────────────────────────────
 
 void App::OnToplevelConfigure(int32_t width, int32_t height) noexcept {
-  // A zero dimension means "pick your own size"; keep the current one.
-  pending_width_ = width > 0 ? width : width_;
-  pending_height_ = height > 0 ? height : height_;
+  // The configure carries the window-geometry size (content + decoration); the
+  // frame turns it into the content size, answering a zero axis from the size
+  // it tracks as the one to restore to.
+  frame_.ContentSize(width, height, &pending_width_, &pending_height_);
 }
 
 void App::OnXdgSurfaceConfigure(std::uint32_t /*serial*/) {
@@ -1001,7 +1014,7 @@ void App::OnPreferredScale(int scale_120) noexcept {
   if (!CanScale() || scale_120 <= 0 || scale_120 == scale_120_)
     return;
   scale_120_ = scale_120;
-  cursor_.SetScale(CursorScale());  // keep the cursor crisp at the new scale
+  frame_.SetScale(scale_120_);  // rescales the decoration and the cursor
   geometry_dirty_ = true;
   if (!pacer_.self_paced() && !frame_pending_ && configured_)
     Produce(/*arm_callback=*/false);
@@ -1048,12 +1061,14 @@ void App::OnKey(const wl::KeyEvent& ev) {
 }
 
 void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
-  enter_serial_ = ev.serial;  // set_cursor must carry an enter serial
-  cursor_.Reset();            // the compositor resets the cursor on enter
-  cursor_.Set(seat_.Pointer(), enter_serial_, "default");
+  frame_.PointerEnter(ev, seat_.Pointer());
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+  // The frame gets every button first — it owns the title bar, edges and
+  // buttons on its own surface — and hands back only close.
+  if (frame_.PointerButton(ev))
+    running_ = false;
   if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED || ev.button != BTN_LEFT)
     return;
   paused_ = !paused_;  // click anywhere pauses/resumes
@@ -1258,8 +1273,8 @@ bool App::MainLoop() {
       {wl::FdSource{[this] { return seat_.GetRepeatFd(); },
                     [this] { seat_.DispatchRepeat(); }},
        wl::FdSource{[this] { return timer_fd_; }, [this] { OnTimerTick(); }},
-       wl::FdSource{[this] { return cursor_.FrameFd(); },
-                    [this] { cursor_.DispatchFrame(); }}});
+       wl::FdSource{[this] { return frame_.CursorFrameFd(); },
+                    [this] { frame_.DispatchCursorFrame(); }}});
   PrintPresentSummary();
   return ok;
 }

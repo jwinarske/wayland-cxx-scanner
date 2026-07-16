@@ -34,6 +34,10 @@
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
+// The window frame: decoration on a subsurface, driven by a compact wrapper.
+// Not a framework header — it needs a .cpp and a toolkit, so it comes from
+// csd_dep with the plugins. Under csd=none it is empty inlines.
+#include "decorated_frame.hpp"
 
 // ── Shared scene + policy helpers
 // ─────────────────────────────────────────────
@@ -92,15 +96,9 @@ const wl_interface& wl_compositor_traits::wl_iface() noexcept {
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
 }
-const wl_interface& wl_shm_pool_traits::wl_iface() noexcept {
-  return wl_shm_pool_interface;
-}
-const wl_interface& wl_shm_traits::wl_iface() noexcept {
-  return wl_shm_interface;
-}
-const wl_interface& wl_buffer_traits::wl_iface() noexcept {
-  return wl_buffer_interface;
-}
+// wl_shm, wl_shm_pool, wl_buffer, wl_subcompositor, wl_subsurface and wl_region
+// are defined inline by <decorated_frame.hpp> — the frame needs them and this
+// example's own SHM buffers use the first three.
 
 }  // namespace wayland::client
 
@@ -327,6 +325,11 @@ class App {
   void OnXdgSurfaceConfigure(std::uint32_t serial);
   void OnToplevelConfigure(int32_t width, int32_t height) noexcept;
   void OnToplevelClose() { running_ = false; }
+  // The compositor is the authority on these; the frame styles itself from them
+  // and needs maximized/fullscreen to size an un-maximize.
+  void OnToplevelStates(const wl::ToplevelStates& states) noexcept {
+    frame_.States(states.activated, states.maximized, states.fullscreen);
+  }
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(std::uint32_t stamp_ms) noexcept;
   void OnPreferredScale(int scale_120) noexcept;
@@ -334,7 +337,16 @@ class App {
   // light.  wl::PresentationManager creates the feedback when this hook exists.
   void OnPresented(const wl::PresentFeedback& fb) noexcept;
   // Pointer input is delivered by wl::SeatManager (it creates the wl_pointer
-  // when this hook is present); the event carries the click position.
+  // when any hook is present); every event is forwarded to the frame, which
+  // drives move/resize/buttons on its own surface, and the App's hit test runs
+  // on top.
+  void OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerEnter(ev, seat_.Pointer());
+  }
+  void OnPointerLeave() noexcept { frame_.PointerLeave(); }
+  void OnPointerMotion(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerMotion(ev, seat_.Pointer());
+  }
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
   // A touch tap on the button toggles it too (SeatManager creates the
   // wl_touch when this hook is present).
@@ -394,6 +406,10 @@ class App {
   wl::WlPtr<WpViewportHandler> viewport_;
   wl::WlPtr<WpFractionalScaleHandler> fractional_scale_;
   wl::WlPtr<WlCallbackHandler> frame_cb_;
+  // The window frame. Declared after surface_ and xdg_toplevel_ so it is
+  // destroyed before them: it holds a subsurface of surface_ and borrows the
+  // toplevel.
+  wl::csd::DecoratedFrame frame_;
 
   BufferPool pool_;
 
@@ -646,6 +662,22 @@ bool App::CreateWindow() {
     fractional_scale_.Get()->app_ = this;
   }
 
+  // Hand the frame the window; it binds its own globals and settles who
+  // decorates. csd=none makes this inert. The cursor rides the app's pointer,
+  // so it loads through the app's shm + compositor.
+  wl::csd::DecoratedWindow::Config cfg;
+  cfg.display = display_.Get();
+  cfg.content_surface = surface_.Get()->GetProxy();
+  cfg.xdg_surface = xdg_surface_.Get()->GetProxy();
+  cfg.xdg_toplevel = xdg_toplevel_.Get()->GetProxy();
+  cfg.seat = seat_.Seat();
+  cfg.content_width = width_;
+  cfg.content_height = height_;
+  if (!frame_.Init(cfg, "skia-shm-canvas", shm_.Get()->GetProxy(),
+                   compositor_.Get()->GetProxy())) {
+    std::fprintf(stderr, "skia-shm-canvas: window frame failed; undecorated\n");
+  }
+
   surface_.Get()->Commit();
   if (!wl::RoundtripWithTimeout(display_.Get())) {
     std::fprintf(stderr, "skia-shm-canvas: timed out waiting for configure\n");
@@ -726,6 +758,10 @@ void App::CommitFrame(bool arm_callback) noexcept {
   }
   if (arm_callback)
     RequestFrameCallback();
+  // Draw and commit the decoration before the content commit below; its
+  // subsurface is synchronized, so it reaches the screen with this commit and
+  // stays in step through a resize.
+  frame_.CommitBeforePresent(width_, height_);
   // Request presentation feedback for this content before committing it, so the
   // compositor reports when this exact frame turns to light.
   presentation_.Arm(surface->GetProxy(), pacer_.frame());
@@ -798,9 +834,10 @@ void App::RequestFrameCallback() noexcept {
 // ───────────────────────────────────────────────────────────
 
 void App::OnToplevelConfigure(int32_t width, int32_t height) noexcept {
-  // A zero dimension means "pick your own size"; keep the current one.
-  pending_width_ = width > 0 ? width : width_;
-  pending_height_ = height > 0 ? height : height_;
+  // The configure carries the window-geometry size (content + decoration); the
+  // frame turns it into the content size to render at, and answers a zero axis
+  // — "pick your own" — from the size it tracks as the one to restore to.
+  frame_.ContentSize(width, height, &pending_width_, &pending_height_);
 }
 
 void App::OnXdgSurfaceConfigure(std::uint32_t /*serial*/) {
@@ -822,6 +859,7 @@ void App::OnPreferredScale(int scale_120) noexcept {
   if (!CanScale() || scale_120 <= 0 || scale_120 == scale_120_)
     return;
   scale_120_ = scale_120;
+  frame_.SetScale(scale_120_);
   geometry_dirty_ = true;
   if (!pacer_.self_paced() && !frame_pending_ && configured_)
     CommitFrame(/*arm_callback=*/true);
@@ -841,6 +879,10 @@ void App::OnKey(const wl::KeyEvent& ev) {
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+  // The frame gets every button first — it owns the title bar, the edges and
+  // the buttons on its own surface — and hands back only close.
+  if (frame_.PointerButton(ev))
+    running_ = false;
   if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED || ev.button != BTN_LEFT)
     return;
   // Pointer coordinates are surface-local logical pixels — the same space the

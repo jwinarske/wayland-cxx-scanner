@@ -16,6 +16,11 @@
 #include "wayland_client.hpp"
 #include "xdg_decoration_unstable_v1_client.hpp"
 #include "xdg_shell_client.hpp"
+// Defines wl_iface() inline for the interfaces this binds (wl_subcompositor,
+// wl_subsurface, wl_shm, …). Included here so this TU emits the ones it uses;
+// an adopting example includes it via <decorated_frame.hpp> and emits the ones
+// its own content uses. See the header.
+#include "frame_wl_iface.hpp"
 
 #include <wl/client_helpers.hpp>
 #include <wl/display.hpp>

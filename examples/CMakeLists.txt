@@ -405,10 +405,15 @@ endif ()
 
 # ── xdg-simple-dmabuf-vulkan ─────────────────────────────────────────────────
 if (TARGET PkgConfig::vulkan AND TARGET PkgConfig::libdrm
-    AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon)
+    AND WAYLAND_PROTOCOLS_DIR AND WAYLAND_SCANNER_DIR AND TARGET PkgConfig::xkbcommon
+    AND TARGET PkgConfig::wayland_cursor)
     wlcxx_example(xdg_simple_dmabuf_vulkan xdg-simple-dmabuf-vulkan/main.cpp)
+    # The window frame. With csd=none this is only an include path and the
+    # example carries no decoration code at all; the cursor still loads.
+    wlcxx_csd(xdg_simple_dmabuf_vulkan xdg-simple-dmabuf-vulkan)
     target_link_libraries(xdg_simple_dmabuf_vulkan PRIVATE PkgConfig::wayland_client
-        PkgConfig::vulkan PkgConfig::libdrm PkgConfig::xkbcommon)
+        PkgConfig::vulkan PkgConfig::libdrm PkgConfig::xkbcommon
+        PkgConfig::wayland_cursor)
     wlcxx_gen(xdg_simple_dmabuf_vulkan xdg-simple-dmabuf-vulkan wayland_client.hpp    ${WAYLAND_XML})
     wlcxx_gen(xdg_simple_dmabuf_vulkan xdg-simple-dmabuf-vulkan xdg_shell_client.hpp  ${XDG_SHELL_XML})
     wlcxx_gen(xdg_simple_dmabuf_vulkan xdg-simple-dmabuf-vulkan linux_dmabuf_client.hpp ${LINUX_DMABUF_XML})

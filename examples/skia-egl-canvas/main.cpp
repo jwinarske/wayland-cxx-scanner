@@ -45,6 +45,9 @@ extern "C" {
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
+// The window frame: decoration on a subsurface, driven by a compact wrapper
+// that also owns the cursor. Under csd=none it is empty inlines.
+#include "decorated_frame.hpp"
 
 // ── Shared scene + pacing
 // ────────────────────────────────────────────────────
@@ -120,6 +123,10 @@ class WlCompositorHandler
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
+// wl_shm — this EGL example renders its content on the GPU and needs no shm of
+// its own, but the window frame's cursor loads its theme through one.
+class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // App
 // ══════════════════════════════════════════════════════════════════════════════
@@ -136,10 +143,23 @@ class App {
   void OnXdgSurfaceConfigure(std::uint32_t serial);
   void OnToplevelConfigure(int32_t w, int32_t h);
   void OnToplevelClose() { running_ = false; }
+  // The compositor is the authority on these; the frame styles itself from
+  // them.
+  void OnToplevelStates(const wl::ToplevelStates& states) noexcept {
+    frame_.States(states.activated, states.maximized, states.fullscreen);
+  }
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameReady(std::uint32_t time_ms) noexcept;
-  // Pointer input is delivered by wl::SeatManager; the event carries the click
-  // position, so the App just implements this hook.
+  // Pointer input is delivered by wl::SeatManager; every event goes to the
+  // frame, which drives its own title bar, edges and cursor, and the App's hit
+  // test runs on top.
+  void OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerEnter(ev, seat_.Pointer());
+  }
+  void OnPointerLeave() noexcept { frame_.PointerLeave(); }
+  void OnPointerMotion(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerMotion(ev, seat_.Pointer());
+  }
   void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept;
   // A touch tap on the button toggles it too.
   void OnTouchDown(const wl::TouchPoint& p) noexcept;
@@ -173,6 +193,7 @@ class App {
   wl::DisplayHandle display_;
   wl::CRegistry registry_;
   wl::WlPtr<WlCompositorHandler> compositor_;
+  wl::WlPtr<WlShmHandler> shm_;  // only for the frame's cursor theme
   wl::WlPtr<WlSurfaceHandler> surface_;
 
   // EGL state — torn down (as a member) before surface_/compositor_.
@@ -211,6 +232,9 @@ class App {
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
   wl::SeatManager<App> seat_;
   wl::PresentationManager<App> presentation_;
+  // The window frame, which also owns the cursor. Declared after surface_ and
+  // xdg_toplevel_ so it is destroyed before them.
+  wl::csd::DecoratedFrame frame_;
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
   bool running_ = true;
@@ -219,6 +243,7 @@ class App {
   int height_ = kDefaultHeight;
 
   std::uint32_t compositor_name_ = 0, compositor_ver_ = 0;
+  std::uint32_t shm_name_ = 0, shm_ver_ = 0;
   std::uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
 
   demo::SceneState scene_;
@@ -280,6 +305,9 @@ bool App::ScanGlobals() {
     if (iface == wl_compositor_traits::interface_name) {
       compositor_name_ = name;
       compositor_ver_ = ver;
+    } else if (iface == wl_shm_traits::interface_name) {
+      shm_name_ = name;
+      shm_ver_ = ver;
     } else if (iface == xdg_wm_base_traits::interface_name) {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
@@ -316,6 +344,14 @@ bool App::BindGlobals() {
           registry_, xdg_wm_base_, xdg_wm_base_name_, xdg_wm_base_ver_)) {
     std::fprintf(stderr, "skia-egl-canvas: xdg_wm_base bind failed\n");
     return false;
+  }
+  // wl_shm is optional — the frame just draws an undecorated-cursor window
+  // without it. Bind it when present, for the frame's cursor theme.
+  if (shm_name_ != 0) {
+    using shm_t = wl_shm_traits;
+    if (wl_proxy* raw = registry_.Bind<shm_t>(
+            shm_name_, std::min(shm_ver_, shm_t::version)))
+      shm_.Attach(raw);
   }
   if (!seat_.Bind(registry_, this)) {
     std::fprintf(stderr, "skia-egl-canvas: wl_seat bind failed\n");
@@ -362,6 +398,22 @@ bool App::CreateSurfaces() {
   toplevel->app_ = this;
   toplevel->SetTitle("skia-egl-canvas");
   toplevel->SetAppId("org.wayland-cxx.skia-egl-canvas");
+
+  // Hand the frame the window; it binds its own globals, settles who decorates,
+  // and loads the cursor through the app's shm + compositor. csd=none is inert.
+  wl::csd::DecoratedWindow::Config cfg;
+  cfg.display = display_.Get();
+  cfg.content_surface = surface_.Get()->GetProxy();
+  cfg.xdg_surface = xdg_surface_.Get()->GetProxy();
+  cfg.xdg_toplevel = xdg_toplevel_.Get()->GetProxy();
+  cfg.seat = seat_.Seat();
+  cfg.content_width = width_;
+  cfg.content_height = height_;
+  if (!frame_.Init(cfg, "skia-egl-canvas",
+                   shm_.IsNull() ? nullptr : shm_.Get()->GetProxy(),
+                   compositor_.Get()->GetProxy())) {
+    std::fprintf(stderr, "skia-egl-canvas: window frame failed; undecorated\n");
+  }
 
   surface_.Get()->Commit();
   if (!wl::RoundtripWithTimeout(display_.Get())) {
@@ -477,6 +529,9 @@ void App::RenderFrame() noexcept {
     gr_context_->flushAndSubmit();
   }
 
+  // Draw and commit the decoration before eglSwapBuffers commits the content;
+  // its subsurface is synchronized, so it reaches the screen with that commit.
+  frame_.CommitBeforePresent(width_, height_);
   // eglSwapBuffers performs the wl_surface.commit, so request presentation
   // feedback for this content first — it binds to the commit that follows.
   presentation_.Arm(surface_.Get()->GetProxy(), pacer_.frame());
@@ -573,13 +628,12 @@ void App::OnXdgSurfaceConfigure(std::uint32_t /*serial*/) {
 }
 
 void App::OnToplevelConfigure(int32_t w, int32_t h) {
-  static constexpr int32_t kMaxDim = 16384;
-  if (w > 0 && h > 0) {
-    width_ = std::min(w, kMaxDim);
-    height_ = std::min(h, kMaxDim);
-    if (egl_.window != nullptr)
-      wl_egl_window_resize(egl_.window, width_, height_, 0, 0);
-  }
+  // The configure size is the window geometry (content + decoration); the frame
+  // turns it into the content size, answering a zero axis from what it restores
+  // to. The EGL window is then resized to the content.
+  frame_.ContentSize(w, h, &width_, &height_);
+  if (egl_.window != nullptr)
+    wl_egl_window_resize(egl_.window, width_, height_, 0, 0);
 }
 
 void App::OnKey(const wl::KeyEvent& ev) {
@@ -594,6 +648,10 @@ void App::OnKey(const wl::KeyEvent& ev) {
 }
 
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+  // The frame gets every button first — it owns the title bar, edges and
+  // buttons on its own surface — and hands back only close.
+  if (frame_.PointerButton(ev))
+    running_ = false;
   if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED || ev.button != BTN_LEFT)
     return;
   if (view_tree_.HitTest(static_cast<SkScalar>(ev.x),

@@ -68,6 +68,9 @@ extern "C" {
 #include <wl/wl_ptr.hpp>
 // XDG interface tables + CRTP handlers.  Must follow xdg_shell_client.hpp.
 #include <wl/xdg_shell.hpp>
+// The window frame: decoration on a subsurface, driven by a compact wrapper
+// that also owns the cursor. Under csd=none it is empty inlines.
+#include "decorated_frame.hpp"
 // linux-dmabuf wl_interface tables + wl_iface() impls.  Must follow
 // linux_dmabuf_client.hpp.
 #include <wl/linux_dmabuf.hpp>
@@ -253,9 +256,9 @@ const wl_interface& wl_compositor_traits::wl_iface() noexcept {
 const wl_interface& wl_surface_traits::wl_iface() noexcept {
   return wl_surface_interface;
 }
-const wl_interface& wl_buffer_traits::wl_iface() noexcept {
-  return wl_buffer_interface;
-}
+// wl_buffer, wl_shm, wl_shm_pool, wl_subcompositor, wl_subsurface and wl_region
+// are defined inline by <decorated_frame.hpp> — the frame needs them and this
+// example's own dmabuf wl_buffers use the first.
 
 }  // namespace wayland::client
 
@@ -326,6 +329,10 @@ class WlCompositorHandler
 class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 };
 
+// wl_shm — this Vulkan example renders into a dmabuf and needs no shm of its
+// own, but the window frame's cursor loads its theme through one.
+class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {};
+
 // ── WlBufferHandler ──────────────────────────────────────────────────────────
 // Tracks wl_buffer.release so we know when the compositor is done reading the
 // DMA-BUF.  released_ starts true, so the very first RenderFrame() proceeds.
@@ -392,6 +399,24 @@ class App {
   void OnXdgSurfaceConfigure(uint32_t serial);
   void OnToplevelConfigure(int32_t w, int32_t h);
   void OnToplevelClose();
+  // The compositor is the authority on these; the frame styles itself from
+  // them.
+  void OnToplevelStates(const wl::ToplevelStates& states) noexcept {
+    frame_.States(states.activated, states.maximized, states.fullscreen);
+  }
+  // Adding these makes SeatManager bind the wl_pointer; every event goes to the
+  // frame, which drives its own title bar, edges and cursor.
+  void OnPointerEnter(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerEnter(ev, seat_.Pointer());
+  }
+  void OnPointerLeave() noexcept { frame_.PointerLeave(); }
+  void OnPointerMotion(const wl::PointerEvent& ev) noexcept {
+    frame_.PointerMotion(ev, seat_.Pointer());
+  }
+  void OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
+    if (frame_.PointerButton(ev))
+      running_ = false;
+  }
   void OnKey(const wl::KeyEvent& ev);
   /// Called by WlCallbackHandler::OnDone — render one frame and arm the next
   /// frame callback.
@@ -500,6 +525,12 @@ class App {
   // Seat + keyboard manager — keyboard_ inside is destroyed before a seat_.
   wl::SeatManager<App> seat_;
 
+  // wl_shm, only for the frame's cursor theme.
+  wl::WlPtr<WlShmHandler> shm_;
+  // The window frame, which also owns the cursor. Declared after surface_ and
+  // xdg_toplevel_ so it is destroyed before them.
+  wl::csd::DecoratedFrame frame_;
+
   // Frame-pacing callback — destroyed first among all WlPtrs.
   wl::WlPtr<WlCallbackHandler> frame_callback_;
 
@@ -521,6 +552,7 @@ class App {
 
   // Global ids recorded during the registry scan.
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
+  uint32_t shm_name_ = 0, shm_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
   uint32_t linux_dmabuf_name_ = 0, linux_dmabuf_ver_ = 0;
 
@@ -529,8 +561,6 @@ class App {
   /// Maximum DMA-BUF bind version we support (v3: format and modifier events,
   /// create_immed).  Capped regardless of what the compositor advertises.
   static constexpr uint32_t kDmaBufVersion = 3;
-  /// Maximum dimension accepted (guards against compositor sending huge sizes).
-  static constexpr int kMaxDim = 16384;
   /// Rotation step per frame (radians).  One full revolution every 2 seconds
   /// at 60 Hz, matching Weston's simple-dmabuf-vulkan animation speed.
   static constexpr float kRotStep = 2.0f * static_cast<float>(M_PI) / 120.0f;
@@ -644,6 +674,9 @@ bool App::ScanGlobals() {
     if (iface == wl_comp::interface_name) {
       compositor_name_ = name;
       compositor_ver_ = ver;
+    } else if (iface == wayland::client::wl_shm_traits::interface_name) {
+      shm_name_ = name;
+      shm_ver_ = ver;
     } else if (iface == xdg_base::interface_name) {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
@@ -744,6 +777,14 @@ bool App::BindGlobals() {
     return false;
   }
 
+  // wl_shm — optional; the frame's cursor loads its theme through it.
+  if (shm_name_ != 0) {
+    using shm_t = wayland::client::wl_shm_traits;
+    if (wl_proxy* raw = registry_.Bind<shm_t>(
+            shm_name_, std::min(shm_ver_, shm_t::version)))
+      shm_.Attach(raw);
+  }
+
   // wl_seat — optional; SeatManager::Bind() is a no-op if not advertised.
   if (!seat_.Bind(registry_, this)) {
     std::fprintf(stderr, "xdg-simple-dmabuf-vulkan: wl_seat bind failed\n");
@@ -803,6 +844,23 @@ bool App::CreateSurfaces() {
 
   xdg_toplevel_.Get()->SetTitle("xdg-simple-dmabuf-vulkan");
   xdg_toplevel_.Get()->SetAppId("org.wayland-cxx.xdg-simple-dmabuf-vulkan");
+
+  // Hand the frame the window; it binds its own globals, settles who decorates,
+  // and loads the cursor through the app's shm + compositor. csd=none is inert.
+  wl::csd::DecoratedWindow::Config cfg;
+  cfg.display = display_.Get();
+  cfg.content_surface = surface_.Get()->GetProxy();
+  cfg.xdg_surface = xdg_surface_.Get()->GetProxy();
+  cfg.xdg_toplevel = xdg_toplevel_.Get()->GetProxy();
+  cfg.seat = seat_.Seat();
+  cfg.content_width = width_;
+  cfg.content_height = height_;
+  if (!frame_.Init(cfg, "xdg-simple-dmabuf-vulkan",
+                   shm_.IsNull() ? nullptr : shm_.Get()->GetProxy(),
+                   compositor_.Get()->GetProxy())) {
+    std::fprintf(
+        stderr, "xdg-simple-dmabuf-vulkan: window frame failed; undecorated\n");
+  }
 
   // Empty commit to trigger the initial xdg_surface.configure roundtrip.
   // OnToplevelConfigure will record the compositor-suggested window size;
@@ -1577,6 +1635,9 @@ void App::RenderFrame() noexcept {
   RequestFrameCallback();
   surface_.Get()->Attach(wl_buffers_[back_].Get()->GetProxy(), 0, 0);
   surface_.Get()->Damage(0, 0, width_, height_);
+  // Draw and commit the decoration before the content commit; its subsurface is
+  // synchronized, so it reaches the screen with this commit.
+  frame_.CommitBeforePresent(width_, height_);
   surface_.Get()->Commit();
 }
 
@@ -1633,13 +1694,10 @@ void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
 }
 
 void App::OnToplevelConfigure(const int32_t w, const int32_t h) {
-  // Always record the compositor-requested dimensions.
-  // A zero value means "client may choose"; keep the current/CLI size in
-  // that case.  Capped to kMaxDim to guard against bogus values.
-  if (w > 0)
-    pending_width_ = std::min(static_cast<int>(w), kMaxDim);
-  if (h > 0)
-    pending_height_ = std::min(static_cast<int>(h), kMaxDim);
+  // The configure carries the window-geometry size (content + decoration); the
+  // frame turns it into the content size to render at, answering a zero axis
+  // from the size it tracks as the one to restore to.
+  frame_.ContentSize(w, h, &pending_width_, &pending_height_);
 }
 
 void App::OnToplevelClose() {

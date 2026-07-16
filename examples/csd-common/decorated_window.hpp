@@ -358,6 +358,8 @@ class DecoratedWindow {
   void OnPointerButton(const PointerButtonEventLite& /*ev*/) noexcept {}
 
   [[nodiscard]] bool CloseRequested() const noexcept { return false; }
+  [[nodiscard]] const char* CursorThemeName() const { return nullptr; }
+  [[nodiscard]] int CursorSize() const { return 0; }
   [[nodiscard]] const char* CursorName() const noexcept { return nullptr; }
   [[nodiscard]] uint32_t EnterSerial() const noexcept { return 0; }
   [[nodiscard]] bool OwnsSurface(const wl_proxy* /*surface*/) const noexcept {
