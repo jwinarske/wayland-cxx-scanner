@@ -38,7 +38,7 @@
 #include "wayland_client.hpp"
 #include "xdg_shell_client.hpp"
 #if defined(HAVE_DRM_SYNCOBJ)
-#include "drm_syncobj_client.hpp"  // linux_drm_syncobj_v1::client
+#include "explicit_sync.hpp"  // wl::vk::ExplicitSync (vk_common)
 #endif
 
 // ── System C headers
@@ -51,11 +51,6 @@ extern "C" {
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client-protocol.h>
-#if defined(HAVE_DRM_SYNCOBJ)
-#include <fcntl.h>     // open (render node)
-#include <sys/stat.h>  // stat, S_ISCHR
-#include <xf86drm.h>   // drmSyncobjCreate/HandleToFD/TimelineWait
-#endif
 }
 
 // ── Framework headers
@@ -223,19 +218,6 @@ class LinuxBufferParamsHandler
     : public linux_dmabuf_unstable_v1::client::CZwpLinuxBufferParamsV1<
           LinuxBufferParamsHandler> {};
 
-#if defined(HAVE_DRM_SYNCOBJ)
-// The wp_linux_drm_syncobj objects carry no events — bare handlers.
-class SyncobjManagerHandler
-    : public linux_drm_syncobj_v1::client::CWpLinuxDrmSyncobjManagerV1<
-          SyncobjManagerHandler> {};
-class SyncobjSurfaceHandler
-    : public linux_drm_syncobj_v1::client::CWpLinuxDrmSyncobjSurfaceV1<
-          SyncobjSurfaceHandler> {};
-class SyncobjTimelineHandler
-    : public linux_drm_syncobj_v1::client::CWpLinuxDrmSyncobjTimelineV1<
-          SyncobjTimelineHandler> {};
-#endif
-
 // ══════════════════════════════════════════════════════════════════════════════
 // App
 // ══════════════════════════════════════════════════════════════════════════════
@@ -310,16 +292,13 @@ class App {
   // Bring up the drm_syncobj ↔ Vulkan-timeline bridge and the syncobj surface;
   // sets use_explicit_sync_ on success.  Called after
   // InitVulkan/CreateSurfaces.
+  // Build the bridge (es_) once the device and surface exist; sets
+  // use_explicit_sync_ on success, else the CPU-fence path runs.
   void SetupExplicitSync() noexcept;
-  void DestroyExplicitSync() noexcept;
   // Queue-submit that waits the slot's flush semaphore (Skia's render) and
-  // signals the acquire timeline at a fresh point; records the slot's release
-  // point.  Returns the acquire point, or 0 on failure.
+  // signals the bridge's acquire semaphore at a fresh point; records the slot's
+  // release point.  Returns the acquire point, or 0 on failure.
   uint64_t SignalAcquire(Slot& s) noexcept;
-  // True if this slot's compositor release point has been signaled (or the slot
-  // was never committed).  Non-blocking poll — the explicit-sync analogue of
-  // wl_buffer.release.
-  [[nodiscard]] bool SlotReleased(const Slot& s) const noexcept;
 #endif
   void DestroyRenderResources();
   bool CopyToSlot(
@@ -436,18 +415,13 @@ class App {
   // support; otherwise the CPU-fence + wl_buffer.release path runs.
   bool use_explicit_sync_ = false;
 #if defined(HAVE_DRM_SYNCOBJ)
+  // Device caps decide whether the extensions the bridge needs are enabled, so
+  // this stays here — the manager name is recorded for the bridge's Create, and
+  // es_ is the bridge itself (null ⇒ CPU-fence path). All the drm-syncobj +
+  // Vulkan-timeline plumbing lives in wl::vk::ExplicitSync.
   bool syncobj_vk_ok_ = false;  // device has timeline + external-semaphore-fd
   std::uint32_t syncobj_mgr_name_ = 0, syncobj_mgr_ver_ = 0;
-  wl::WlPtr<SyncobjManagerHandler> syncobj_mgr_;
-  wl::WlPtr<SyncobjSurfaceHandler> syncobj_surface_;
-  wl::WlPtr<SyncobjTimelineHandler> acquire_tl_;  // wp timeline (acquire)
-  wl::WlPtr<SyncobjTimelineHandler> release_tl_;  // wp timeline (release)
-  int drm_fd_ = -1;                  // render node, for drmSyncobj* ioctls
-  uint32_t acquire_syncobj_ = 0;     // drm handle (Vulkan signals it)
-  uint32_t release_syncobj_ = 0;     // drm handle (compositor signals it)
-  vk::UniqueSemaphore acquire_sem_;  // Vulkan timeline ↔ acquire_syncobj_
-  uint64_t acquire_point_ = 0;       // monotonic acquire timeline value
-  uint64_t release_point_ = 0;       // monotonic release timeline value
+  std::unique_ptr<wl::vk::ExplicitSync> es_;
 #endif
 
   std::uint32_t compositor_name_ = 0, compositor_ver_ = 0;
@@ -495,7 +469,7 @@ App::~App() {
     (void)vk_.device->waitIdle();
   DestroyRenderResources();
 #if defined(HAVE_DRM_SYNCOBJ)
-  DestroyExplicitSync();
+  es_.reset();  // the bridge's dtor waits the device idle and tears down
 #endif
   gr_context_.reset();
   presentation_.Release();
@@ -558,9 +532,7 @@ bool App::ScanGlobals() {
       linux_dmabuf_ver_ = ver;
       dmabuf_feedback_.Record(name, ver);
 #if defined(HAVE_DRM_SYNCOBJ)
-    } else if (iface ==
-               linux_drm_syncobj_v1::client::
-                   wp_linux_drm_syncobj_manager_v1_traits::interface_name) {
+    } else if (iface == wl::vk::ExplicitSync::kManagerInterface) {
       syncobj_mgr_name_ = name;
       syncobj_mgr_ver_ = ver;
 #endif
@@ -619,17 +591,9 @@ bool App::BindGlobals() {
     std::fprintf(stderr, "skia-vulkan-dmabuf: wp_presentation bind failed\n");
     return false;
   }
-#if defined(HAVE_DRM_SYNCOBJ)
-  // wp_linux_drm_syncobj is optional; explicit sync stays off if absent.  Its
-  // objects have no events, so bind via Attach (no listener/_SetProxy).
-  if (syncobj_mgr_name_ != 0) {
-    using mgr_traits =
-        linux_drm_syncobj_v1::client::wp_linux_drm_syncobj_manager_v1_traits;
-    if (wl_proxy* raw = registry_.Bind<mgr_traits>(
-            syncobj_mgr_name_, std::min(syncobj_mgr_ver_, mgr_traits::version)))
-      syncobj_mgr_.Attach(raw);
-  }
-#endif
+  // wp_linux_drm_syncobj is the bridge's to bind (in SetupExplicitSync), from
+  // the manager name recorded in ScanGlobals; explicit sync stays off if the
+  // manager is absent.
   if (!wl::RoundtripWithTimeout(display_.Get(), kRoundtripTimeoutMs)) {
     std::fprintf(stderr, "skia-vulkan-dmabuf: timed out waiting for formats\n");
     return false;
@@ -1175,181 +1139,52 @@ bool App::CreateLinearSlot(Slot& s) noexcept {
 }
 
 #if defined(HAVE_DRM_SYNCOBJ)
-namespace {
-// Resolve a DRM major:minor to its /dev/dri node path (empty if none).
-std::string DrmNodePath(unsigned major_n, unsigned minor_n) {
-  std::error_code ec;
-  for (const std::filesystem::directory_entry& e :
-       std::filesystem::directory_iterator("/dev/dri", ec)) {
-    struct stat st{};
-    if (::stat(e.path().c_str(), &st) == 0 && S_ISCHR(st.st_mode) &&
-        major(st.st_rdev) == major_n && minor(st.st_rdev) == minor_n)
-      return e.path().string();
-  }
-  return {};
-}
-}  // namespace
-
-// Bring up the drm_syncobj ↔ Vulkan-timeline bridge and the syncobj surface.
-// Any failure leaves use_explicit_sync_ false (the CPU-fence path runs).
+// Bring up the explicit-sync bridge for our surface. Its whole implementation
+// -- the DRM syncobjs, the Vulkan timeline import, the protocol objects --
+// lives in wl::vk::ExplicitSync; a null return leaves use_explicit_sync_ false
+// and the CPU-fence path runs. The device was created with the required
+// extensions when syncobj_vk_ok_ (InitVulkan), which the bridge relies on.
 void App::SetupExplicitSync() noexcept {
-  using namespace linux_drm_syncobj_v1::client;
-  using mgr = wp_linux_drm_syncobj_manager_v1_traits;
-
   if (std::getenv("SKIA_VULKAN_DMABUF_NO_EXPLICIT_SYNC") != nullptr)
     return;
-  if (syncobj_mgr_.IsNull() || !syncobj_vk_ok_)
+  if (!syncobj_vk_ok_ || syncobj_mgr_name_ == 0)
     return;
-
-  // Open the Vulkan device's DRM render node for the syncobj ioctls.
-  vk::PhysicalDeviceDrmPropertiesEXT drm{};
-  vk::PhysicalDeviceProperties2 p2{};
-  p2.pNext = &drm;
-  vk_.phys_dev.getProperties2(&p2);
-  const std::string node =
-      drm.hasRender ? DrmNodePath(static_cast<unsigned>(drm.renderMajor),
-                                  static_cast<unsigned>(drm.renderMinor))
-                    : std::string{};
-  if (node.empty())
-    return;
-  drm_fd_ = ::open(node.c_str(), O_RDWR | O_CLOEXEC);
-  if (drm_fd_ < 0)
-    return;
-
-  if (drmSyncobjCreate(drm_fd_, 0, &acquire_syncobj_) != 0 ||
-      drmSyncobjCreate(drm_fd_, 0, &release_syncobj_) != 0) {
-    DestroyExplicitSync();
+  std::string err;
+  es_ = wl::vk::ExplicitSync::Create(
+      static_cast<VkPhysicalDevice>(vk_.phys_dev),
+      static_cast<VkDevice>(*vk_.device), registry_, syncobj_mgr_name_,
+      syncobj_mgr_ver_, display_.Get(), surface_.Get()->GetProxy(), err);
+  if (es_ == nullptr) {
+    std::fprintf(stderr, "skia-vulkan-dmabuf: explicit sync unavailable (%s)\n",
+                 err.c_str());
     return;
   }
-
-  // Import both syncobjs into the compositor as timelines.  Keep the fds until
-  // after a flush so libwayland can send them, then close.
-  int afd = -1;
-  int rfd = -1;
-  if (drmSyncobjHandleToFD(drm_fd_, acquire_syncobj_, &afd) != 0 ||
-      drmSyncobjHandleToFD(drm_fd_, release_syncobj_, &rfd) != 0) {
-    if (afd >= 0)
-      ::close(afd);
-    DestroyExplicitSync();
-    return;
-  }
-  // Timelines have no events → Attach, not SetupHandler.
-  wl_proxy* araw =
-      wl::construct<wp_linux_drm_syncobj_timeline_v1_traits,
-                    mgr::Op::ImportTimeline>(*syncobj_mgr_.Get(), afd);
-  wl_proxy* rraw =
-      wl::construct<wp_linux_drm_syncobj_timeline_v1_traits,
-                    mgr::Op::ImportTimeline>(*syncobj_mgr_.Get(), rfd);
-  if (araw != nullptr)
-    acquire_tl_.Attach(araw);
-  if (rraw != nullptr)
-    release_tl_.Attach(rraw);
-  wl_display_flush(display_.Get());
-  ::close(afd);
-  ::close(rfd);
-  if (araw == nullptr || rraw == nullptr) {
-    DestroyExplicitSync();
-    return;
-  }
-
-  // Import the acquire syncobj into Vulkan as a timeline semaphore so a queue
-  // submit can signal it (the compositor waits on the same syncobj point).
-  vk::SemaphoreTypeCreateInfo tci{vk::SemaphoreType::eTimeline, 0};
-  vk::SemaphoreCreateInfo sci{};
-  sci.setPNext(&tci);
-  auto sem_rv = vk_.device->createSemaphoreUnique(sci);
-  if (!VkOk(sem_rv.result, "vkCreateSemaphore (timeline)")) {
-    DestroyExplicitSync();
-    return;
-  }
-  acquire_sem_ = std::move(sem_rv.value);
-
-  auto import_sem_fd = reinterpret_cast<PFN_vkImportSemaphoreFdKHR>(
-      vkGetDeviceProcAddr(*vk_.device, "vkImportSemaphoreFdKHR"));
-  int vk_afd = -1;
-  if (import_sem_fd == nullptr ||
-      drmSyncobjHandleToFD(drm_fd_, acquire_syncobj_, &vk_afd) != 0) {
-    DestroyExplicitSync();
-    return;
-  }
-  const VkImportSemaphoreFdInfoKHR imp{
-      VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR,
-      nullptr,
-      *acquire_sem_,
-      0,  // permanent import: Vulkan takes ownership of vk_afd
-      VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT,
-      vk_afd};
-  if (import_sem_fd(*vk_.device, &imp) != VK_SUCCESS) {
-    ::close(vk_afd);
-    DestroyExplicitSync();
-    return;
-  }
-
-  // Bind the syncobj surface so we can set acquire/release points per commit.
-  wl_proxy* sraw = wl::construct<wp_linux_drm_syncobj_surface_v1_traits,
-                                 mgr::Op::GetSurface>(
-      *syncobj_mgr_.Get(), surface_.Get()->GetProxy());
-  if (sraw == nullptr) {
-    DestroyExplicitSync();
-    return;
-  }
-  syncobj_surface_.Attach(sraw);
   use_explicit_sync_ = true;
 }
 
-void App::DestroyExplicitSync() noexcept {
-  use_explicit_sync_ = false;
-  if (vk_.device)
-    (void)vk_.device->waitIdle();
-  acquire_sem_.reset();
-  syncobj_surface_.Reset();
-  acquire_tl_.Reset();
-  release_tl_.Reset();
-  if (drm_fd_ >= 0) {
-    if (acquire_syncobj_ != 0)
-      drmSyncobjDestroy(drm_fd_, acquire_syncobj_);
-    if (release_syncobj_ != 0)
-      drmSyncobjDestroy(drm_fd_, release_syncobj_);
-    ::close(drm_fd_);
-    drm_fd_ = -1;
-  }
-  acquire_syncobj_ = 0;
-  release_syncobj_ = 0;
-}
-
+// Queue-submit that waits the slot's flush semaphore (Skia's render) and
+// signals the bridge's acquire semaphore at this frame's point; records the
+// slot's release point. Returns the acquire point, or 0 on failure.
 uint64_t App::SignalAcquire(Slot& s) noexcept {
-  const uint64_t acq = ++acquire_point_;
-  s.release_point = ++release_point_;
+  const wl::vk::ExplicitSync::FramePoints pts = es_->NextFrame();
+  s.release_point = pts.release;
   const vk::PipelineStageFlags wait_stage =
       vk::PipelineStageFlagBits::eAllCommands;
   uint64_t wait_val = 0;  // ignored for the binary flush semaphore
+  const vk::Semaphore acquire_sem(es_->acquire_semaphore());
   vk::TimelineSemaphoreSubmitInfo tl{};
   tl.waitSemaphoreValueCount = 1;
   tl.pWaitSemaphoreValues = &wait_val;
   tl.signalSemaphoreValueCount = 1;
-  tl.pSignalSemaphoreValues = &acq;
+  tl.pSignalSemaphoreValues = &pts.acquire;
   vk::SubmitInfo si{};
   si.setWaitSemaphores(*s.flush_sem);
   si.setWaitDstStageMask(wait_stage);
-  si.setSignalSemaphores(*acquire_sem_);
+  si.setSignalSemaphores(acquire_sem);
   si.setPNext(&tl);
   if (!VkOk(vk_.queue.submit(si), "vkQueueSubmit (acquire)"))
     return 0;
-  return acq;
-}
-
-// Non-blocking poll of this slot's compositor release point — the explicit-sync
-// analogue of wl_buffer.release.  True when the compositor is done reading (or
-// the slot has never been committed).
-bool App::SlotReleased(const Slot& s) const noexcept {
-  if (s.release_point == 0)
-    return true;
-  uint32_t handle = release_syncobj_;
-  uint64_t point = s.release_point;
-  const int r =
-      drmSyncobjTimelineWait(drm_fd_, &handle, &point, 1, /*timeout_nsec=*/0,
-                             DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, nullptr);
-  return r == 0;
+  return pts.acquire;
 }
 #endif  // HAVE_DRM_SYNCOBJ
 
@@ -1542,7 +1377,8 @@ void App::RenderFrame() noexcept {
   // Compositor still reading this slot? Drop the frame.  Explicit sync polls
   // the release point; otherwise the wl_buffer.release flag.
 #if defined(HAVE_DRM_SYNCOBJ)
-  if (use_explicit_sync_ ? !SlotReleased(s) : !s.buffer.Get()->released_)
+  if (use_explicit_sync_ ? !es_->SlotReleased(s.release_point)
+                         : !s.buffer.Get()->released_)
     return;
 #else
   if (!s.buffer.Get()->released_)
@@ -1645,18 +1481,9 @@ void App::RenderFrame() noexcept {
   surface_.Get()->Attach(s.buffer.Get()->GetProxy(), 0, 0);
   SubmitDamage();
 #if defined(HAVE_DRM_SYNCOBJ)
-  if (use_explicit_sync_) {
+  if (use_explicit_sync_)
     // Points are per-commit and must be set between attach and commit.
-    const auto hi = [](uint64_t v) { return static_cast<uint32_t>(v >> 32u); };
-    const auto lo = [](uint64_t v) {
-      return static_cast<uint32_t>(v & 0xffffffffu);
-    };
-    syncobj_surface_.Get()->SetAcquirePoint(acquire_tl_.Get()->GetProxy(),
-                                            hi(acquire_pt), lo(acquire_pt));
-    syncobj_surface_.Get()->SetReleasePoint(release_tl_.Get()->GetProxy(),
-                                            hi(s.release_point),
-                                            lo(s.release_point));
-  }
+    es_->SetSurfacePoints({acquire_pt, s.release_point});
 #endif
   // Draw and commit the decoration before the content commit; its subsurface is
   // synchronized, so its state is applied with this commit.

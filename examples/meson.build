@@ -6,6 +6,10 @@
 # of them.
 subdir('csd-common')
 
+# vk-common resolves the Vulkan explicit-sync helper into `vk_common_dep`, taken
+# by the Vulkan examples; descended into before them for the same reason.
+subdir('vk-common')
+
 subdir('minimal')
 # simple-egl uses subdir_done() internally if EGL/GLES/wayland-egl deps absent.
 subdir('simple-egl')
