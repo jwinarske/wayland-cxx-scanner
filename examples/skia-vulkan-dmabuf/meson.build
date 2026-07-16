@@ -59,31 +59,17 @@ presentation_time_client_hdr = custom_target(
               '@INPUT@', '@OUTPUT@'],
 )
 
-# ── Optional: explicit sync (wp_linux_drm_syncobj, staging) ────────────────────
-# Only when the host's wayland-protocols ships it; otherwise the CPU-fence path
-# is the only sync path (HAVE_DRM_SYNCOBJ unset).
-_fs = import('fs')
-drm_syncobj_xml = wp_dep.get_variable('pkgdatadir') / 'staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml'
-extra_sources  = []
-extra_cpp_args = ['-Wno-unused-parameter']
-if _fs.exists(drm_syncobj_xml)
-    drm_syncobj_client_hdr = custom_target(
-        'skia-vulkan-dmabuf-drm-syncobj-client-header',
-        input:   drm_syncobj_xml,
-        output:  'drm_syncobj_client.hpp',
-        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
-                  '@INPUT@', '@OUTPUT@'],
-    )
-    extra_sources  += [drm_syncobj_client_hdr]
-    extra_cpp_args += ['-DHAVE_DRM_SYNCOBJ=1']
-endif
-
 # ── Include paths ─────────────────────────────────────────────────────────────
 
 framework_inc = include_directories('../../include')
 generated_inc = include_directories('.')
 
 # ── Executable ────────────────────────────────────────────────────────────────
+#
+# Explicit sync (wp_linux_drm_syncobj) is vk_common_dep's: it generates the
+# staging protocol, builds the bridge, and defines HAVE_DRM_SYNCOBJ when the host
+# ships it. Absent, vk_common_dep is header-path-only and this falls back to the
+# CPU-fence present path.
 
 executable(
     'skia_vulkan_dmabuf',
@@ -93,7 +79,7 @@ executable(
         xdg_shell_client_hdr,
         linux_dmabuf_client_hdr,
         presentation_time_client_hdr,
-    ] + extra_sources,
+    ],
     include_directories: [framework_inc, generated_inc],
     dependencies: [
         wayland_client_dep,
@@ -104,6 +90,8 @@ executable(
         # The window frame (csd_dep). With csd=none this is only the header path.
         csd_dep,
         wl_cursor_dep,
+        # The explicit-sync bridge, and HAVE_DRM_SYNCOBJ when available.
+        vk_common_dep,
     ],
-    cpp_args: extra_cpp_args,
+    cpp_args: ['-Wno-unused-parameter'],
 )
