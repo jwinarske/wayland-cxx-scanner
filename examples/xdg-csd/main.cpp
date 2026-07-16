@@ -1,32 +1,25 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 wayland-cxx-scanner contributors
 //
-// xdg-csd — Client-Side Decoration example with plugin architecture
+// xdg-csd — a decorated window, drawn with wl_shm
 //
-// Demonstrates the zxdg_decoration_manager_v1 protocol for negotiating
-// CSD vs SSD with the compositor, and renders client-side decorations
-// (title bar, window buttons, resize borders) using a pluggable CSD
-// rendering backend:
-//   • GtkCsdPlugin      — decorations rendered by GTK's own theming (optional)
-//   • CairoCsdPlugin    — Cairo + Pango decorations (optional)
-//   • FallbackCsdPlugin — flat-color SHM decorations (always available)
+// A window with a frame around it, where the frame is wl::csd::DecoratedWindow
+// and the content is this example's own animated ring, painted into a wl_shm
+// buffer.  What this shows is how little a decorated client has to do: hand the
+// frame the window, forward the pointer, and commit the frame before the
+// content.  Everything a decoration involves — which plugin draws it, whether
+// the compositor would rather draw it instead (xdg-decoration-unstable-v1), the
+// title bar, the buttons, the resize edges, the drag and double-click gestures,
+// and the window geometry the compositor sizes against — is the frame's, behind
+// that interface.  The csd option decides which plugin exists, and csd=ssd
+// leaves none: the negotiation then asks the compositor to decorate and this
+// draws nothing but its content.  See examples/csd-common/decorated_window.hpp.
 //
-// The csd option (WAYLAND_CXX_CSD under CMake) chooses between them, and
-// defaults to ssd: no plugin at all, the compositor is asked to decorate, and
-// the binary has no toolkit dependency.  csd=auto compiles the best available
-// plugin but still prefers the compositor, using the plugin only if it
-// declines; naming a plugin forces client-side.  A themed plugin may also
-// decline at run time, in which case the fallback is used.
-//
-// Decoration features:
-//   • Decoration mode negotiation via xdg-decoration-unstable-v1
-//   • Title bar rendering with window control buttons
-//   • Resize borders around the window
-//   • Interactive move (click title bar), resize (click border),
-//     and close (click close button) via pointer events
-//   • xdg_surface.set_window_geometry declaring the window's visible bounds,
-//     which here is the whole surface: every pixel of it is visible
-//     decoration.  See OnToplevelConfigure() — the two must agree.
+// The surface here is the content and nothing else.  The frame hangs the
+// decoration on a subsurface behind it, so no margin arithmetic, no offset
+// content, and no geometry to declare appear anywhere below — which is the
+// point, and is what an EGL or Vulkan client needs, having no CPU buffer for a
+// plugin to paint into at all.  simple-egl is the same frame on that path.
 //
 // Usage:
 //   xdg_csd [-w WIDTH] [-h HEIGHT] [-t TITLE]
@@ -42,37 +35,23 @@
 #include "fractional_scale_client.hpp"  // namespace fractional_scale_v1::client
 #include "viewporter_client.hpp"        // namespace viewporter::client
 #include "wayland_client.hpp"           // namespace wayland::client
-#include "xdg_decoration_unstable_v1_client.hpp"  // namespace xdg_decoration_unstable_v1::client
-#include "xdg_shell_client.hpp"                   // namespace xdg_shell::client
+#include "xdg_shell_client.hpp"         // namespace xdg_shell::client
 
 // ── Framework headers ────────────────────────────────────────────────────────
 #include <wl/client_helpers.hpp>
-#include <wl/csd_plugin.hpp>
 #include <wl/cursor.hpp>
-// Exactly one plugin is compiled in, chosen by the build (the csd option), and
-// with csd=ssd there is none at all. csd_dep supplies both the define that says
-// which, and the include path for the themed plugins' headers — those are not
-// framework headers, because they need a .cpp and a toolkit that a header-only
-// framework cannot carry.
-//
-// The fallback comes along with the GTK plugin regardless: it is the run-time
-// landing spot when GTK declines to start.
-#ifdef USE_GTK_CSD
-#include <wl/csd_fallback.hpp>
-#include "csd_gtk.hpp"
-#elif defined(USE_CAIRO_CSD)
-#include "csd_cairo.hpp"
-#elif defined(USE_FALLBACK_CSD)
-#include <wl/csd_fallback.hpp>
-#endif
 #include <wl/display.hpp>
 #include <wl/raii.hpp>
 #include <wl/registry.hpp>
 #include <wl/scale_policy.hpp>  // wl::ScalePolicy — buffer/viewport sizing
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
-#include <wl/xdg_decoration.hpp>
 #include <wl/xdg_shell.hpp>
+// The window frame: it owns the decoration, the decoration negotiation and the
+// gestures that drive them, on a subsurface of this example's content surface.
+// Not a framework header — it needs a .cpp and a toolkit, which a header-only
+// framework cannot carry, so it comes from csd_dep with the plugins.
+#include "decorated_window.hpp"
 
 // ── System Wayland C headers ─────────────────────────────────────────────────
 extern "C" {
@@ -103,7 +82,6 @@ extern "C" {
 // The wl_iface() definitions for every interface SeatManager binds (wl_seat,
 // wl_keyboard, wl_pointer, wl_touch) are provided inline by <wl/seat.hpp>.
 // All xdg_shell traits are provided inline by <wl/xdg_shell.hpp>.
-// All xdg_decoration traits are provided inline by <wl/xdg_decoration.hpp>.
 // ══════════════════════════════════════════════════════════════════════════════
 
 namespace wayland::client {
@@ -140,25 +118,6 @@ const wl_interface& wl_subsurface_traits::wl_iface() noexcept {
 }
 
 }  // namespace wayland::client
-
-// ══════════════════════════════════════════════════════════════════════════════
-// CSD types — provided by the plugin interface in <wl/csd_plugin.hpp>
-// ══════════════════════════════════════════════════════════════════════════════
-
-using wl::csd::CsdPlugin;
-using wl::csd::HitZone;
-
-// Whether to ask the compositor to decorate even though a plugin is compiled
-// in. Set by the build for csd=auto: a client should prefer the compositor's
-// own decorations, which are cheaper and match the rest of the desktop, and
-// only draw its own if the compositor declines. Naming a plugin explicitly
-// (csd=gtk / cairo / fallback) leaves this off, forcing client-side — the point
-// of naming one is to see it.
-#ifdef CSD_PREFER_SSD
-inline constexpr bool kPreferSsd = true;
-#else
-inline constexpr bool kPreferSsd = false;
-#endif
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Shared-memory helper
@@ -288,9 +247,6 @@ class WlCallbackHandler
 //   wl::XdgWmBaseHandler        — responds to ping automatically
 //   wl::XdgSurfaceHandler<App>  — acks configure, calls OnXdgSurfaceConfigure
 //   wl::XdgToplevelHandler<App> — delegates configure/close to App
-
-// ── XDG decoration handlers provided by <wl/xdg_decoration.hpp> ─────────────
-//   wl::XdgDecorationHandler<App>   — delegates configure to App
 
 // ── Seat/keyboard/pointer handled by wl::SeatManager<App> (<wl/seat.hpp>) ────
 //   Binds the keyboard and — because App defines OnPointer* hooks — the
@@ -444,20 +400,8 @@ static void paint_content(wl::span<uint32_t> buf,
 
 class App {
  public:
-  App(int content_w,
-      int content_h,
-      const char* title,
-      std::unique_ptr<CsdPlugin> plugin)
-      : content_w_(content_w),
-        content_h_(content_h),
-        title_(title),
-        csd_plugin_(std::move(plugin)) {
-    restore_w_ = content_w;
-    restore_h_ = content_h;
-    use_csd_ = csd_plugin_ != nullptr;
-    if (csd_plugin_)
-      csd_plugin_->SetTitle(title);
-  }
+  App(int content_w, int content_h, const char* title)
+      : content_w_(content_w), content_h_(content_h), title_(title) {}
   ~App();
 
   int Run();
@@ -468,7 +412,6 @@ class App {
   void OnToplevelStates(const wl::ToplevelStates& states);
   void OnToplevelClose();
   void OnPreferredScale(int32_t scale_120) noexcept;
-  void OnDecorationConfigure(uint32_t mode);
   void OnKey(const wl::KeyEvent& ev);
   void OnFrameDone(uint32_t stamp_ms) noexcept;
 
@@ -480,49 +423,20 @@ class App {
 
  private:
   // ── Configuration ─────────────────────────────────────────────────────────
+  // The content area, decoration excluded: the surface is the content now, so
+  // this is the surface's size as well. The frame is a subsurface behind it and
+  // adds nothing to it.
   int content_w_;
   int content_h_;
   const char* title_;
 
-  // The size to return to when the compositor stops imposing one. Tracked
-  // rather than remembered at the moment of maximizing, because an interactive
-  // resize changes it too.
-  int restore_w_ = 0;
-  int restore_h_ = 0;
-  bool fullscreen_ = false;
-
-  // ── Decoration state ──────────────────────────────────────────────────────
-  // Default when the compositor offers no decoration manager: draw our own
-  // frame if we have a plugin, otherwise go undecorated and let the compositor
-  // do whatever it does.
-  bool use_csd_ = false;
-  bool maximized_ = false;
-
-  // ── CSD plugin (fallback or GTK-themed) ───────────────────────────────
-  std::unique_ptr<CsdPlugin> csd_plugin_;
-
-  // ── Computed surface dimensions ───────────────────────────────────────────
-  [[nodiscard]] int SurfaceWidth() const noexcept {
-    return use_csd_ && csd_plugin_ ? csd_plugin_->SurfaceWidth(content_w_)
-                                   : content_w_;
-  }
-  [[nodiscard]] int SurfaceHeight() const noexcept {
-    return use_csd_ && csd_plugin_ ? csd_plugin_->SurfaceHeight(content_h_)
-                                   : content_h_;
-  }
-
-  // ── Hit testing ───────────────────────────────────────────────────────────
-  [[nodiscard]] HitZone HitTest(int x, int y) const noexcept;
-
-  // ── Title-bar gesture ─────────────────────────────────────────────────────
-  [[nodiscard]] bool IsDoubleClick(
-      const wl::PointerButtonEvent& ev) const noexcept;
-  void ToggleMaximized() noexcept;
-
-  // Point the cursor at the shape for the zone currently under the pointer.
+  // Point the cursor at the shape the frame asks for. Null means the pointer is
+  // not over the frame and the application's own cursor applies — which here is
+  // the content, so the default arrow.
   void UpdateCursor() noexcept {
+    const char* name = frame_.CursorName();
     cursor_.Set(seat_.Pointer(), enter_serial_,
-                wl::csd::HitZoneToCursorName(HitTest(pointer_x_, pointer_y_)));
+                name != nullptr ? name : "default");
   }
 
   // ── Wayland objects ───────────────────────────────────────────────────────
@@ -533,19 +447,22 @@ class App {
   wl::WlPtr<WlShmHandler> shm_;
   wl::WlPtr<wl::XdgWmBaseHandler> xdg_wm_base_;
 
-  // Optional: xdg-decoration.
-  wl::WlPtr<wl::XdgDecorationManagerHandler> decoration_mgr_;
-  wl::WlPtr<wl::XdgDecorationHandler<App>> decoration_;
-
   // Input: seat + keyboard + pointer, all owned by SeatManager.
   wl::SeatManager<App> seat_;
   // Cursor for the seat's pointer (SeatManager owns the pointer but not the
-  // cursor); the shape follows the hit-tested decoration zone.
+  // cursor); the shape is whichever one the frame asks for.
   wl::CursorManager cursor_;
 
   wl::WlPtr<WlSurfaceHandler> surface_;
   wl::WlPtr<wl::XdgSurfaceHandler<App>> xdg_surface_;
   wl::WlPtr<wl::XdgToplevelHandler<App>> xdg_toplevel_;
+
+  // The window frame, and with it the decoration negotiation: it binds the
+  // decoration manager itself, so nothing above is xdg-decoration's.
+  //
+  // Declared after surface_ and xdg_toplevel_ so it is destroyed before them:
+  // it holds a subsurface of surface_ and borrows the toplevel.
+  wl::csd::DecoratedWindow frame_;
 
   wl::WlPtr<WlCallbackHandler> frame_cb_;
 
@@ -579,34 +496,15 @@ class App {
   uint32_t last_time_ = 0;
 
   // ── Pointer state ─────────────────────────────────────────────────────────
-  int pointer_x_ =
-      -1;  // -1 ⇒ pointer not over the surface (wl::csd::InputState)
-  int pointer_y_ = -1;
-  bool pointer_pressed_ = false;
-  // Which zone the press landed in, so the release can be matched to it: a
-  // button only fires when press and release agree.
-  HitZone pressed_zone_ = HitZone::None;
-
-  // A press on the title bar, held until it turns out to be a drag, a
-  // double-click, or neither.  The move cannot start on press: it grabs the
-  // pointer, and the second click of a double-click would never arrive.
-  bool title_press_pending_ = false;
-  uint32_t title_press_serial_ = 0;
-  uint32_t title_press_time_ = 0;  // 0 ⇒ no press to pair a double-click with
-  int title_press_x_ = 0;
-  int title_press_y_ = 0;
+  // The gestures are the frame's: press-vs-release matching, the drag
+  // threshold, the double-click. All that is left here is the serial, which
+  // wl_pointer.set_cursor must carry and only the application can answer with.
   uint32_t enter_serial_ = 0;  // last wl_pointer.enter serial, for set_cursor
-
-  // Driven by the xdg_toplevel configure `states` array, not by keyboard focus:
-  // ACTIVATED is what the compositor means by "this window is the active one",
-  // and it is what the decoration's active/backdrop styling must follow.
-  bool focused_ = true;
 
   // ── Global IDs from registry scan ─────────────────────────────────────────
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   uint32_t shm_name_ = 0, shm_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
-  uint32_t decoration_mgr_name_ = 0, decoration_mgr_ver_ = 0;
   uint32_t viewporter_name_ = 0, viewporter_ver_ = 0;
   uint32_t fractional_mgr_name_ = 0, fractional_mgr_ver_ = 0;
 
@@ -622,12 +520,9 @@ class App {
   void CommitFrame(uint32_t time_ms) noexcept;
   void UpdateOpaqueRegion(int x, int y, int w, int h) noexcept;
 
-  // Last opaque region submitted, to avoid re-sending it every frame.
+  // Last opaque region submitted, to avoid re-sending it every frame: it is
+  // double-buffered state that only needs re-declaring when it changes.
   int opaque_x_ = -1, opaque_y_ = -1, opaque_w_ = -1, opaque_h_ = -1;
-
-  // Last window geometry submitted, likewise. Both are double-buffered state
-  // that only needs re-declaring when it actually changes.
-  int geometry_x_ = -1, geometry_y_ = -1, geometry_w_ = -1, geometry_h_ = -1;
 
   // Last viewport destination submitted, same reasoning.
   int viewport_w_ = -1, viewport_h_ = -1;
@@ -688,7 +583,6 @@ bool App::ScanGlobals() {
                             std::string_view iface, uint32_t ver) {
     using namespace wayland::client;
     using namespace xdg_shell::client;
-    using namespace xdg_decoration_unstable_v1::client;
     using namespace viewporter::client;
     using namespace fractional_scale_v1::client;
 
@@ -701,9 +595,6 @@ bool App::ScanGlobals() {
     } else if (iface == xdg_wm_base_traits::interface_name) {
       xdg_wm_base_name_ = name;
       xdg_wm_base_ver_ = ver;
-    } else if (iface == zxdg_decoration_manager_v1_traits::interface_name) {
-      decoration_mgr_name_ = name;
-      decoration_mgr_ver_ = ver;
     } else if (iface == wp_viewporter_traits::interface_name) {
       viewporter_name_ = name;
       viewporter_ver_ = ver;
@@ -732,7 +623,6 @@ bool App::ScanGlobals() {
 bool App::BindGlobals() {
   using namespace wayland::client;
   using namespace xdg_shell::client;
-  using namespace xdg_decoration_unstable_v1::client;
 
   // wl_compositor — no events.
   if (wl_proxy* raw = registry_.Bind<wl_compositor_traits>(
@@ -782,28 +672,9 @@ bool App::BindGlobals() {
     }
   }
 
-  // zxdg_decoration_manager_v1 — optional.
-  if (decoration_mgr_name_) {
-    if (wl_proxy* raw = registry_.Bind<zxdg_decoration_manager_v1_traits>(
-            decoration_mgr_name_,
-            std::min(decoration_mgr_ver_,
-                     zxdg_decoration_manager_v1_traits::version))) {
-      decoration_mgr_.Attach(raw);
-    }
-  }
-  if (decoration_mgr_.IsNull()) {
-    // Nothing to negotiate with, so the decision is ours alone: decorate if we
-    // have a plugin, and otherwise leave it to whatever the compositor does
-    // unasked — which may well be nothing.
-    // Nothing to prefer and nothing to ask: if we have a plugin it is the only
-    // way this window gets a frame, whatever csd=auto would rather have done.
-    std::fprintf(stderr,
-                 "xdg-csd: zxdg_decoration_manager_v1 not available — %s\n",
-                 csd_plugin_ ? "drawing client-side decorations unasked"
-                             : "no plugin either; the window will be "
-                               "undecorated unless the compositor decorates "
-                               "it");
-  }
+  // zxdg_decoration_manager_v1 is bound by the frame, from a registry of its
+  // own: the negotiation is the frame's, and a manager bound here would be one
+  // this example has nothing to do with.
 
   // wl_seat — SeatManager binds the keyboard and, since App defines OnPointer*
   // hooks, the pointer too, on the seat capabilities event.
@@ -838,7 +709,6 @@ bool App::BindGlobals() {
 bool App::CreateWindow() {
   using namespace wayland::client;
   using namespace xdg_shell::client;
-  using namespace xdg_decoration_unstable_v1::client;
 
   // wl_surface.
   if (wl_proxy* raw = wl::construct<wl_surface_traits,
@@ -891,25 +761,29 @@ bool App::CreateWindow() {
     }
   }
 
-  // Negotiate decoration mode via zxdg_decoration_manager_v1.
-  if (!decoration_mgr_.IsNull()) {
-    if (wl_proxy* raw = wl::construct<
-            zxdg_toplevel_decoration_v1_traits,
-            zxdg_decoration_manager_v1_traits::Op::GetToplevelDecoration>(
-            *decoration_mgr_.Get(), xdg_toplevel_.Get()->GetProxy())) {
-      if (wl::SetupHandler(decoration_, raw)) {
-        decoration_.Get()->app_ = this;
-        // Ask for client-side only when we both can and want to. With no
-        // plugin there is nothing to draw a frame with, and under csd=auto the
-        // compositor is preferred; either way the compositor has the last word
-        // and answers with a configure.
-        const bool want_csd = csd_plugin_ != nullptr && !kPreferSsd;
-        decoration_.Get()->SetMode(static_cast<uint32_t>(
-            want_csd ? ZxdgToplevelDecorationV1Mode::ClientSide
-                     : ZxdgToplevelDecorationV1Mode::ServerSide));
-      }
-    }
+  // Hand the frame the connection and the window; it binds wl_subcompositor,
+  // its own wl_shm and the decoration manager from a registry of its own, and
+  // settles who decorates. Which plugin exists is the csd option's business, so
+  // it is asked for rather than named here, and a null plugin is a supported
+  // answer rather than an error — that is the csd=ssd case, where the
+  // negotiation asks the compositor to decorate and nothing is drawn here.
+  //
+  // The content size is required: it seeds the size the frame restores to, and
+  // a compositor's first configure often has a zero axis meaning "you pick".
+  wl::csd::DecoratedWindow::Config cfg;
+  cfg.display = display_.Get();
+  cfg.content_surface = surface_.Get()->GetProxy();
+  cfg.xdg_surface = xdg_surface_.Get()->GetProxy();
+  cfg.xdg_toplevel = xdg_toplevel_.Get()->GetProxy();
+  cfg.seat = seat_.Seat();
+  cfg.content_width = content_w_;
+  cfg.content_height = content_h_;
+  if (!frame_.Init(cfg, wl::csd::MakeCsdPlugin())) {
+    std::fprintf(stderr,
+                 "xdg-csd: window frame failed to build; the window will be "
+                 "undecorated\n");
   }
+  frame_.SetTitle(title_);
 
   // Commit to trigger the configure sequence.
   surface_.Get()->Commit();
@@ -923,18 +797,10 @@ bool App::CreateWindow() {
 
 // ── CreateBuffers ───────────────────────────────────────────────────────────
 
+// The surface is the content, so the pool is the content's size — at the
+// buffer's scale, which CommitFrame reconciles on the first frame.
 bool App::CreateBuffers() {
-  return pool_->Create(SurfaceWidth(), SurfaceHeight(), shm_.Get()->GetProxy());
-}
-
-// ── Hit testing ─────────────────────────────────────────────────────────────
-
-HitZone App::HitTest(int x, int y) const noexcept {
-  if (!use_csd_ || !csd_plugin_)
-    return HitZone::Content;
-
-  return csd_plugin_->HitTest(x, y, SurfaceWidth(), SurfaceHeight(), content_w_,
-                              content_h_);
+  return pool_->Create(content_w_, content_h_, shm_.Get()->GetProxy());
 }
 
 // ── Callback implementations ────────────────────────────────────────────────
@@ -944,63 +810,27 @@ void App::OnXdgSurfaceConfigure(uint32_t /*serial*/) {
   need_redraw_ = true;
 }
 
+// The configure carries the size of the window geometry, which includes the
+// decoration — and the frame is what declares that geometry, so the frame is
+// what reads it back. The two are exact inverses, and splitting them is how a
+// window ends up resizing itself by the decoration on every round trip.
+//
+// A zero axis means the compositor has no opinion and the size is ours to pick;
+// that is how an un-maximize arrives, and the frame answers it from the size it
+// tracks as the one to restore to.
 void App::OnToplevelConfigure(int32_t width, int32_t height) {
-  static constexpr int kMaxDim = 16384;
-
-  if (width > 0 && height > 0) {
-    // width/height are the size of the window geometry rectangle, so this must
-    // stay the exact inverse of the SetWindowGeometry() call in CommitFrame().
-    // That geometry is the whole surface, so the decoration comes off here to
-    // get the content area.  If the two ever disagree the window resizes itself
-    // by the difference on every configure.
-    if (use_csd_ && csd_plugin_) {
-      // Only the decoration that is part of the window: a shadow lies outside
-      // the window geometry the compositor just sized, so subtracting it here
-      // would shrink the content by the shadow on every configure.
-      const wl::csd::Margins v = csd_plugin_->VisibleMargins();
-      content_w_ = width - v.left - v.right;
-      content_h_ = height - v.top - v.bottom;
-    } else {
-      content_w_ = width;
-      content_h_ = height;
-    }
-  } else {
-    // A zero dimension means the compositor has no opinion and the size is
-    // ours to pick. It is how a compositor says "go back to whatever you
-    // were", so this is the path an un-maximize takes -- and ignoring it left
-    // the window holding its maximized buffer, still looking maximized while
-    // the compositor believed it had been restored. The compositor then had
-    // nothing to change on the next maximize, so it stayed silent and the
-    // window was stuck for good.
-    //
-    // Only the zero axes are ours to choose; the other still binds.
-    if (width <= 0)
-      content_w_ = restore_w_;
-    if (height <= 0)
-      content_h_ = restore_h_;
-  }
-
-  content_w_ = std::clamp(content_w_, 1, kMaxDim);
-  content_h_ = std::clamp(content_h_, 1, kMaxDim);
-
-  // Remember the size to come back to, but only while the compositor is not
-  // imposing one: a maximized or fullscreen size is the compositor's, not a
-  // size we would ever choose to return to.
-  if (!maximized_ && !fullscreen_) {
-    restore_w_ = content_w_;
-    restore_h_ = content_h_;
-  }
-
+  frame_.ContentSizeForConfigure(width, height, &content_w_, &content_h_);
   need_redraw_ = true;
 }
 
-// The compositor is the authority on both of these. Tracking them from our own
-// button clicks instead would be optimistic: a maximize can be refused, and can
-// equally arrive from a keybinding or a double-click we never saw.
+// The compositor is the authority on these. Tracking them from our own button
+// clicks instead would be optimistic: a maximize can be refused, and can
+// equally arrive from a keybinding or a double-click we never saw. The frame
+// styles itself from them, and needs maximized/fullscreen to know whether a
+// configure's size is one to remember.
 void App::OnToplevelStates(const wl::ToplevelStates& states) {
-  focused_ = states.activated;
-  maximized_ = states.maximized;
-  fullscreen_ = states.fullscreen;
+  frame_.SetToplevelStates(states.activated, states.maximized,
+                           states.fullscreen);
 }
 
 void App::OnToplevelClose() {
@@ -1024,24 +854,8 @@ void App::OnPreferredScale(const int32_t scale_120) noexcept {
       scale_120 == scale_120_)
     return;
   scale_120_ = scale_120;
-  if (csd_plugin_)
-    csd_plugin_->SetScale(scale_120_);
+  frame_.SetScale(scale_120_);
   need_redraw_ = true;
-}
-
-void App::OnDecorationConfigure(uint32_t mode) {
-  const bool was_csd = use_csd_;
-  // Without a plugin the answer is always server-side, whatever the compositor
-  // asks for: there is nothing compiled in that could draw a frame.
-  use_csd_ = csd_plugin_ != nullptr &&
-             mode == static_cast<uint32_t>(
-                         xdg_decoration_unstable_v1::client::
-                             ZxdgToplevelDecorationV1Mode::ClientSide);
-  if (was_csd != use_csd_) {
-    need_redraw_ = true;
-    std::fprintf(stderr, "xdg-csd: decoration mode → %s\n",
-                 use_csd_ ? "client-side" : "server-side");
-  }
 }
 
 void App::OnKey(const wl::KeyEvent& ev) {
@@ -1062,155 +876,35 @@ void App::OnFrameDone(const uint32_t stamp_ms) noexcept {
 }
 
 // ── Pointer event implementations ───────────────────────────────────────────
+//
+// Every event goes to the frame, which takes the ones on its own surface and
+// ignores the rest — so there is no test to make here. The gestures are its
+// own: a button fires on release over the button it was pressed on, a title-bar
+// press becomes a move only past the toolkit's drag threshold, and a second
+// press within the toolkit's double-click time maximizes instead. Move, resize,
+// maximize and minimize it drives itself, because it has the toplevel. Only
+// close comes back, because only the application can decide to exit.
 
 void App::OnPointerEnter(const wl::PointerEvent& ev) noexcept {
   enter_serial_ = ev.serial;  // set_cursor must carry an enter serial
-  pointer_x_ = static_cast<int>(ev.x);
-  pointer_y_ = static_cast<int>(ev.y);
+  frame_.OnPointerEnter({ev.x, ev.y, ev.serial, ev.time, ev.surface});
   cursor_.Reset();  // the compositor resets the cursor on enter; re-apply
   UpdateCursor();
 }
 
 void App::OnPointerLeave() noexcept {
-  pointer_x_ = -1;
-  pointer_y_ = -1;
-  pointer_pressed_ = false;
-  pressed_zone_ = HitZone::None;  // A press the pointer leaves is canceled.
-  title_press_pending_ = false;
-  title_press_time_ = 0;
+  frame_.OnPointerLeave();
 }
 
 void App::OnPointerMotion(const wl::PointerEvent& ev) noexcept {
-  pointer_x_ = static_cast<int>(ev.x);
-  pointer_y_ = static_cast<int>(ev.y);
+  frame_.OnPointerMotion({ev.x, ev.y, ev.serial, ev.time, nullptr});
   UpdateCursor();
-
-  // A held title-bar press becomes a move once the pointer travels far enough
-  // to mean it. Below the threshold it stays a click, so a double-click still
-  // has a chance to happen.
-  if (!title_press_pending_)
-    return;
-  const int threshold = csd_plugin_ ? csd_plugin_->DragThreshold() : 8;
-  if (std::abs(pointer_x_ - title_press_x_) <= threshold &&
-      std::abs(pointer_y_ - title_press_y_) <= threshold)
-    return;
-
-  title_press_pending_ = false;
-  title_press_time_ = 0;  // Became a drag: not half of a double-click.
-  pointer_pressed_ = false;
-  pressed_zone_ = HitZone::None;
-  if (wl_proxy* const seat = seat_.Seat())
-    xdg_toplevel_.Get()->Move(seat, title_press_serial_);
 }
 
-// A window button fires on release over the button it was pressed on — the
-// convention every toolkit follows, and the only one that lets a press be
-// visible as a pressed state or be taken back by releasing elsewhere.  Acting
-// on press instead makes the pressed styling unreachable, since the window is
-// already gone by the time it would be drawn.
-//
-// Move and resize are the exception: they are drags, so they start on press and
-// the compositor takes a grab from there.
 void App::OnPointerButton(const wl::PointerButtonEvent& ev) noexcept {
-  if (ev.button != BTN_LEFT)
-    return;
-
-  const HitZone zone = HitTest(pointer_x_, pointer_y_);
-
-  if (ev.state == WL_POINTER_BUTTON_STATE_PRESSED) {
-    pointer_pressed_ = true;
-    pressed_zone_ = zone;
-
-    // The seat proxy backs interactive move/resize; the button serial
-    // authorizes the grab (see wl::SeatManager::Seat()).
-    wl_proxy* const seat = seat_.Seat();
-    const uint32_t edge = wl::csd::HitZoneToResizeEdge(zone);
-
-    if (zone == HitZone::TitleBar && seat != nullptr) {
-      // Do not start the move yet.  xdg_toplevel.move() hands the pointer to
-      // the compositor's grab, and every later event — including the second
-      // click of a double-click — goes there instead of here.  So the press is
-      // held: it becomes a move once the pointer travels past the drag
-      // threshold (see OnPointerMotion), and a maximize toggle if a second
-      // press arrives first.
-      if (IsDoubleClick(ev)) {
-        ToggleMaximized();
-        title_press_time_ = 0;  // Consumed: a third click starts over.
-        pointer_pressed_ = false;
-        pressed_zone_ = HitZone::None;
-        return;
-      }
-      title_press_pending_ = true;
-      title_press_serial_ = ev.serial;
-      title_press_time_ = ev.time;
-      title_press_x_ = pointer_x_;
-      title_press_y_ = pointer_y_;
-      return;
-    }
-
-    if (edge != 0 && seat != nullptr) {
-      xdg_toplevel_.Get()->Resize(seat, ev.serial, edge);
-    } else {
-      return;  // A button: hold the press and wait for the release.
-    }
-
-    // The compositor owns the pointer for the duration of the grab and the
-    // matching release never arrives, so the press is finished with here.
-    pointer_pressed_ = false;
-    pressed_zone_ = HitZone::None;
-    return;
-  }
-
-  // ── Release ───────────────────────────────────────────────────────────────
-  const HitZone pressed = pressed_zone_;
-  pointer_pressed_ = false;
-  pressed_zone_ = HitZone::None;
-  // A title-bar press that never traveled is just a click. title_press_time_
-  // survives, so a second press soon after can still pair with it.
-  title_press_pending_ = false;
-
-  // Released somewhere other than where the press landed: canceled.
-  if (pressed != zone)
-    return;
-
-  switch (zone) {
-    case HitZone::CloseButton:
-      running_ = false;
-      break;
-
-    case HitZone::MaximizeButton:
-      ToggleMaximized();
-      break;
-
-    case HitZone::MinimizeButton:
-      xdg_toplevel_.Get()->SetMinimized();
-      break;
-
-    default:
-      break;
-  }
-}
-
-// A second press on the title bar close enough in time and place to the last
-// one. The interval and the slop are the toolkit's own settings, not invented
-// here: both are desktop-wide user preferences.
-bool App::IsDoubleClick(const wl::PointerButtonEvent& ev) const noexcept {
-  if (title_press_time_ == 0)
-    return false;
-  const int interval = csd_plugin_ ? csd_plugin_->DoubleClickTimeMs() : 400;
-  const int threshold = csd_plugin_ ? csd_plugin_->DragThreshold() : 8;
-  return (ev.time - title_press_time_) <= static_cast<uint32_t>(interval) &&
-         std::abs(pointer_x_ - title_press_x_) <= threshold &&
-         std::abs(pointer_y_ - title_press_y_) <= threshold;
-}
-
-// Request only. maximized_ follows the configure the compositor sends back, so
-// a refused request does not leave us drawing the wrong icon.
-void App::ToggleMaximized() noexcept {
-  if (maximized_)
-    xdg_toplevel_.Get()->UnsetMaximized();
-  else
-    xdg_toplevel_.Get()->SetMaximized();
+  frame_.OnPointerButton({ev.serial, ev.time, ev.button, ev.state});
+  if (frame_.CloseRequested())
+    running_ = false;
 }
 
 // ── Frame commit ────────────────────────────────────────────────────────────
@@ -1258,15 +952,19 @@ void App::UpdateOpaqueRegion(int x, int y, int w, int h) noexcept {
 }
 
 void App::CommitFrame(uint32_t time_ms) noexcept {
-  // Logical: what the window is worth on screen, and what every margin, hit
-  // test and configure is expressed in.
-  const int sw = SurfaceWidth();
-  const int sh = SurfaceHeight();
+  // The surface is the content. The decoration is on a subsurface of its own
+  // behind it, so it adds nothing here — no margins to carry, and no rect to
+  // paint the content into but the whole buffer.
+  //
+  // Logical: what the window is worth on screen, and what the configure is
+  // expressed in.
+  const int cw = content_w_;
+  const int ch = content_h_;
   // Physical: what the buffer actually holds. The viewport presents it back at
   // the logical size, so the two are derived from the same pair and cannot
   // drift apart.
   const wl::ScalePolicy::BufferSize buf =
-      wl::ScalePolicy::ToBuffer(sw, sh, scale_120_);
+      wl::ScalePolicy::ToBuffer(cw, ch, scale_120_);
 
   // The compositor may still be displaying buffers from the current pool, so a
   // resize retires it rather than freeing it, and a fresh pool takes over.
@@ -1302,67 +1000,30 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
   const std::size_t npixels = static_cast<std::size_t>(buf.width) *
                               static_cast<std::size_t>(buf.height);
 
-  if (use_csd_ && csd_plugin_) {
-    // Let the plugin pump its own event source (theme changes, etc.) before it
-    // is asked for geometry or pixels.  This is the app's only chance: the
-    // event loop blocks in poll() on the Wayland fd, so the plugin is drained
-    // once per frame — which is enough precisely because the demo animates and
-    // therefore always has a next frame.
-    csd_plugin_->Dispatch();
+  // Let the frame pump the plugin's own event source (theme changes, etc.)
+  // before it is asked for pixels. This is the app's only chance: the event
+  // loop blocks in poll() on the Wayland fd, so it is drained once per frame —
+  // which is enough precisely because the demo animates and therefore always
+  // has a next frame.
+  frame_.Dispatch();
 
-    csd_plugin_->SetInputState(
-        {pointer_x_, pointer_y_, pointer_pressed_, focused_, maximized_});
+  // Redraw and commit the decoration, and with it the window geometry the
+  // configure above is read back against — both are the frame's, and it is
+  // Commit() that declares them. Its subsurface is synchronized, so none of it
+  // reaches the screen until the content surface commits below: that is what
+  // keeps the frame and the content in step through a resize, and it is why
+  // this has to come first.
+  frame_.Commit(cw, ch);
 
-    const wl::csd::Margins m = csd_plugin_->DecorationMargins();
+  // The content is the application's, so it is the application that scales it:
+  // painted at physical size, filling the buffer.
+  paint_content({pixels, npixels}, 0, 0, buf.width, buf.height, buf.width,
+                time_ms);
 
-    // The plugin paints the chrome; the app paints its own content into the
-    // content rect the chrome leaves untouched.
-    csd_plugin_->RenderDecoration(pixels, buf.width, sw, sh, content_w_,
-                                  content_h_);
-    // The content is the application's, so it is the application that scales
-    // it: painted at physical size into the physical rect the logical content
-    // rect maps to.
-    paint_content(
-        {pixels, npixels}, wl::ScalePolicy::ScaledDim(m.left, scale_120_),
-        wl::ScalePolicy::ScaledDim(m.top, scale_120_),
-        wl::ScalePolicy::ScaledDim(content_w_, scale_120_),
-        wl::ScalePolicy::ScaledDim(content_h_, scale_120_), buf.width, time_ms);
-
-    // Window geometry is the window's visible bounds: the surface inset by
-    // whatever part of the decoration is not window, which is the shadow.
-    //
-    // It must stay the exact inverse of how OnToplevelConfigure reads the size
-    // back — the compositor's configure carries the size of *this* rectangle.
-    // If the two disagree the window resizes itself by the difference on every
-    // configure, and a drag-resize sends them continuously.
-    //
-    // Sent only when it changes. It is double-buffered state, so re-sending it
-    // on every frame is legal but means every commit re-declares the geometry —
-    // and a compositor is entitled to treat that as the client having a say
-    // about its size mid-negotiation.
-    const wl::csd::Margins sm = csd_plugin_->ShadowMargins();
-    const int gx = sm.left;
-    const int gy = sm.top;
-    const int gw = sw - sm.left - sm.right;
-    const int gh = sh - sm.top - sm.bottom;
-    if (gx != geometry_x_ || gy != geometry_y_ || gw != geometry_w_ ||
-        gh != geometry_h_) {
-      xdg_surface_.Get()->SetWindowGeometry(gx, gy, gw, gh);
-      geometry_x_ = gx;
-      geometry_y_ = gy;
-      geometry_w_ = gw;
-      geometry_h_ = gh;
-    }
-
-    // Only the content rect is guaranteed opaque. The title bar rounds its top
-    // corners and a shadow is translucent by definition, so both are left to
-    // blend: claiming they are opaque would stop the compositor blending them
-    // and the rounding would come out as black corners.
-    UpdateOpaqueRegion(m.left, m.top, content_w_, content_h_);
-  } else {
-    paint_content({pixels, npixels}, 0, 0, sw, sh, sw, time_ms);
-    UpdateOpaqueRegion(0, 0, sw, sh);
-  }
+  // Every pixel of this surface is content, and the content is opaque. What
+  // rounds its corners and casts a shadow is the frame's surface, which is the
+  // frame's to declare.
+  UpdateOpaqueRegion(0, 0, cw, ch);
 
   // The viewport presents the physical buffer back at the logical size.
   // Without it the surface would be the buffer's size, so the window would come
@@ -1371,16 +1032,16 @@ void App::CommitFrame(uint32_t time_ms) noexcept {
   // scale is only ever honored when there is a viewport to answer it with.
   //
   // Sent every frame it could change: the destination and the buffer are both
-  // derived from (sw, sh, scale_120_), so they cannot disagree.
-  if (CanScale() && (sw != viewport_w_ || sh != viewport_h_)) {
-    viewport_.Get()->SetDestination(sw, sh);
-    viewport_w_ = sw;
-    viewport_h_ = sh;
+  // derived from (cw, ch, scale_120_), so they cannot disagree.
+  if (CanScale() && (cw != viewport_w_ || ch != viewport_h_)) {
+    viewport_.Get()->SetDestination(cw, ch);
+    viewport_w_ = cw;
+    viewport_h_ = ch;
   }
 
   surface_.Get()->Attach(
       pool_->bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0, 0);
-  surface_.Get()->Damage(0, 0, sw, sh);
+  surface_.Get()->Damage(0, 0, cw, ch);
   surface_.Get()->Commit();
   pool_->bufs.at(static_cast<std::size_t>(idx)).Get()->busy = true;
 }
@@ -1391,22 +1052,24 @@ App::~App() {
   // Release keyboard + pointer (SeatManager sends the versioned releases)
   // before the WlPtr members are destroyed.
   seat_.Release();
-  // Destroy decoration before toplevel (protocol requirement).
-  decoration_.Reset();
+  // The frame's own decoration object is torn down by frame_, which is declared
+  // after the toplevel it borrows and so goes first.
   fractional_.Reset();
   viewport_.Reset();
 }
 
 bool App::MainLoop() {
-  // "SSD" here means only that this client is not drawing them — whether the
-  // compositor does is its business, and with no decoration manager it was
-  // never asked.
+  // The frame settled this in Init: it asked, and the compositor answered.
+  // "Not drawn by this client" means only that — whether the compositor
+  // decorates is its business, and with no decoration manager it was never
+  // asked at all.
+  const bool csd = frame_.DrawsClientSide();
   std::fprintf(stderr,
                "xdg-csd: %dx%d content, decorations=%s "
                "(press ESC%s to quit)\n",
                content_w_, content_h_,
-               use_csd_ ? "client-side" : "not drawn by this client",
-               use_csd_ ? " or click ✕" : "");
+               csd ? "client-side" : "not drawn by this client",
+               csd ? " or click ✕" : "");
 
   // Kickstart: request the first frame callback, then commit.
   RequestFrameCallback();
@@ -1485,42 +1148,11 @@ int main(const int argc, char* argv[]) {
     }
   }
 
-  // Which plugin is compiled in is a build-time choice (the csd / csd_gtk
-  // options), and csd=ssd compiles none: the example then decorates nothing
-  // and asks the compositor to do it instead.
-  //
-  // The themed plugin can still fail at run time — GTK may be linked but have
-  // no usable display or theme — so it is asked rather than assumed, and the
-  // dependency-free fallback covers the refusal.
-  std::unique_ptr<CsdPlugin> plugin;
-#ifdef USE_GTK_CSD
-  plugin = wl::csd::GtkCsdPlugin::TryCreate();
-  if (plugin) {
-    std::fprintf(stderr, "xdg-csd: using GTK CSD plugin\n");
-  } else {
-    plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
-    std::fprintf(stderr,
-                 "xdg-csd: GTK unavailable at run time — using fallback CSD "
-                 "plugin\n");
-  }
-#elif defined(USE_CAIRO_CSD)
-  plugin = std::make_unique<wl::csd::CairoCsdPlugin>();
-  std::fprintf(stderr, "xdg-csd: using Cairo CSD plugin\n");
-#elif defined(USE_FALLBACK_CSD)
-  plugin = std::make_unique<wl::csd::FallbackCsdPlugin>();
-  std::fprintf(stderr, "xdg-csd: using fallback CSD plugin\n");
-#else
-  std::fprintf(stderr,
-               "xdg-csd: no CSD plugin compiled in — requesting server-side "
-               "decorations\n");
-#endif
-  if (plugin && kPreferSsd) {
-    std::fprintf(stderr,
-                 "xdg-csd: preferring server-side decorations; the plugin is "
-                 "only used if the compositor declines\n");
-  }
-
-  App app{content_w, content_h, title, std::move(plugin)};
+  // Which plugin is compiled in, whether it starts, and whether the compositor
+  // is preferred to it are all settled behind wl::csd::MakeCsdPlugin(), which
+  // the frame is handed in App::CreateWindow(). This example asks for a
+  // decorated window and is told nothing about how that was arranged.
+  App app{content_w, content_h, title};
   return app.Run();
 }
 
