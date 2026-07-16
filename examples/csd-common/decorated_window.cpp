@@ -12,6 +12,7 @@
 // The generated protocol headers, then the framework headers that complete
 // them. Order matters: <wl/xdg_shell.hpp> defines the wl_iface() bodies the
 // generated traits declare, so it must follow them.
+#include "viewporter_client.hpp"
 #include "wayland_client.hpp"
 #include "xdg_decoration_unstable_v1_client.hpp"
 #include "xdg_shell_client.hpp"
@@ -73,6 +74,15 @@ class SubcompositorHandler
 // wl_shm has a format event, but the frame asks for ARGB8888 — which every
 // compositor supports — so there is nothing worth listening for.
 class ShmHandler : public wayland::client::CWlShm<ShmHandler> {};
+
+// wp_viewporter / wp_viewport have no events. The viewport is what lets the
+// decoration honor a fractional scale: without one the buffer is taken at face
+// value and only a whole-number buffer scale is expressible, so 125% would put
+// the frame on screen a quarter larger than the window it frames.
+class ViewporterHandler
+    : public viewporter::client::CWpViewporter<ViewporterHandler> {};
+class ViewportHandler
+    : public viewporter::client::CWpViewport<ViewportHandler> {};
 class DecorationManagerHandler
     : public xdg_decoration_unstable_v1::client::CZxdgDecorationManagerV1<
           DecorationManagerHandler> {};
@@ -202,9 +212,13 @@ struct DecoratedWindow::Impl {
   wl::WlPtr<SubcompositorHandler> subcompositor;
   wl::WlPtr<ShmHandler> shm;
   wl::WlPtr<DecorationManagerHandler> decoration_mgr;
+  // Optional: a compositor without it leaves the decoration on the whole-number
+  // buffer scale below, which is right at 100% and 200% and wrong in between.
+  wl::WlPtr<ViewporterHandler> viewporter;
 
   wl::WlPtr<SurfaceHandler> surface;
   wl::WlPtr<SubsurfaceHandler> subsurface;
+  wl::WlPtr<ViewportHandler> viewport;
   wl::WlPtr<wl::XdgDecorationHandler<Impl>> decoration;
 
   std::unique_ptr<Pool> pool = std::make_unique<Pool>();
@@ -215,6 +229,14 @@ struct DecoratedWindow::Impl {
   int scale_120 = ScalePolicy::kUnityScale120;
   int placed_x = INT32_MIN;
   int placed_y = INT32_MIN;
+  // Last viewport destination and buffer scale submitted. Both are
+  // double-buffered state, so they are only re-sent when they change.
+  int viewport_w = -1;
+  int viewport_h = -1;
+  int buffer_scale = 0;
+  // Latches the one warning the lossy buffer-scale fallback prints, so a scale
+  // it cannot render exactly is said once rather than every frame.
+  bool warned_inexact_scale = false;
 
   // The negotiated answer. With no decoration manager the compositor has no way
   // to say, and will not decorate — so a plugin is the only chance of a frame
@@ -356,6 +378,7 @@ bool DecoratedWindow::Init(const Config& config,
   uint32_t subcompositor_name = 0, subcompositor_ver = 0;
   uint32_t shm_name = 0, shm_ver = 0;
   uint32_t deco_name = 0, deco_ver = 0;
+  uint32_t viewporter_name = 0, viewporter_ver = 0;
 
   if (!impl_->registry.Create(config.display))
     return false;
@@ -374,6 +397,10 @@ bool DecoratedWindow::Init(const Config& config,
     } else if (iface == zxdg_decoration_manager_v1_traits::interface_name) {
       deco_name = name;
       deco_ver = ver;
+    } else if (iface ==
+               viewporter::client::wp_viewporter_traits::interface_name) {
+      viewporter_name = name;
+      viewporter_ver = ver;
     }
   });
   if (!wl::RoundtripWithTimeout(config.display))
@@ -400,6 +427,10 @@ bool DecoratedWindow::Init(const Config& config,
   // decorate, and will not.
   bind(impl_->decoration_mgr, zxdg_decoration_manager_v1_traits{}, deco_name,
        deco_ver);
+  // Optional: without it the decoration falls back to a whole-number buffer
+  // scale, which cannot express 125%.
+  bind(impl_->viewporter, viewporter::client::wp_viewporter_traits{},
+       viewporter_name, viewporter_ver);
 
   // Ask for client-side only when we both can and want to. With no plugin there
   // is nothing to draw a frame with, and when the build prefers the compositor
@@ -462,6 +493,19 @@ bool DecoratedWindow::Init(const Config& config,
     return false;
   // wl_subsurface has no events, so a bare Attach is right here.
   impl_->subsurface.Attach(reinterpret_cast<wl_proxy*>(raw_sub));
+
+  // A viewport of the decoration's own, so Commit() can present a buffer
+  // rendered at any scale back at the surface's logical size. The content
+  // surface's viewport is the application's and covers only the application's
+  // surface; a subsurface is a surface like any other and needs its own.
+  if (!impl_->viewporter.IsNull()) {
+    if (wl_proxy* raw = wl::construct<
+            viewporter::client::wp_viewport_traits,
+            viewporter::client::wp_viewporter_traits::Op::GetViewport>(
+            *impl_->viewporter.Get(), impl_->surface.Get()->GetProxy())) {
+      impl_->viewport.Attach(raw);
+    }
+  }
 
   // Behind the content: the plugin leaves the content rectangle untouched, and
   // the application's surface covers it.
@@ -648,6 +692,37 @@ void DecoratedWindow::Commit(int content_w, int content_h) {
   impl_->plugin->RenderDecoration(pixels, buf.width, sw, sh, content_w,
                                   content_h);
 
+  // Fractional-scale seam guard.
+  //
+  // The plugin cuts the content hole at the exact logical top margin. At a
+  // whole scale that lands on a pixel row; at a fractional one it lands between
+  // two — logical 47 at 1.25x is physical row 58.75 — and the opaque decoration
+  // can end a row above it (measured: solid to row 57, hole from 58.75). The
+  // content surface is a separate surface on its own subpixel phase, so it need
+  // not cover that row either, and the ~1px between the two shows the desktop
+  // through. It reads as a gap under the title bar, which is opaque and makes
+  // the clear row stark; the shadowed side edges hide theirs.
+  //
+  // Extend the decoration's last solid row down across the seam. The strip sits
+  // under the content, so it is invisible wherever the content covers and shows
+  // frame color — never the desktop — where a subpixel phase leaves it bare. A
+  // whole scale has no seam, so this only runs on a fractional one.
+  if (impl_->scale_120 % ScalePolicy::kUnityScale120 != 0) {
+    const int k = ScalePolicy::kUnityScale120;
+    const int yb = m.top * impl_->scale_120 / k;   // seam row, floor
+    const int xl = m.left * impl_->scale_120 / k;  // content left
+    const int xr = ((m.left + content_w) * impl_->scale_120 + k - 1) / k;
+    const int src = yb - 3;  // a row safely inside the opaque decoration
+    if (src >= 0 && yb + 1 < buf.height && xr <= buf.width) {
+      const uint32_t* srow = pixels + static_cast<size_t>(src) * buf.width;
+      for (int y = yb - 1; y <= yb + 1; ++y) {
+        uint32_t* drow = pixels + static_cast<size_t>(y) * buf.width;
+        for (int x = xl; x < xr; ++x)
+          drow[x] = srow[x];
+      }
+    }
+  }
+
   // The decoration sits at the negative margin: its origin is above and left of
   // the content surface's.
   if (m.left != impl_->placed_x || m.top != impl_->placed_y) {
@@ -661,13 +736,43 @@ void DecoratedWindow::Commit(int content_w, int content_h) {
   // show through from in front. Saying so keeps the compositor from compositing
   // the frame as though it were solid.
   impl_->surface.Get()->SetOpaqueRegion(nullptr);
-  if (impl_->scale_120 != ScalePolicy::kUnityScale120) {
-    // Without a viewport the buffer is taken at face value, so an integer
-    // buffer scale is the only lever here; a fractional scale would need a
-    // viewport on this surface too.
+
+  // Present the buffer back at the logical size the frame was laid out in. The
+  // buffer is `buf` physical pixels; the surface must measure `sw` by `sh`
+  // however many pixels went into it, or the decoration lands on screen at a
+  // different size from the window it frames.
+  if (!impl_->viewport.IsNull()) {
+    if (sw != impl_->viewport_w || sh != impl_->viewport_h) {
+      impl_->viewport.Get()->SetDestination(sw, sh);
+      impl_->viewport_w = sw;
+      impl_->viewport_h = sh;
+    }
+  } else if (impl_->scale_120 != ScalePolicy::kUnityScale120) {
+    // No viewporter. The buffer is then taken at face value and a whole-number
+    // buffer scale is the only lever there is, so this is exact at 200% and
+    // wrong by the remainder anywhere between — the frame is oversized by
+    // whatever the division threw away. Better than ignoring the scale
+    // outright, and every compositor that advertises a fractional scale also
+    // offers the viewporter that answers it.
     const int n = impl_->scale_120 / ScalePolicy::kUnityScale120;
-    if (n >= 1)
+    // A scale that is not a whole number lands here only if the compositor gave
+    // us a fractional scale but no viewporter to answer it — an odd pairing the
+    // frame cannot fix, so it says so once rather than degrade in silence.
+    if (impl_->scale_120 % ScalePolicy::kUnityScale120 != 0 &&
+        !impl_->warned_inexact_scale) {
+      impl_->warned_inexact_scale = true;
+      std::fprintf(
+          stderr,
+          "csd: fractional scale %.3g with no wp_viewporter; the "
+          "decoration falls back to buffer scale %d and is oversized "
+          "by the remainder\n",
+          static_cast<double>(impl_->scale_120) / ScalePolicy::kUnityScale120,
+          n);
+    }
+    if (n >= 1 && n != impl_->buffer_scale) {
       impl_->surface.Get()->SetBufferScale(n);
+      impl_->buffer_scale = n;
+    }
   }
   impl_->surface.Get()->Attach(
       impl_->pool->bufs.at(static_cast<std::size_t>(idx)).Get()->GetProxy(), 0,

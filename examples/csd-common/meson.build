@@ -184,11 +184,25 @@ if csd_frame_ok
         command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
     )
 
+    # The decoration surface's viewport, which is what lets it honor a
+    # fractional scale. An extension protocol, so --emit-interface-tables keeps
+    # the header self-contained: it defines its own wl_interface tables and
+    # wl_iface() bodies, all inline, so an example generating a copy of its own
+    # collides with neither.
+    csd_viewporter_client_hdr = custom_target(
+        'csd-common-viewporter-client-header',
+        input:   wp_dep_csd.get_variable('pkgdatadir') / 'stable/viewporter/viewporter.xml',
+        output:  'viewporter_client.hpp',
+        command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+                  '@INPUT@', '@OUTPUT@'],
+    )
+
     csd_sources += [
         'decorated_window.cpp',
         csd_wayland_client_hdr,
         csd_xdg_shell_client_hdr,
         csd_xdg_decoration_client_hdr,
+        csd_viewporter_client_hdr,
     ]
     csd_deps += wayland_client_dep
     # Says the library exists to link. Without it every consumer's
