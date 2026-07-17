@@ -12,7 +12,7 @@ import os
 project = 'wayland-cxx-scanner'
 copyright = '2026, wayland-cxx-scanner contributors'
 author = 'wayland-cxx-scanner contributors'
-release = '0.1.0'
+release = '1.0.0'
 version = '0.1'
 
 # ---------------------------------------------------------------------------

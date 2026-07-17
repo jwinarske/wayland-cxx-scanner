@@ -18,7 +18,7 @@
 cmake_minimum_required(VERSION 3.10.2)
 
 project(wayland-cxx-scanner
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "WTL-patterned C++17 Wayland binding generator and framework"
     LANGUAGES CXX)
 
