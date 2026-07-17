@@ -22,11 +22,15 @@ option('imgui_examples', type: 'feature', value: 'disabled',
     description: 'Build the Dear ImGui platform-backend example (fetches Dear ImGui via subprojects/imgui.wrap unless a system imgui is found)')
 # Which GTK the themed CSD plugin is built against. 'auto' resolves to gtk3 when
 # gtk+-3.0 is present and skips the plugin otherwise; an explicit 'gtk3' is a
-# hard requirement. 'gtk4' is accepted but not yet implemented, and says so
-# rather than silently building nothing.
-option('csd_gtk', type: 'combo', choices: ['auto', 'gtk3', 'gtk4', 'disabled'],
+# hard requirement.
+#
+# There is no 'gtk4': GTK 4 removed the offscreen widget-draw path this plugin
+# renders through, so it needs a backend of its own. The option offers only what
+# exists rather than a choice that would fail at configure time; when a GTK 4
+# backend lands, add 'gtk4' back here.
+option('csd_gtk', type: 'combo', choices: ['auto', 'gtk3', 'disabled'],
     value: 'auto',
-    description: 'GTK version the themed CSD plugin is built against. Implemented: gtk3.')
+    description: 'GTK version the themed CSD plugin is built against (gtk3).')
 # How the xdg-csd example gets its window decorations.
 #
 #   ssd       no plugin is compiled at all; the example asks the compositor for

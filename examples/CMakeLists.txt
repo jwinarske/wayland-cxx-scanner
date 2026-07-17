@@ -83,22 +83,19 @@ set(CSD_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csd-common")
 # 'none' and 'ssd' outrank the GTK selection: with no plugin compiled there
 # is no backend to choose, so asking for both is a contradiction.
 if ((WAYLAND_CXX_CSD STREQUAL "none" OR WAYLAND_CXX_CSD STREQUAL "ssd") AND
-    (WAYLAND_CXX_CSD_GTK STREQUAL "gtk3" OR WAYLAND_CXX_CSD_GTK STREQUAL "gtk4"))
+    WAYLAND_CXX_CSD_GTK STREQUAL "gtk3")
     message(FATAL_ERROR
         "WAYLAND_CXX_CSD_GTK=${WAYLAND_CXX_CSD_GTK} selects a GTK backend, "
         "but WAYLAND_CXX_CSD=${WAYLAND_CXX_CSD} builds no decoration plugin "
         "for it to back. Set WAYLAND_CXX_CSD=gtk to build the GTK plugin.")
 endif ()
 
-# Resolve which GTK the themed plugin builds against.
+# Resolve which GTK the themed plugin builds against. There is no gtk4: GTK 4
+# removed the offscreen widget-draw path this plugin renders through and needs a
+# backend of its own. Add it back when that lands.
 set(_csd_gtk_found FALSE)
 if (WAYLAND_CXX_CSD STREQUAL "none" OR WAYLAND_CXX_CSD STREQUAL "ssd")
     # Skip GTK detection entirely: nothing will link it.
-elseif (WAYLAND_CXX_CSD_GTK STREQUAL "gtk4")
-    message(FATAL_ERROR
-        "WAYLAND_CXX_CSD_GTK=gtk4: the GTK 4 backend is not implemented. "
-        "GTK 4 removed the offscreen widget-draw path this plugin renders "
-        "through, so it needs a backend of its own. Use gtk3 or auto.")
 elseif (WAYLAND_CXX_CSD_GTK STREQUAL "gtk3")
     if (NOT TARGET PkgConfig::gtk3)
         message(FATAL_ERROR "WAYLAND_CXX_CSD_GTK=gtk3: gtk+-3.0 not found.")
