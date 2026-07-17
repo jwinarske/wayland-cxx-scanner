@@ -42,7 +42,7 @@ gtk_found = false
 # 'none' and 'ssd' outrank csd_gtk: with no plugin compiled there is no GTK
 # backend to choose. Asking for both is a contradiction rather than a
 # preference.
-if csd_opt in ['none', 'ssd'] and csd_gtk_opt in ['gtk3', 'gtk4']
+if csd_opt in ['none', 'ssd'] and csd_gtk_opt == 'gtk3'
     error('csd_gtk=' + csd_gtk_opt + ' selects a GTK backend, but csd=' +
           csd_opt + ' builds no decoration plugin for it to back. ' +
           'Add -Dcsd=gtk to build the GTK plugin.')
@@ -50,10 +50,6 @@ endif
 
 if csd_opt in ['none', 'ssd']
     # Skip GTK detection entirely: nothing will link it.
-elif csd_gtk_opt == 'gtk4'
-    error('csd_gtk=gtk4: the GTK 4 backend is not implemented. GTK 4 removed ' +
-          'the offscreen widget-draw path this plugin renders through, so it ' +
-          'needs a backend of its own. Use csd_gtk=gtk3 or csd_gtk=auto.')
 elif csd_gtk_opt == 'gtk3'
     gtk_dep   = dependency('gtk+-3.0', required: true)
     gtk_found = true

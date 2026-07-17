@@ -74,8 +74,10 @@ option(WAYLAND_CXX_SCANNER_BUILD_EXAMPLES "Build example applications"   OFF)
 # would otherwise never reach.
 
 set(WAYLAND_CXX_CSD_GTK "auto" CACHE STRING
-    "GTK version the themed CSD plugin is built against (implemented: gtk3)")
-set(_wlcxx_csd_gtk_choices auto gtk3 gtk4 disabled)
+    "GTK version the themed CSD plugin is built against (gtk3)")
+# No gtk4: GTK 4 removed the offscreen widget-draw path this plugin renders
+# through and needs a backend of its own. Add it back here when that lands.
+set(_wlcxx_csd_gtk_choices auto gtk3 disabled)
 set_property(CACHE WAYLAND_CXX_CSD_GTK PROPERTY STRINGS ${_wlcxx_csd_gtk_choices})
 if (NOT WAYLAND_CXX_CSD_GTK IN_LIST _wlcxx_csd_gtk_choices)
     string(REPLACE ";" ", " _wlcxx_csd_gtk_list "${_wlcxx_csd_gtk_choices}")
