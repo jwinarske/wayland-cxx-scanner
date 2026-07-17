@@ -245,6 +245,14 @@ if (TARGET PkgConfig::egl AND TARGET PkgConfig::glesv2 AND TARGET PkgConfig::way
         PkgConfig::wayland_cursor)
     wlcxx_gen(simple_egl simple-egl wayland_client.hpp   ${WAYLAND_XML})
     wlcxx_gen(simple_egl simple-egl xdg_shell_client.hpp ${XDG_SHELL_XML})
+    # Present the GL content at a fractional scale. fractional-scale is always
+    # the example's own. viewporter comes from wlcxx_csd() when a decoration is
+    # built (it needs one for the decoration surface); at csd=none nothing built
+    # it, so generate it here — the content wants it regardless of the frame.
+    wlcxx_gen(simple_egl simple-egl fractional_scale_client.hpp ${FRACTIONAL_SCALE_XML} TABLES)
+    if (WAYLAND_CXX_CSD STREQUAL "none")
+        wlcxx_gen(simple_egl simple-egl viewporter_client.hpp ${VIEWPORTER_XML} TABLES)
+    endif ()
 endif ()
 
 # ── wayland-info — needs wayland-scanner; wayland-protocols optional ──────────

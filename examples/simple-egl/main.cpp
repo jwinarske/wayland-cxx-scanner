@@ -25,6 +25,10 @@ extern "C" {
 // ── Generated C++ protocol headers ───────────────────────────────────────────
 // wayland_client.hpp → namespace wayland::client (from wayland.xml)
 // xdg_shell_client.hpp → namespace xdg_shell::client (from xdg-shell.xml)
+// viewporter_client.hpp → namespace viewporter::client
+// fractional_scale_client.hpp → namespace fractional_scale_v1::client
+#include "fractional_scale_client.hpp"
+#include "viewporter_client.hpp"
 #include "wayland_client.hpp"
 #include "xdg_shell_client.hpp"
 
@@ -46,6 +50,7 @@ extern "C" {
 #include <wl/cursor.hpp>
 #include <wl/display.hpp>
 #include <wl/registry.hpp>
+#include <wl/scale_policy.hpp>  // wl::ScalePolicy — buffer/viewport sizing
 #include <wl/seat.hpp>
 #include <wl/wl_ptr.hpp>
 #include <wl/xdg_shell.hpp>
@@ -172,6 +177,29 @@ class WlSurfaceHandler : public wayland::client::CWlSurface<WlSurfaceHandler> {
 // or not anything decorates it.
 class WlShmHandler : public wayland::client::CWlShm<WlShmHandler> {};
 
+// ── Scale: viewporter + fractional-scale ────────────────────────────────────
+// wp_viewporter, its per-surface wp_viewport, and the fractional-scale manager
+// have no events. Present the GL content at a fractional scale: render at
+// physical resolution, and let the viewport map it back to the logical window
+// size so the compositor does not upscale it.
+class WpViewporterHandler
+    : public viewporter::client::CWpViewporter<WpViewporterHandler> {};
+class WpViewportHandler
+    : public viewporter::client::CWpViewport<WpViewportHandler> {};
+class WpFractionalScaleManagerHandler
+    : public fractional_scale_v1::client::CWpFractionalScaleManagerV1<
+          WpFractionalScaleManagerHandler> {};
+
+// wp_fractional_scale_v1 delivers the compositor's preferred scale in 1/120
+// units via preferred_scale.
+class WpFractionalScaleHandler
+    : public fractional_scale_v1::client::CWpFractionalScaleV1<
+          WpFractionalScaleHandler> {
+ public:
+  App* app_ = nullptr;
+  void OnPreferredScale(uint32_t scale_120) override;
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // App class
 // ══════════════════════════════════════════════════════════════════════════════
@@ -193,6 +221,10 @@ class App {
   /// Called by WlCallbackHandler::OnDone — render one frame and arm the next
   /// frame callback.
   void OnFrameReady(uint32_t time_ms) noexcept;
+
+  /// The compositor's preferred scale for this surface, in 1/120 units. Changes
+  /// when the window moves to an output with a different scale.
+  void OnPreferredScale(int32_t scale_120) noexcept;
 
   // Forwarded straight to the frame, which keeps the events on its own surface
   // and ignores the rest — so there is no test to get wrong here. It drives
@@ -269,6 +301,14 @@ class App {
   wl::WlPtr<WlShmHandler> shm_;
   wl::CursorManager cursor_;
 
+  // Per-surface viewport + fractional-scale, bound as a pair or not at all: a
+  // preferred scale with no viewport to present the physical buffer back at the
+  // logical size would just make the window the wrong size on screen.
+  wl::WlPtr<WpViewporterHandler> viewporter_;
+  wl::WlPtr<WpFractionalScaleManagerHandler> fractional_mgr_;
+  wl::WlPtr<WpViewportHandler> viewport_;
+  wl::WlPtr<WpFractionalScaleHandler> fractional_;
+
   // The window frame. Declared after xdg_toplevel_ so it is destroyed first:
   // it holds a subsurface of surface_ and borrows the toplevel.
   wl::csd::DecoratedWindow window_frame_;
@@ -287,9 +327,23 @@ class App {
   uint32_t shm_name_ = 0, shm_ver_ = 0;
   int32_t scroll_value120_ = 0;  // accumulated scroll; 120 == one wheel notch
 
+  // The compositor's preferred scale in 1/120 units; unity until a fractional
+  // scale is delivered. Honored only with a viewport, so it stays unity when
+  // there is none.
+  int32_t scale_120_ = wl::ScalePolicy::kUnityScale120;
+  [[nodiscard]] bool CanScale() const noexcept { return !viewport_.IsNull(); }
+
+  // Size the GL buffer to the physical resolution and map it back to the
+  // logical window through the viewport, so the content is rendered sharp
+  // rather than upscaled. With no viewport the scale stays unity and this is
+  // the logical size, which is what an unscaled window wants.
+  void ResizeContent() noexcept;
+
   // Globals recorded during registry scan
   uint32_t compositor_name_ = 0, compositor_ver_ = 0;
   uint32_t xdg_wm_base_name_ = 0, xdg_wm_base_ver_ = 0;
+  uint32_t viewporter_name_ = 0, viewporter_ver_ = 0;
+  uint32_t fractional_mgr_name_ = 0, fractional_mgr_ver_ = 0;
 
   /// Maximum time (ms) to wait for a compositor response during startup.
   static constexpr int kRoundtripTimeoutMs = 5000;
@@ -323,6 +377,11 @@ class App {
 
 void WlCallbackHandler::OnDone(const uint32_t time_ms) {
   app_->OnFrameReady(time_ms);
+}
+
+void WpFractionalScaleHandler::OnPreferredScale(const uint32_t scale_120) {
+  if (app_ != nullptr)
+    app_->OnPreferredScale(static_cast<int32_t>(scale_120));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -383,6 +442,9 @@ bool App::ScanGlobals() {
     using wl_comp = wayland::client::wl_compositor_traits;
     using xdg_base = xdg_shell::client::xdg_wm_base_traits;
     using wl_s = wayland::client::wl_seat_traits;
+    using wp_vp = viewporter::client::wp_viewporter_traits;
+    using wp_fs =
+        fractional_scale_v1::client::wp_fractional_scale_manager_v1_traits;
     if (iface == wl_comp::interface_name) {
       compositor_name_ = name;
       compositor_ver_ = ver;
@@ -394,6 +456,12 @@ bool App::ScanGlobals() {
     } else if (iface == wayland::client::wl_shm_traits::interface_name) {
       shm_name_ = name;
       shm_ver_ = ver;
+    } else if (iface == wp_vp::interface_name) {
+      viewporter_name_ = name;
+      viewporter_ver_ = ver;
+    } else if (iface == wp_fs::interface_name) {
+      fractional_mgr_name_ = name;
+      fractional_mgr_ver_ = ver;
     }
   });
 
@@ -509,6 +577,40 @@ bool App::CreateSurfaces() {
   if (!shm_.IsNull() &&
       !cursor_.Init(shm_.Get()->GetProxy(), compositor_.Get()->GetProxy())) {
     std::fprintf(stderr, "simple-egl: no cursor theme; cursors unchanged\n");
+  }
+
+  // Per-surface viewport and fractional-scale, bound as a pair: the scale is
+  // useful only with a viewport to present the physical buffer back at the
+  // logical size. Both are the content's; the frame has its own for the
+  // decoration surface.
+  if (viewporter_name_ != 0) {
+    using vp_t = viewporter::client::wp_viewporter_traits;
+    if (wl_proxy* raw = registry_.Bind<vp_t>(
+            viewporter_name_, std::min(viewporter_ver_, vp_t::version)))
+      viewporter_.Attach(raw);
+  }
+  if (fractional_mgr_name_ != 0) {
+    using fm_t =
+        fractional_scale_v1::client::wp_fractional_scale_manager_v1_traits;
+    if (wl_proxy* raw = registry_.Bind<fm_t>(
+            fractional_mgr_name_, std::min(fractional_mgr_ver_, fm_t::version)))
+      fractional_mgr_.Attach(raw);
+  }
+  if (!viewporter_.IsNull() && !fractional_mgr_.IsNull()) {
+    using namespace viewporter::client;
+    using namespace fractional_scale_v1::client;
+    if (wl_proxy* raw = wl::construct<wp_viewport_traits,
+                                      wp_viewporter_traits::Op::GetViewport>(
+            *viewporter_.Get(), surface_.Get()->GetProxy())) {
+      viewport_.Attach(raw);
+    }
+    if (wl_proxy* raw = wl::construct<
+            wp_fractional_scale_v1_traits,
+            wp_fractional_scale_manager_v1_traits::Op::GetFractionalScale>(
+            *fractional_mgr_.Get(), surface_.Get()->GetProxy())) {
+      if (wl::SetupHandler(fractional_, raw))
+        fractional_.Get()->app_ = this;
+    }
   }
 
   // Hand the frame the connection and the window; it binds wl_shm,
@@ -653,6 +755,12 @@ bool App::MainLoop() {
 }
 
 void App::RenderFrame() noexcept {
+  // The GL viewport is the physical buffer, which the wp_viewport maps back to
+  // the logical window: render at the resolution the output actually has.
+  const wl::ScalePolicy::BufferSize buf =
+      wl::ScalePolicy::ToBuffer(width_, height_, scale_120_);
+  glViewport(0, 0, buf.width, buf.height);
+
   const float r = static_cast<float>(frame_ % 256u) / 255.0f;
   glClearColor(r, 0.3f, 0.5f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT);
@@ -724,9 +832,40 @@ void App::OnToplevelConfigure(const int32_t w, const int32_t h) {
   // restore to, because it is what declared the geometry this configure is
   // answering — so it hands back a content size and this just uses it.
   window_frame_.ContentSizeForConfigure(w, h, &width_, &height_);
+  ResizeContent();
+}
 
+// Size the GL buffer to the physical resolution and declare the viewport
+// destination as the logical window, so the compositor presents the buffer at
+// the window's size rather than scaling it. Both the configure and a scale
+// change route through here, so the two cannot get out of step.
+void App::ResizeContent() noexcept {
+  const wl::ScalePolicy::BufferSize buf =
+      wl::ScalePolicy::ToBuffer(width_, height_, scale_120_);
   if (egl_.window)
-    wl_egl_window_resize(egl_.window, width_, height_, 0, 0);
+    wl_egl_window_resize(egl_.window, buf.width, buf.height, 0, 0);
+  if (!viewport_.IsNull())
+    viewport_.Get()->SetDestination(width_, height_);
+}
+
+// The compositor's preferred scale for this surface, delivered by
+// wp_fractional_scale_v1 in 1/120 units.
+void App::OnPreferredScale(const int32_t scale_120) noexcept {
+  // Clamp before it reaches an allocation: it is the compositor's value,
+  // multiplied by the surface size to get the buffer size, so a silly value at
+  // the far end would overflow that product into a wrapped dimension. 8x is far
+  // past any real display and keeps the product bounded — the same reasoning as
+  // the frame's own clamp.
+  static constexpr int32_t kMaxScale120 = 8 * wl::ScalePolicy::kUnityScale120;
+
+  // Honored only with a viewport to present the physical buffer back at the
+  // logical size; without one the window would come out the wrong size.
+  if (!CanScale() || scale_120 <= 0 || scale_120 > kMaxScale120 ||
+      scale_120 == scale_120_)
+    return;
+  scale_120_ = scale_120;
+  window_frame_.SetScale(scale_120_);  // the decoration matches
+  ResizeContent();
 }
 
 // The compositor is the authority on both of these. Tracking them from our own
