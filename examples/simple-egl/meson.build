@@ -24,8 +24,10 @@ endif
 
 # ── Locate system protocol XMLs ───────────────────────────────────────────────
 
-wayland_xml        = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
-xdg_shell_xml      = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+wayland_xml          = wl_scanner_dep.get_variable('pkgdatadir') / 'wayland.xml'
+xdg_shell_xml        = wp_dep.get_variable('pkgdatadir') / 'stable/xdg-shell/xdg-shell.xml'
+viewporter_xml       = wp_dep.get_variable('pkgdatadir') / 'stable/viewporter/viewporter.xml'
+fractional_scale_xml = wp_dep.get_variable('pkgdatadir') / 'staging/fractional-scale/fractional-scale-v1.xml'
 
 # ── Generate C++ client headers from protocol XMLs ────────────────────────────
 
@@ -43,6 +45,28 @@ xdg_shell_client_hdr = custom_target(
     command: [scanner_exe, '--mode=client-header', '@INPUT@', '@OUTPUT@'],
 )
 
+# viewporter and fractional-scale present the GL content at a fractional scale:
+# the buffer is rendered at physical resolution and the viewport maps it back to
+# the logical window size, so the decoration and the content are both sharp
+# rather than upscaled by the compositor. Extension protocols, so
+# --emit-interface-tables keeps their headers self-contained (own wl_interface
+# tables and inline wl_iface()).
+viewporter_client_hdr = custom_target(
+    'simple-egl-viewporter-client-header',
+    input:   viewporter_xml,
+    output:  'viewporter_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
+)
+
+fractional_scale_client_hdr = custom_target(
+    'simple-egl-fractional-scale-client-header',
+    input:   fractional_scale_xml,
+    output:  'fractional_scale_client.hpp',
+    command: [scanner_exe, '--mode=client-header', '--emit-interface-tables',
+              '@INPUT@', '@OUTPUT@'],
+)
+
 # ── Include paths ─────────────────────────────────────────────────────────────
 
 framework_inc = include_directories('../../include')
@@ -58,6 +82,8 @@ executable(
         'main.cpp',
         wayland_client_hdr,
         xdg_shell_client_hdr,
+        viewporter_client_hdr,
+        fractional_scale_client_hdr,
     ],
     include_directories: [framework_inc, generated_inc],
     dependencies: [
@@ -68,9 +94,8 @@ executable(
         xkbcommon_dep,
         wl_cursor_dep,
         # Carries the decoration plugin the csd option selected, and the window
-        # frame that puts it on a subsurface. With csd=ssd (the default) that is
-        # no plugin at all, and the frame simply asks the compositor to
-        # decorate.
+        # frame that puts it on a subsurface. With csd=none (the default) it is
+        # empty inlines: the window is undecorated and none of it is linked.
         csd_dep,
     ],
     # The generated headers use /* param */ comment-suppression for unused
