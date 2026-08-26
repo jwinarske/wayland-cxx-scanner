@@ -60,9 +60,23 @@ enable_testing()
 # build consumes a host scanner via find_program and never compiles pugixml, so
 # it must not be required there.
 if (WAYLAND_CXX_SCANNER_BUILD_TOOL)
+    # Test for the target rather than trusting pugixml_FOUND. pugixml exports
+    # its config package without a NAMESPACE before 1.12, so on an older distro
+    # find_package succeeds and sets pugixml_FOUND while the only target defined
+    # is the unnamespaced `pugixml`. Keying off _FOUND then links a target that
+    # does not exist and configure fails late, past the point the pkg-config
+    # fallback could have helped:
+    #
+    #   Target "wayland-cxx-scanner-lib" links to target "pugixml::pugixml" but
+    #   the target was not found.
+    #
+    # Seen on Yocto dunfell, which carries pugixml 1.10; Debian bullseye and
+    # Ubuntu 20.04 ship the same vintage.
     find_package(pugixml CONFIG QUIET)
-    if (pugixml_FOUND)
+    if (TARGET pugixml::pugixml)
         set(WAYLAND_CXX_PUGIXML_TARGET pugixml::pugixml)
+    elseif (TARGET pugixml)
+        set(WAYLAND_CXX_PUGIXML_TARGET pugixml)
     else ()
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(pugixml REQUIRED IMPORTED_TARGET pugixml)
