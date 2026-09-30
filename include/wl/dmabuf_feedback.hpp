@@ -326,6 +326,23 @@ class DmabufFeedback {
 
   // ── Feedback event accumulation (pending → committed on `done`)
   // ──────────────
+  // The wire format of one zwp_linux_dmabuf_feedback_v1 format-table entry:
+  // {u32 format, u32 pad, u64 modifier}. Declared ahead of FormatTable, which
+  // memcpy's into it -- a member type is visible throughout the class wherever
+  // it sits, but a reader (and CodeQL's buffer analysis, which reported the
+  // destination as 0 bytes when this sat below) should not have to scroll past
+  // the use to find the size.
+  struct RawEntry {
+    std::uint32_t format;
+    std::uint32_t pad;
+    std::uint64_t modifier;
+  };
+  static constexpr std::uint32_t kEntrySize = 16;
+  // kEntrySize is the protocol's number, not sizeof's: the memcpy below trusts
+  // them to agree, so make the compiler check rather than the reader.
+  static_assert(sizeof(RawEntry) == kEntrySize,
+                "RawEntry must match the 16-byte wire entry exactly");
+
   void FormatTable(std::int32_t fd, std::uint32_t size) noexcept {
     table_.clear();
     // Guard against a compositor bug: the table is 16-byte entries.  Truncate
@@ -403,14 +420,6 @@ class DmabufFeedback {
       std::memcpy(&dev, a->data, std::min(sizeof(dev), a->size));
     return dev;
   }
-
-  // 16-byte format-table entry: {u32 format, u32 pad, u64 modifier}.
-  struct RawEntry {
-    std::uint32_t format;
-    std::uint32_t pad;
-    std::uint64_t modifier;
-  };
-  static constexpr std::uint32_t kEntrySize = 16;
 
   // ── Members
   // ─────────────────────────────────────────────────────────────────
