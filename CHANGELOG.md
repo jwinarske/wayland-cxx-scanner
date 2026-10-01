@@ -5,6 +5,33 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-10-01
+
+Patch release. Two fixes, no API or behavior change.
+
+### Fixed
+
+- Accept pugixml's unnamespaced CMake target. pugixml exports its config
+  package without a `NAMESPACE` before 1.12, so the only target it defines is
+  the unnamespaced `pugixml`. Keying the choice off `pugixml_FOUND` picked
+  `pugixml::pugixml` on those distributions even though nothing defined it, and
+  configure failed at the link line rather than at discovery -- past the point
+  the pkg-config fallback could have covered for it. The choice now tests for
+  the target: `pugixml::pugixml` when it exists, the unnamespaced `pugixml` when
+  only that does, and pkg-config when neither is found. Affects Yocto dunfell
+  (pugixml 1.10), Debian bullseye and Ubuntu 20.04.
+
+- Declare `RawEntry` above the `memcpy` that fills it in `wl/dmabuf_feedback.hpp`,
+  and assert its size against the protocol's 16-byte format-table entry:
+
+      static_assert(sizeof(RawEntry) == kEntrySize, ...);
+
+  The struct sat 67 lines below its only use. That compiled -- a member type is
+  visible throughout the class wherever it is written -- but nothing tied
+  `kEntrySize`, the protocol's number, to `sizeof`, the struct's. Also clears a
+  static-analysis report of a 16-byte copy into a 0-byte destination, which
+  `DmabufFeedback` being a class template makes unresolvable for the analyzer.
+
 ## [1.0.0] - 2026-07-16
 
 First stable release. The code generator and the header-only `wl/` framework are
