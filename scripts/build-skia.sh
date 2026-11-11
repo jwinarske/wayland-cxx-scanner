@@ -31,10 +31,18 @@ set -euo pipefail
 # ── Pinned revision ───────────────────────────────────────────────────────────
 # Skia has no conventional stable tags; the stable-quality branches are the
 # chrome/mNNN milestone branches that track Chrome's release train.  m150 is the
-# current stable milestone (Chrome 150, stable 2026-06-30).  Bump deliberately:
-# the CI cache key is (SKIA_REF x compiler x arch x sanitizer).
+# current stable milestone (Chrome 150, stable 2026-06-30).
+#
+# SKIA_REF is the commit, not the branch.  A milestone branch still moves when
+# a fix is cherry-picked onto it, so checking out "chrome/m150" gives whatever
+# the tip is that day: two builds weeks apart are then different Skia, with
+# nothing recording which one a prefix came from.  Downstreams key their build
+# cache on this value, so a moving ref means a stale prefix is served forever
+# under a key that never changes.  SKIA_MILESTONE records where the commit came
+# from; bump both together, deliberately.
 SKIA_REPO="https://skia.googlesource.com/skia.git"
-SKIA_REF="chrome/m150"
+SKIA_MILESTONE="chrome/m150"
+SKIA_REF="59690b53c2d37dd7a3dc7cc8e5718384f51ca200"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 PREFIX=""
@@ -77,14 +85,24 @@ esac
 command -v git >/dev/null 2>&1 || die "git not found"
 command -v python3 >/dev/null 2>&1 || die "python3 not found"
 
+# A moving ref is the bug this pin exists to prevent, so reject one outright
+# rather than producing an unreproducible prefix that looks pinned.
+case "$SKIA_REF" in
+    *[!0-9a-f]* | "")
+        die "SKIA_REF must be a 40-character commit sha, not '$SKIA_REF'" ;;
+esac
+[ "${#SKIA_REF}" -eq 40 ] ||
+    die "SKIA_REF must be a full 40-character commit sha, not '$SKIA_REF'"
+
 # ── Checkout at the pinned ref ────────────────────────────────────────────────
 if [ ! -d "$SRC_DIR/.git" ]; then
-    echo "build-skia: cloning $SKIA_REPO ($SKIA_REF) into $SRC_DIR"
+    echo "build-skia: cloning $SKIA_REPO ($SKIA_MILESTONE) into $SRC_DIR"
     git clone "$SKIA_REPO" "$SRC_DIR"
 fi
 
 git -C "$SRC_DIR" fetch --tags origin
-git -C "$SRC_DIR" checkout "$SKIA_REF"
+git -C "$SRC_DIR" checkout --quiet --detach "$SKIA_REF"
+echo "build-skia: at $SKIA_REF ($SKIA_MILESTONE)"
 
 echo "build-skia: syncing third-party dependencies"
 python3 "$SRC_DIR/tools/git-sync-deps"
@@ -192,6 +210,7 @@ cat <<EOF
 build-skia: done.
 
   Revision : $SKIA_REF
+  Milestone: $SKIA_MILESTONE
   Prefix   : $PREFIX
 
 Configure the examples with:
